@@ -119,8 +119,8 @@ def describe_variant(contract: Contract, tag: str, rules: Rules) -> dict[str, An
     """
     classes = dict(variant_classes(contract))
     if tag not in classes:
-        known = ', '.join(contract.variants) or 'none'
-        msg = f'{rules.catalog.label(contract)} has no variant {tag!r}; its variants: {known}'
+        shown = ', '.join(rules.allowed_variants(contract)) or 'none'
+        msg = f'{rules.catalog.label(contract)} has no variant {tag!r}; the variants the policy shows: {shown}'
         raise UsageError(msg)
     if tag not in rules.allowed_variants(contract):
         msg = f'the policy denies variant {tag!r} of {rules.catalog.label(contract)}'
@@ -209,6 +209,23 @@ def field_list(cls: type) -> list[dict[str, str]]:
             entry['doc'] = field.doc
         out.append(entry)
     return out
+
+
+def tag_keys(cls: type) -> list[str]:
+    """The wire keys that carry the tags of ``cls``'s root unions, read from its load schema.
+
+    A union always puts its tag at its parent's root, nested envelope or flat, so the key is found in the raw
+    request before it loads.
+    """
+    keys = []
+    for envelope in json_schema(cls, mode='load').get('allOf', ()):
+        branches = envelope.get('allOf')
+        for branch in branches if isinstance(branches, list) else ():
+            key, _tag = _branch_tag(branch)
+            if key is not None:
+                keys.append(key)
+                break
+    return keys
 
 
 def fold_unions(schema: dict[str, Any]) -> dict[str, Any]:

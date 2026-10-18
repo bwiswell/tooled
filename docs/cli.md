@@ -45,10 +45,12 @@ exception: it reaches one key, so it takes every slot (below).
 ### `query`
 
 `--request` is the request in the protocol's own wire form: JSON, `-` to read stdin, or `@path` to read a file.
-Leave out the fields the policy injects; a value given for one is refused. The request is loaded strict by its own
-class before anything is sent, so a missing field, a wrong type or an unknown key is refused with exit 4, and
-`path` names the field. `--param k=v` adds a selector parameter (a chronicler's history read takes `from`, `to`,
-`limit`, `order`). `--timeout S` bounds the wait, 5 seconds by default; no reply is a note, not an error.
+Leave out the fields the policy injects; a value given for one is refused. The policy comes first: the selector, and
+the tag of the request's root union, are checked before the request loads (exit 3). Then the request is loaded
+strict by its own class before anything is sent, so a missing field, a wrong type or an unknown key is refused with
+exit 4, and `path` names the field. `--param k=v` adds a selector parameter (a chronicler's history read takes
+`from`, `to`, `limit`, `order`). `--timeout S` bounds the wait, 5 seconds by default; no reply is a note, not an
+error.
 
 ### `invoke`
 
