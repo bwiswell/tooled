@@ -8,7 +8,7 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
-## 0.1.1 — unreleased
+## 0.1.1 — 2026-10-18
 
 **A policy checked in CI, without its secrets.**
 
