@@ -8,7 +8,7 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
-## 0.2.1 — unreleased
+## 0.2.1 — 2026-10-18
 
 **Paths that know their schema, and variables in inject paths.**
 
