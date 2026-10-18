@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import socket
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pytest
 import zeared as z
@@ -21,10 +21,14 @@ def free_port() -> int:
 
 @dataclass
 class Mesh:
-    """A loopback peer listening at ``endpoint``, and its ``session``, for the test to serve from."""
+    """A loopback peer listening at ``endpoint``, and its ``session``, for the test to serve from.
+
+    ``asked`` holds each request the served ``LookReply`` was sent, in order.
+    """
 
     endpoint: str
     session: zenoh.Session
+    asked: list = field(default_factory=list)
 
 
 @pytest.fixture
@@ -64,6 +68,7 @@ def world(mesh):
     demo.Status(world='w1', up=True, logo=b'\x89PNG-ish').send(session=mesh.session)
 
     def look(ctx):
+        mesh.asked.append(ctx.request)
         probe = ctx.request.probe
         seen = (
             f'{type(probe).__name__.lower()} {type(probe).dump(probe)} at {sorted(ctx.captures.items())} {ctx.params}'

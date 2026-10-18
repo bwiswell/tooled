@@ -1,13 +1,18 @@
 """Inject sources: where a request field's value comes from, read only when it's needed.
 
-A value is never written anywhere: not to output, not to an error, not to ``check``'s summary, which shows only
-its source and its length. A literal value in the policy file isn't a source, so a secret can't end up there.
+A value read from a source is never written anywhere: not to output, not to an error, not to ``check``'s summary,
+which shows only its source and its length. A literal value in the policy file isn't a source, so a secret can't
+end up there.
+
+A **generated** value is made fresh for each call (``generate = "uuid"``): an id a server can tell a repeat by,
+say. It is no secret: a reply may echo it, and a lost write's error names it.
 """
 
 from __future__ import annotations
 
 import os
 import tomllib
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -27,8 +32,15 @@ class Injected:
     value: str = field(repr=False)
 
 
+def generated(source: Source) -> bool:
+    """Whether ``source`` makes its value fresh for each call, rather than reading it."""
+    return source.generate is not None
+
+
 def describe(source: Source) -> str:
     """Where ``source`` reads from, in words; never the value."""
+    if source.generate is not None:
+        return f'generate {source.generate}'
     if source.env is not None:
         return f'env {source.env}'
     if source.file is not None:
@@ -42,7 +54,7 @@ def describe(source: Source) -> str:
 
 
 def resolve(name: str, source: Source, *, base: Path) -> Injected:
-    """Read ``source``'s value, for the field ``name``.
+    """Read ``source``'s value (or make it, for a generated one), for the field ``name``.
 
     Args:
         name: The field the value is injected into.
@@ -54,6 +66,8 @@ def resolve(name: str, source: Source, *, base: Path) -> Injected:
             message names the source, never a value.
     """
     where = ('inject', name)
+    if source.generate is not None:
+        return Injected(name, describe(source), uuid.uuid4().hex)
     if source.env is not None:
         value = os.environ.get(source.env)
         if not value:

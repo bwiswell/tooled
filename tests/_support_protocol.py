@@ -34,6 +34,7 @@ class LookRequest(zeared.Zeared):
 
     token: str = zeared.Str(required=True, doc="the player's token")
     probe: object = zeared.Union(variants={'ping': Ping, 'pong': Pong, 'dev-peek': Peek}, tag_key='kind', doc='what')
+    ask_id: str | None = zeared.Str(default=None, doc='an id for this look, to tell a repeat by')
 
 
 @zeared.zeared
