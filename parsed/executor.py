@@ -10,12 +10,18 @@ zeared does the reading, and each reply is dumped as seared's JSON form.
 - **query** asks a queryable that declares ``EFFECT = READ``. The request is the given JSON, with the policy's
   injected fields added, loaded strict by its own class, so seared's checks (and any ``__post_init__``) run before
   the query is sent. Replies come back in the order they arrived.
+- **listen** subscribes to a retained contract or a stream, and hands on each value as it arrives: a retained
+  contract's current values first (``origin`` ``replay``), then live ones. Each sample's key is checked against the
+  slots asked for and against the policy, so a sample on a denied key is left out rather than the whole stream
+  refused. It stops after a count, after a duration, or when told to.
 
-A reply that won't decode is left out, and noted. So is an empty answer to a query.
+A reply that won't decode is left out, and noted. So is an empty answer to a query, a sample on a denied key, and
+a sample the stream dropped because the reader fell behind.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass, field
@@ -30,7 +36,7 @@ from .catalog import render
 from .errors import InvalidRequestError, MeshError, RefusedError, UsageError
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
     from seared import Seared
     from zeared import SessionConfig
@@ -175,6 +181,98 @@ def query(  # noqa: PLR0913 - one read: the contract, its slots, its request and
     if not items:
         result.notes.append(f'no replies within {timeout:g}s')
     return result
+
+
+async def listen(  # noqa: PLR0913 - one subscription: the contract, its slots, and when to stop
+    session: Any,  # noqa: ANN401 - a zenoh.Session, or a ManagedSession
+    contract: Contract,
+    rules: Rules,
+    values: Mapping[str, str],
+    *,
+    each: Callable[[Any], None],
+    meta: bool = False,
+    count: int | None = None,
+    duration: float | None = None,
+    stop: asyncio.Event | None = None,
+) -> Result:
+    """Subscribe to ``contract`` and hand each value the slots and the policy allow to ``each``, as it arrives.
+
+    Args:
+        session: The session to subscribe on.
+        contract: A retained contract, or a stream.
+        rules: The policy's rules: each sample's key must be one they allow.
+        values: The slots asked for, the bound ones included.
+        each: Called with each value, or with ``{"key", "origin", "at", "value"}`` when ``meta`` is set.
+        meta: Whether to hand on each sample's key, origin and time with its value.
+        count: Stop after this many values.
+        duration: Stop after this many seconds.
+        stop: Stop when this is set: on a signal, say.
+
+    Returns:
+        Notes on what was left out: samples on denied keys, and samples the stream dropped.
+    """
+    selectors = [selector(template, values) for template in contract.templates]
+    tally = _Tally()
+    stream = contract.cls.alisten(session=session, meta=True)
+
+    async def pump() -> None:
+        async for message, sample in stream:
+            if not _admit(contract, rules, selectors, sample.key_expr, tally):
+                continue
+            each(_shape(contract, message, sample, meta=meta))
+            tally.handed += 1
+            if count is not None and tally.handed >= count:
+                return
+
+    async with stream:
+        await _until(pump(), stop=stop, duration=duration)
+        result = Result()
+        if tally.denied:
+            result.notes.append(f'{tally.denied} samples on keys the policy denies were left out')
+        if stream.dropped:
+            result.notes.append(f'{stream.dropped} samples were dropped: the reader fell behind')
+    return result
+
+
+@dataclass
+class _Tally:
+    handed: int = 0
+    denied: int = 0
+
+
+def _admit(contract: Contract, rules: Rules, selectors: list[str], key: str, tally: _Tally) -> bool:
+    """Whether a sample on ``key`` is one the slots asked for and the policy allows; a denied one is counted."""
+    if not any(keyexpr.includes(chosen, key) for chosen in selectors):
+        return False
+    try:
+        rules.check(contract, key)
+    except RefusedError:
+        tally.denied += 1
+        return False
+    return True
+
+
+def _shape(contract: Contract, message: Any, sample: Any, *, meta: bool) -> Any:  # noqa: ANN401 - JSON-ready
+    """A sample as ``listen`` hands it on: the value, or the value with its key, origin and time."""
+    value = contract.cls.dump(message)
+    if not meta:
+        return value
+    at = sample.issued_at.isoformat() if sample.issued_at is not None else None
+    return {'key': sample.key_expr, 'origin': sample.origin.value, 'at': at, 'value': value}
+
+
+async def _until(work: Any, *, stop: asyncio.Event | None, duration: float | None) -> None:  # noqa: ANN401 - a coroutine
+    """Run ``work`` until it ends, ``stop`` is set, or ``duration`` passes; what it raised is raised again."""
+    task = asyncio.create_task(work)
+    waits = {task}
+    if stop is not None:
+        waits.add(asyncio.create_task(stop.wait()))
+    _done, pending = await asyncio.wait(waits, timeout=duration, return_when=asyncio.FIRST_COMPLETED)
+    for waiting in pending:
+        waiting.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    if task.done() and not task.cancelled() and task.exception() is not None:
+        await task
 
 
 def build_request(cls: type[Seared], given: Mapping[str, Any], injected: Mapping[str, str]) -> Any:  # noqa: ANN401

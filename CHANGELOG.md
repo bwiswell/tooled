@@ -49,9 +49,17 @@ lines as it lands, and the entry is dated when that version is released.
   a file). The policy's injected fields are added, and it is loaded strict by its own class before anything is sent:
   a value given for an injected field is refused, and seared's error names the field at fault. `--param k=v` adds a
   selector parameter, as a chronicler's history reads take. `--timeout` bounds the wait, 5 s by default.
+- **`parsed listen CONTRACT [slot=value …]`** streams a retained contract or a stream, one JSON line per value as it
+  arrives: a retained contract's current values first, then live ones. `--meta` adds each value's key, origin
+  (`replay` or `live`) and time. It stops after `--count N`, after `--for DURATION` (`30`, `30s`, `5m`, `1h`), or on
+  SIGINT or SIGTERM, with exit 0, so under a tool that streams a command's lines (Claude Code's Monitor) it reads
+  like a feed. Each sample's key is checked against the slots asked for and against the policy: a sample on a denied
+  key is left out and counted, rather than the whole stream refused.
 - **Policy on every read:** the selector a read renders is checked before it is sent. One that could reach a denied
   key is refused, with a hint to narrow the slots, since replies carry no keys to filter by.
-- **Notes** go to stderr as `{"note": …}` lines: a reply that would not decode and was left out, or no reply at all.
+- **Notes** go to stderr as `{"note": …}` lines: a reply that would not decode and was left out, no reply at all, a
+  sample on a denied key, or samples a stream dropped because its reader fell behind. A library's warning goes to
+  stderr as a JSON line too (`{"log": level, "logger", "message"}`), so stderr stays one JSON object a line.
 - **Errors** go to stderr as one JSON object, `{"error", "message", "path"}`, and the exit code names the kind: 2
   for the command, the policy file or the protocol; 3 for a call the policy refuses; 4 for a request that does not
   load; 5 for the mesh. Results go to stdout as JSON, indented on a terminal or with `--pretty`.

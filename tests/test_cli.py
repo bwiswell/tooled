@@ -1,8 +1,11 @@
 import io
 import json
 import os
+import select
+import signal
 import subprocess
 import sys
+import time
 
 import pytest
 import seared
@@ -354,3 +357,76 @@ class TestEndToEnd:
         )
         assert done.returncode == 0, done.stderr
         assert json.loads(done.stdout) == [{'world': 'w1', 'station': 's1', 'stock': 3}]
+
+
+class TestListen:
+    def test_the_retained_set_one_line_each(self, reads, capsys):
+        assert main(['listen', 'Station', '--count', '2', '--policy', reads]) == 0
+        out, err = capsys.readouterr()
+        rows = [json.loads(line) for line in out.splitlines()]
+        assert sorted(row['station'] for row in rows) == ['s1', 's2']
+        assert err == ''
+
+    def test_meta_wraps_each_value(self, reads, capsys):
+        assert main(['listen', 'Station', 'station=s2', '--count', '1', '--meta', '--policy', reads]) == 0
+        (row,) = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        assert (row['key'], row['origin'], row['value']['stock']) == ('demo/w1/station/s2', 'replay', 5)
+
+    def test_stops_after_a_duration_with_nothing(self, reads, capsys):
+        assert main(['listen', 'Notice', '--for', '0.2', '--policy', reads]) == 0
+        assert capsys.readouterr().out == ''
+
+    def test_a_queryable_is_not_listened_to(self, reads, capsys):
+        code, _, err = run(capsys, 'listen', 'LookReply', '--policy', reads)
+        assert code == 2
+        assert err['message'].endswith('what does: query')
+
+    @pytest.mark.parametrize(('flag', 'value'), [('--for', '0'), ('--for', 'soon'), ('--for', '5d'), ('--count', '0')])
+    def test_bad_limits_are_usage_errors(self, reads, capsys, flag, value):
+        with pytest.raises(SystemExit) as exc:
+            main(['listen', 'Notice', flag, value, '--policy', reads])
+        assert exc.value.code == 2
+
+    def test_runs_off_the_main_thread_without_signal_handlers(self, reads, capsys):
+        import threading
+
+        codes = []
+        thread = threading.Thread(
+            target=lambda: codes.append(main(['listen', 'Station', '--count', '1', '--policy', reads]))
+        )
+        thread.start()
+        thread.join(20)
+        assert codes == [0]
+        assert len(capsys.readouterr().out.splitlines()) == 1
+
+    @pytest.mark.parametrize(('text', 'seconds'), [('30', 30.0), ('30s', 30.0), ('1.5m', 90.0), ('1h', 3600.0)])
+    def test_durations(self, text, seconds):
+        from parsed.cli import _duration
+
+        assert _duration(text) == seconds
+
+    def test_a_signal_ends_it_cleanly_mid_stream(self, reads, world):
+        import _support_protocol as demo
+
+        env = {**os.environ, 'PYTHONPATH': os.pathsep.join(sys.path)}
+        proc = subprocess.Popen(
+            [sys.executable, '-m', 'parsed', 'listen', 'Notice', 'player=ann', '--policy', reads],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+        )
+        try:
+            got = b''
+            deadline = time.monotonic() + 20
+            while b'\n' not in got and time.monotonic() < deadline:
+                demo.Notice(world='w1', player='ann', text='hello').send(session=world.session)
+                ready, _, _ = select.select([proc.stdout], [], [], 0.05)
+                if ready:
+                    got += os.read(proc.stdout.fileno(), 4096)
+            proc.send_signal(signal.SIGTERM)
+            out, err = proc.communicate(timeout=20)
+        finally:
+            proc.kill()
+        assert proc.returncode == 0, err
+        first = (got + out).splitlines()[0]
+        assert json.loads(first) == {'world': 'w1', 'player': 'ann', 'text': 'hello'}
