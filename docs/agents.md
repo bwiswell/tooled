@@ -17,6 +17,9 @@ apply to any agent with a shell tool.
 
   The policy is the guardrail an agent can't forget; the permission rules are the user's own say on each verb.
 - **Check it first.** `parsed check --connect` says what the policy shows and whether the mesh answers.
+- **Check it in CI, too.** `parsed check --no-resolve --policy agents/player.toml` loads a policy against the
+  protocol (every contract, tag, slot and field it names) without reading its secrets, so a renamed contract fails
+  the protocol's own tests rather than an agent's session.
 
 ## The loop
 

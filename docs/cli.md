@@ -11,7 +11,7 @@ Every verb takes `--policy` after the verb (else `$PARSED_POLICY`, else `./parse
 
 | Verb | Acts on | Prints |
 |---|---|---|
-| `check [--connect]` | the policy | what it shows, by operation; each injected field's source and length; with `--connect`, whether the session opens |
+| `check [--connect] [--no-resolve]` | the policy | what it shows, by operation; each injected field's source and length; with `--connect`, whether the session opens; with `--no-resolve`, the same without reading any inject source |
 | `contracts` | the policy | one line of each contract it shows: kind, verbs, topic (bound slots filled), slots left to give, summary |
 | `describe CONTRACT [--reply \| --variant TAG]` | any shown contract | the contract, layered (below) |
 | `fetch CONTRACT [slot=value …]` | a retained contract | its values, sorted |
