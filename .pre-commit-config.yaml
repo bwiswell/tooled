@@ -1,0 +1,36 @@
+# House hooks run via `prek` (`uv run prek install` once per clone).
+# Local hooks gate every commit touching Python on clean `ruff` lint +
+# format, clean dependency hygiene, and a clean `ty` check. Order follows
+# ruff's own guidance: lint first, formatter last so it tidies anything the
+# lint pass touched. `deptry` and `ty` are whole-project checks, so they take
+# no filenames. `no-commit-to-branch` refuses a commit on `master`, which moves
+# only by merging a `version/` branch (see README Development); it is prek's
+# built-in copy, so nothing is fetched to run it.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --force-exclude
+        language: system
+        types_or: [python, pyi]
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+      - id: deptry
+        name: deptry
+        entry: uv run deptry .
+        language: system
+        pass_filenames: false
+        types: [python]
+      - id: ty-check
+        name: ty check
+        entry: uv run ty check
+        language: system
+        pass_filenames: false
+        types: [python]
+  - repo: builtin
+    hooks:
+      - id: no-commit-to-branch  # master moves only by merge
