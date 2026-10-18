@@ -55,7 +55,20 @@ class before anything is sent, so a missing field, a wrong type or an unknown ke
 injects (a secret, a generated id) are added, a value given for one is refused, and the request is loaded strict
 by its own class. A write reaches one key: every slot must be given or bound, and none may hold a wildcard, or the
 call is refused with exit 2. The replies print as a JSON array; a refusal the server sends back (`"ok": false`,
-say) is a reply, and exits 0. `--timeout S` bounds the wait, 5 seconds by default.
+say) is a reply, and exits 0. So is an error reply: it's noted, and the result is empty. `--timeout S` bounds the
+wait, 5 seconds by default.
+
+**A lost reply.** When nothing answers within the timeout, a write is asked once more, with the same request, if
+it carries a generated id (`[inject.order_id] generate = "uuid"`, say): a server that tells a repeat by its id
+answers with the result it gave before, rather than doing the work twice. A note says so. The retry waits the
+timeout again; `--no-retry` turns it off. A request with no generated id is never repeated, since nothing would
+tell the repeat from a second write. Still nothing, and it exits 5, with the generated values to look for the
+effect by:
+
+```json
+{"error": "mesh", "message": "no reply to MoveResult within 5s, after one retry: it may or may not have been carried out",
+ "generated": {"move_id": "3f9a0c27b1e44d6c8e1a2b3c4d5e6f70"}}
+```
 
 `--dry-run` does all of that but send, and prints what it would have sent:
 
@@ -76,8 +89,9 @@ Values arrive one JSON line each, flushed as they come: a retained contract's cu
 
 - **Results** go to stdout as JSON, indented on a terminal or with `--pretty` (`listen`'s lines are always compact).
 - **Errors** go to stderr as one JSON object: `{"error": kind, "message": …, "path": […]}`.
-- **Notes** go to stderr as `{"note": …}` lines: a reply that would not decode, no reply, samples left out of a
-  stream, a dry run. A library's warning goes there as `{"log": level, "logger": …, "message": …}`.
+- **Notes** go to stderr as `{"note": …}` lines: an error reply, a reply that would not decode, no reply, a retry,
+  samples left out of a stream, a dry run. A library's warning goes there as `{"log": level, "logger": …,
+  "message": …}`.
 - **Bytes** fields print as `{"bytes": n, "sha256": …}`, not their base64.
 
 ### Size
@@ -108,5 +122,5 @@ In `listen`, a line over the cap is left out and noted at the end.
 | 2 | `usage`, `policy`, `catalog` | the command, its policy file or its protocol can't be used as given |
 | 3 | `refused` | the policy refuses it |
 | 4 | `validation` | the request doesn't load as its class; `path` names the field |
-| 5 | `mesh` | the session wouldn't open, or a read or a write failed |
+| 5 | `mesh` | the session wouldn't open, a read or a write failed, or a write got no reply (`generated` holds its generated values) |
 | 6 | `too_large` | the result is over the size cap |

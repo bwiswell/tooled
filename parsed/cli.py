@@ -22,8 +22,10 @@ and zeared parsed runs on, since a protocol package parsed reads must pin the sa
   SIGTERM, with exit 0: run under a tool that streams lines (Claude Code's Monitor), it reads like a feed.
 - ``invoke CONTRACT [slot=value …] [--request JSON]``: ask a queryable that writes, its request given as
   ``query``'s is, at one key: every slot given or bound. A refusal the server sends back is a reply, and exits 0.
-  ``--dry-run`` builds the request and checks it and the policy, then prints the selector and the request,
-  injected secrets as ``"<injected>"``, without sending anything.
+  A write nothing answered is asked once more, with the same request, when it carries a generated id, unless
+  ``--no-retry``; still nothing, and it exits 5 with the generated values. ``--dry-run`` builds the request and
+  checks it and the policy, then prints the selector and the request, injected secrets as ``"<injected>"``,
+  without sending anything.
 
 A slot left out widens to every value; a bound one is filled by the policy. ``--timeout`` bounds a query or an
 invoke (5 s by default).
@@ -67,7 +69,8 @@ exit codes:
   2  usage, the policy file, or the protocol
   3  refused by the policy
   4  a request that does not load: the field at fault is in "path"
-  5  the mesh: the session would not open, or a read or a write failed
+  5  the mesh: the session would not open, a read or a write failed, or a
+     write got no reply: "generated" holds its generated values
   6  a result over the size cap
 
 The policy is --policy PATH, else $PARSED_POLICY, else ./parsed.toml.
@@ -181,6 +184,11 @@ def build_parser() -> argparse.ArgumentParser:
         '--dry-run',
         action='store_true',
         help='build the request and check it, and print it without sending; injected secrets show as <injected>',
+    )
+    invoke.add_argument(
+        '--no-retry',
+        action='store_true',
+        help='after no reply, do not ask once more (a request with a generated id is asked twice by default)',
     )
     invoke.set_defaults(run=_invoke)
     return parser
@@ -353,16 +361,25 @@ def _invoke(args: argparse.Namespace) -> int:
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
     request = _request(args.request) if args.request is not None else None
     injected = _injected(path, loaded, contract, rules)
+    generated = [name for name in injected if policy.generated(loaded.inject[name])]
     if args.dry_run:
         call = executor.prepare(contract, rules, values, request=request, injected=injected)
-        secrets = [name for name in injected if not policy.generated(loaded.inject[name])]
+        secrets = [name for name in injected if name not in generated]
         emit(executor.preview(contract, call, hidden=secrets), args)
         sys.stderr.write(json.dumps({'note': 'a dry run: checked, and not sent'}) + '\n')
         return 0
     session = executor.open_session(loaded.mesh)
     try:
         result = executor.invoke(
-            session, contract, rules, values, request=request, injected=injected, timeout=args.timeout
+            session,
+            contract,
+            rules,
+            values,
+            request=request,
+            injected=injected,
+            generated=generated,
+            retry=not args.no_retry,
+            timeout=args.timeout,
         )
     finally:
         session.close()

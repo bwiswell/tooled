@@ -40,3 +40,13 @@ def test_too_large_carries_its_sizes():
         'cap': 100,
         'parts': {'bytes': {'a': 400}},
     }
+
+
+def test_a_lost_write_carries_its_generated_values():
+    from parsed.errors import LostWriteError
+
+    error = LostWriteError('no reply', generated={'move_id': 'abc'})
+    assert (error.kind, error.exit_code) == ('mesh', 5)
+    assert isinstance(error, MeshError)
+    assert error.to_json() == {'error': 'mesh', 'message': 'no reply', 'generated': {'move_id': 'abc'}}
+    assert LostWriteError('no reply', generated={}).to_json() == {'error': 'mesh', 'message': 'no reply'}

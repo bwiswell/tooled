@@ -9,7 +9,7 @@ and exits with the error's code. stdout carries results only.
 | 2 | ``usage``, ``policy``, ``catalog``: the command, its policy file or its protocol can't be used as given |
 | 3 | ``refused``: the policy refuses the call |
 | 4 | ``validation``: the request doesn't load as its class: seared's error, with its path |
-| 5 | ``mesh``: the session wouldn't open, or the link failed |
+| 5 | ``mesh``: the session wouldn't open, the link failed, or a write got no reply (with its generated values) |
 | 6 | ``too_large``: the result is over the size cap; the error says its size and each part's |
 """
 
@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
 
 class ParsedError(Exception):
@@ -85,6 +85,26 @@ class MeshError(ParsedError):
 
     kind = 'mesh'
     exit_code = 5
+
+
+class LostWriteError(MeshError):
+    """A write that got no reply, after its retry if it had one: it may or may not have been carried out.
+
+    Args:
+        message: What was asked, and how long parsed waited.
+        generated: The values generated for the request (an order's id, say), so the effect can be looked for.
+    """
+
+    def __init__(self, message: str, *, generated: Mapping[str, str]) -> None:
+        super().__init__(message)
+        self.generated = dict(generated)
+
+    def to_json(self) -> dict[str, Any]:
+        """The error, with the generated values when there are any."""
+        out = super().to_json()
+        if self.generated:
+            out['generated'] = self.generated
+        return out
 
 
 class TooLargeError(ParsedError):

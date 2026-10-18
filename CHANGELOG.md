@@ -28,6 +28,20 @@ lines as it lands, and the entry is dated when that version is released.
 - **`parsed invoke --dry-run`** builds the request and checks it and the policy, then prints the selector, the
   variant and the request, each injected secret as `"<injected>"`, without sending anything. A generated field
   shows the value made for the dry run; a real call makes a fresh one.
+- **One retry after a lost reply.** A write nothing answered within `--timeout` is asked once more, with the same
+  request, when it carries a generated id: a server that tells a repeat by its id answers with the result it gave
+  before. A note says it was retried. `--no-retry` turns it off, and a request with no generated id is never
+  repeated.
+- **A lost write exits 5.** A write still unanswered, after its retry if it had one, is a `mesh` error saying it may
+  or may not have been carried out, with a `generated` object holding the request's generated values, so the
+  effect can be looked for.
+
+### Changed
+
+- **An error reply is noted as one.** A server's error reply reads `<Contract> answered with an error: …`, no
+  longer as a reply that would not decode, and counts as an answer, so no "no replies" note follows it. Zenoh's
+  own `Timeout` reply, for a queryable that outlived the timeout, is no answer: alongside other replies it reads
+  "a queryable did not answer within …".
 
 ## 0.1.1 — 2026-10-18
 

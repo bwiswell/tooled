@@ -11,15 +11,19 @@ zeared does the asking, and each reply is dumped as seared's JSON form.
   injected fields added, loaded strict by its own class, so seared's checks (and any ``__post_init__``) run before
   the query is sent. Replies come back in the order they arrived.
 - **invoke** asks a queryable that writes, the same way, at one key: every slot given or bound, and none a
-  wildcard. A server's refusal is a reply, not an error. ``prepare`` builds and checks a call without sending it,
-  which is what a dry run prints (``preview``), injected secrets masked.
+  wildcard. A server's refusal is a reply, not an error, and so is an error reply. A write nothing answered is
+  asked once more with the same request when it carries a generated id, which a server can tell a repeat by; a
+  write still unanswered is an error, since it may or may not have been carried out. ``prepare`` builds and checks
+  a call without sending it, which is what a dry run prints (``preview``), injected secrets masked.
 - **listen** subscribes to a retained contract or a stream, and hands on each value as it arrives: a retained
   contract's current values first (``origin`` ``replay``), then live ones. Each sample's key is checked against the
   slots asked for and against the policy, so a sample on a denied key is left out rather than the whole stream
   refused. It stops after a count, after a duration, or when told to.
 
-A reply that won't decode is left out, and noted. So is an empty answer to a query, a sample on a denied key, and
-a sample the stream dropped because the reader fell behind.
+A reply that won't decode is left out, and noted. So is an error reply, an empty answer to a query, a queryable
+that didn't answer in time, a sample on a denied key, and a sample the stream dropped because the reader fell
+behind. Zenoh reports a queryable that outlives the timeout as an error reply of its own, ``Timeout``; that one is
+no answer.
 """
 
 from __future__ import annotations
@@ -36,7 +40,7 @@ from seared.doc import introspect, is_seared_class
 from zeared import KeyExprError, keyexpr
 
 from .catalog import render
-from .errors import InvalidRequestError, MeshError, RefusedError, UsageError
+from .errors import InvalidRequestError, LostWriteError, MeshError, RefusedError, UsageError
 from .output import dump
 from .policy import Op, op_of
 
@@ -51,6 +55,9 @@ if TYPE_CHECKING:
 
 #: Zenoh appends where in its source it refused; the reason is what's useful.
 _SOURCE = re.compile(r'\s+at /\S+$')
+
+#: The payload of Zenoh's own error reply when a queryable outlives a query's timeout: no answer from the server.
+_TIMEOUT = b'Timeout'
 
 #: What a dry run shows in place of an injected secret.
 HIDDEN = '<injected>'
@@ -133,16 +140,18 @@ def fetch(session: Any, contract: Contract, rules: Rules, values: Mapping[str, s
         MeshError: The read failed.
     """
     result = Result()
-    on_error = _collect(result, contract)
+    answers = _Answers(result, contract)
     cls = contract.cls
     if values or len(contract.templates) == 1:
         rules.check(contract, selector(contract.templates[0], values))
         slots: dict[str, Any] = dict(values)
-        items = _read(lambda: cls.query(session=session, timeout=timeout, on_error=on_error, **slots))
+        items = _read(lambda: cls.query(session=session, timeout=timeout, on_error=answers, **slots))
     else:
         for template in contract.templates:
             rules.check(contract, selector(template, {}))
-        items = _read(lambda: cls.fetch_retained(session=session, on_error=on_error))
+        items = _read(lambda: cls.fetch_retained(session=session, on_error=answers))
+    if answers.timed_out:
+        result.notes.append('a queryable did not answer in time')
     dumps = [dump(cls, item) for item in items]
     result.items = sorted(dumps, key=lambda item: json.dumps(item, sort_keys=True, default=str))
     return result
@@ -216,7 +225,8 @@ def query(  # noqa: PLR0913 - one read: the contract, its slots, its request and
         MeshError: The query failed.
     """
     call = prepare(contract, rules, values, request=request, injected=injected)
-    return _ask(session, contract, call, params=params, timeout=timeout, what='read')
+    result, _heard = _ask(session, contract, call, params=params, timeout=timeout, what='read')
+    return result
 
 
 def invoke(  # noqa: PLR0913 - one write: the contract, its slots, its request and the policy's part in it
@@ -227,21 +237,53 @@ def invoke(  # noqa: PLR0913 - one write: the contract, its slots, its request a
     *,
     request: Mapping[str, Any] | None,
     injected: Mapping[str, str],
+    generated: Collection[str] = (),
+    retry: bool = True,
     timeout: float,
 ) -> Result:
     """Ask a queryable that writes, with a request built from ``request`` and the policy's injected fields.
 
-    A refusal the server sends back is a reply like any other: what it says is the protocol's business.
+    A refusal the server sends back is a reply like any other: what it says is the protocol's business. So is an
+    error reply: the server answered.
+
+    A write nothing answered within ``timeout`` is asked once more, with the same request, when the request carries
+    a ``generated`` field: a server that tells a repeat by that id answers with the result it gave before, rather
+    than doing the work twice. ``retry`` false turns that off. The retry waits ``timeout`` again.
+
+    Args:
+        session: The session to ask on.
+        contract: The contract to ask.
+        rules: The policy's rules.
+        values: The call's slots, given and bound.
+        request: The request's wire form, without the injected fields.
+        injected: The values of the injected fields: secrets, and generated values.
+        generated: Which of ``injected`` were generated for this call.
+        retry: Whether to ask once more after a lost reply.
+        timeout: Seconds to wait for each ask.
 
     Raises:
         UsageError: A request given to a contract that takes none.
         RefusedError: A value given for an injected field; or the policy refuses the selector, or the request's
             variant.
         InvalidRequestError: The request doesn't load as its class.
+        LostWriteError: Nothing answered, after the retry if there was one. It carries the generated values.
         MeshError: The write failed.
     """
     call = prepare(contract, rules, values, request=request, injected=injected)
-    return _ask(session, contract, call, params={}, timeout=timeout, what='write')
+    ids = {name: injected[name] for name in generated if name in injected}
+    result, heard = _ask(session, contract, call, params={}, timeout=timeout, what='write')
+    retried = False
+    if not heard and ids and retry:
+        result, heard = _ask(session, contract, call, params={}, timeout=timeout, what='write')
+        retried = True
+    label = rules.catalog.label(contract)
+    if not heard:
+        after = ', after one retry' if retried else ''
+        msg = f'no reply to {label} within {timeout:g}s{after}: it may or may not have been carried out'
+        raise LostWriteError(msg, generated=ids)
+    if retried:
+        result.notes.insert(0, f'no reply within {timeout:g}s; asked once more with the same {", ".join(ids)}')
+    return result
 
 
 def preview(contract: Contract, call: Call, *, hidden: Collection[str]) -> dict[str, Any]:
@@ -263,10 +305,13 @@ def _ask(  # noqa: PLR0913 - a prepared call, and how to send it
     params: Mapping[str, str],
     timeout: float,
     what: str,
-) -> Result:
-    """Send a prepared call, and gather its replies in the order they arrived; ``what`` it is names a failure."""
+) -> tuple[Result, bool]:
+    """Send a prepared call: its replies in the order they arrived, and whether anything answered at all.
+
+    An error reply, or one that won't decode, is an answer; ``what`` the call is names a failure to send it.
+    """
     result = Result()
-    on_error = _collect(result, contract)
+    answers = _Answers(result, contract)
     slots: dict[str, Any] = dict(call.values)
     items = _read(
         lambda: contract.cls.query(
@@ -274,15 +319,17 @@ def _ask(  # noqa: PLR0913 - a prepared call, and how to send it
             request=call.request,
             params=dict(params) or None,
             timeout=timeout,
-            on_error=on_error,
+            on_error=answers,
             **slots,
         ),
         what=what,
     )
     result.items = [dump(contract.cls, item) for item in items]
-    if not items:
+    if not items and not answers.answered:
         result.notes.append(f'no replies within {timeout:g}s')
-    return result
+    elif answers.timed_out:
+        result.notes.append(f'a queryable did not answer within {timeout:g}s')
+    return result, bool(items) or answers.answered
 
 
 async def listen(  # noqa: PLR0913 - one subscription: the contract, its slots, and when to stop
@@ -420,11 +467,29 @@ def _read(call: Any, *, what: str = 'read') -> list[Any]:  # a zeared call, defe
         raise MeshError(msg) from exc
 
 
-def _collect(result: Result, contract: Contract) -> Any:  # zeared's on_error callback
-    def on_error(exc: Exception, _raw: bytes) -> None:
-        result.notes.append(f'a reply would not decode as {contract.name}: {type(exc).__name__}: {_reason(exc)}')
+@dataclass
+class _Answers:
+    """zeared's ``on_error`` for one ask: what came back besides the replies.
 
-    return on_error
+    An error reply the server sent, or a reply that won't decode, is noted, and counts as an answer. Zenoh's own
+    error reply for a queryable that outlived the timeout is not one: it's counted apart, as no answer.
+    """
+
+    result: Result
+    contract: Contract
+    answered: bool = False
+    timed_out: bool = False
+
+    def __call__(self, exc: Exception, raw: bytes) -> None:
+        if exc.__cause__ is None and raw == _TIMEOUT:
+            self.timed_out = True
+            return
+        self.answered = True
+        name = self.contract.name
+        if exc.__cause__ is None:  # an error reply, its payload the server's
+            self.result.notes.append(f'{name} answered with an error: {raw.decode("utf-8", "replace")}')
+        else:
+            self.result.notes.append(f'a reply would not decode as {name}: {type(exc).__name__}: {_reason(exc)}')
 
 
 def _reason(exc: BaseException) -> str:

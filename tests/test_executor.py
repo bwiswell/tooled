@@ -9,7 +9,7 @@ from zeared import Mode, SessionConfig
 
 from parsed import executor
 from parsed.catalog import Catalog
-from parsed.errors import InvalidRequestError, MeshError, RefusedError, UsageError
+from parsed.errors import InvalidRequestError, LostWriteError, MeshError, RefusedError, UsageError
 from parsed.executor import open_session
 from parsed.policy import Rules, load
 
@@ -210,17 +210,21 @@ def writes(tmp_path, catalog):
 
 
 class TestInvoke:
-    def move(self, client, writes, catalog, *, player='ann', to='dock'):
+    def move(self, client, writes, catalog, *, player='ann', to='dock', move_id=None, retry=True, timeout=5):  # noqa: PLR0913
+        """A move by ``player`` to ``to``; with ``move_id``, a generated id the request carries."""
         contract = catalog.get('MoveResult')
         given = {} if player is None else {'player': player}
+        injected = {'token': 'tok-ann'} | ({} if move_id is None else {'move_id': move_id})
         return executor.invoke(
             client,
             contract,
             writes,
             executor.slot_values(contract, writes, given),
             request={'to': to},
-            injected={'token': 'tok-ann'},
-            timeout=5,
+            injected=injected,
+            generated=[] if move_id is None else ['move_id'],
+            retry=retry,
+            timeout=timeout,
         )
 
     def test_the_request_is_built_with_the_injected_fields_and_sent(self, client, writes, catalog, world):
@@ -264,6 +268,48 @@ class TestInvoke:
         monkeypatch.setattr(demo.MoveResult, 'query', refuse)
         with pytest.raises(MeshError, match=r'^the write failed: no route$'):
             self.move(object(), writes, catalog)
+
+
+class TestRetry:
+    """A write nothing answered, asked once more with the same generated id."""
+
+    move = TestInvoke.move
+    ID = 'a' * 32
+
+    @pytest.mark.parametrize('case', [('lossy', 5), ('slow', 0.3)], ids=['dropped', 'timed-out'])
+    def test_a_lost_reply_is_asked_once_more_with_the_same_id(self, client, writes, catalog, world, case):
+        to, timeout = case
+        result = self.move(client, writes, catalog, to=to, move_id=self.ID, timeout=timeout)
+        assert result.items == [{'world': 'w1', 'player': 'ann', 'ok': True}]
+        assert result.notes == [f'no reply within {timeout:g}s; asked once more with the same move_id']
+        assert [sent.move_id for sent in world.asked] == [self.ID, self.ID]
+
+    def test_still_no_reply_is_a_lost_write_with_its_id(self, client, writes, catalog, world):
+        with pytest.raises(LostWriteError) as exc:
+            self.move(client, writes, catalog, to='void', move_id=self.ID, timeout=0.3)
+        assert exc.value.message == (
+            'no reply to MoveResult within 0.3s, after one retry: it may or may not have been carried out'
+        )
+        assert exc.value.to_json()['generated'] == {'move_id': self.ID}
+        assert len(world.asked) == 2
+
+    def test_no_retry(self, client, writes, catalog, world):
+        with pytest.raises(LostWriteError) as exc:
+            self.move(client, writes, catalog, to='void', move_id=self.ID, retry=False)
+        assert exc.value.message == 'no reply to MoveResult within 5s: it may or may not have been carried out'
+        assert exc.value.generated == {'move_id': self.ID}
+        assert len(world.asked) == 1
+
+    def test_no_generated_id_no_retry(self, client, writes, catalog, world):
+        with pytest.raises(LostWriteError) as exc:
+            self.move(client, writes, catalog, to='void')
+        assert 'generated' not in exc.value.to_json()
+        assert len(world.asked) == 1  # a repeat with nothing to tell it by could do the work twice
+
+    def test_an_error_reply_is_an_answer(self, client, writes, catalog, world):
+        result = self.move(client, writes, catalog, to='broken', move_id=self.ID)
+        assert (result.items, result.notes) == ([], ['MoveResult answered with an error: the dock is closed'])
+        assert len(world.asked) == 1
 
 
 class TestPrepare:

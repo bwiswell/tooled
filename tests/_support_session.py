@@ -59,7 +59,13 @@ def world(mesh):
     - Retained: stations ``s1`` and ``s2`` of ``w1`` (stock 3 and 5), ``s1`` of ``w2``, and ``w1``'s status, with
       a logo (bytes).
     - ``LookReply`` answers what it was asked: the variant's kind and fields, the slot captures, and the params.
-    - ``MoveResult`` answers a move, and refuses one to ``nowhere`` (``ok`` false).
+    - ``MoveResult`` answers a move, and refuses one to ``nowhere`` (``ok`` false). Some places answer otherwise,
+      as a server might:
+      - ``lossy``: the first ask of a ``move_id`` is dropped, unanswered; a repeat is answered;
+      - ``slow``: the first ask of a ``move_id`` is held past the timeout, so Zenoh answers ``Timeout``; a repeat
+        is answered;
+      - ``void``: never answered;
+      - ``broken``: answered with an error reply.
     - ``EchoReply`` says back the text it's sent.
 
     Each look and move it's sent is kept in ``mesh.asked``.
@@ -80,10 +86,21 @@ def world(mesh):
 
     demo.LookReply.on_query(look, session=mesh.session)
 
+    seen, held = set(), []
+
     def move(ctx):
         mesh.asked.append(ctx.request)
-        ok = ctx.request.to != 'nowhere'
-        return demo.MoveResult(world=ctx.captures['world'], player=ctx.captures['player'], ok=ok)
+        to, repeat = ctx.request.to, ctx.request.move_id in seen
+        seen.add(ctx.request.move_id)
+        if to == 'void' or (to == 'lossy' and not repeat):
+            return None
+        if to == 'slow' and not repeat:
+            held.append(ctx)  # the query stays open until it times out
+            return None
+        if to == 'broken':
+            ctx.reply_err('the dock is closed')
+            return None
+        return demo.MoveResult(world=ctx.captures['world'], player=ctx.captures['player'], ok=to != 'nowhere')
 
     demo.MoveResult.on_query(move, session=mesh.session)
     demo.EchoReply.on_query(
