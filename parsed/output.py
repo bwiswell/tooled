@@ -48,12 +48,12 @@ type Path_ = list[Segment]
 # ---- dumps -------------------------------------------------------------------------------------
 
 
-def dump(cls: type[Seared], item: Any) -> Any:  # noqa: ANN401 - seared's JSON form
+def dump(cls: type[Seared], item: Any) -> Any:  # seared's JSON form
     """``item`` in seared's JSON form, with its ``Bytes`` fields as their length and SHA-256."""
     return summarize_bytes(cls, cls.dump(item))
 
 
-def summarize_bytes(cls: type, data: Any) -> Any:  # noqa: ANN401 - seared's JSON form
+def summarize_bytes(cls: type, data: Any) -> Any:  # seared's JSON form
     """``data`` (a dump of ``cls``) with each ``Bytes`` field's base64 replaced by its length and SHA-256."""
     if not is_seared_class(cls) or not isinstance(data, dict):
         return data
@@ -69,7 +69,7 @@ def summarize_bytes(cls: type, data: Any) -> Any:  # noqa: ANN401 - seared's JSO
     return data
 
 
-def _each(value: Any, field: Any, apply: Any) -> Any:  # noqa: ANN401 - a dumped field, and what to do to it
+def _each(value: Any, field: Any, apply: Any) -> Any:  # a dumped field, and what to do to it
     if field.keyed and isinstance(value, dict):
         return {k: apply(v) for k, v in value.items()}
     if field.many and isinstance(value, list):
@@ -77,7 +77,7 @@ def _each(value: Any, field: Any, apply: Any) -> Any:  # noqa: ANN401 - a dumped
     return apply(value)
 
 
-def _digest(text: Any) -> Any:  # noqa: ANN401 - a base64 string, as seared dumps bytes
+def _digest(text: Any) -> Any:  # a base64 string, as seared dumps bytes
     try:
         raw = base64.b64decode(text, validate=True)
     except binascii.Error, TypeError, ValueError:
@@ -108,7 +108,7 @@ def parse_paths(text: str) -> list[Path_]:
     return paths
 
 
-def select(value: Any, paths: Sequence[Path_]) -> Any:  # noqa: ANN401 - a JSON-ready result
+def select(value: Any, paths: Sequence[Path_]) -> Any:  # a JSON-ready result
     """The parts of ``value`` the paths name, structure kept: of each item, when ``value`` is a list.
 
     Raises:
@@ -123,7 +123,7 @@ def select(value: Any, paths: Sequence[Path_]) -> Any:  # noqa: ANN401 - a JSON-
     return picked
 
 
-def pick(value: Any, paths: Sequence[Path_]) -> tuple[Any, list[bool]]:  # noqa: ANN401 - a JSON-ready result
+def pick(value: Any, paths: Sequence[Path_]) -> tuple[Any, list[bool]]:  # a JSON-ready result
     """:func:`select`, refusing nothing: the parts, and whether each path matched anything."""
     items = value if isinstance(value, list) else [value]
     matched = [False] * len(paths)
@@ -144,7 +144,7 @@ def path_text(path: Path_) -> str:
     return '.'.join(name + ('[]' if each else '') for name, each in path)
 
 
-def _project(value: Any, path: Path_) -> tuple[bool, Any]:  # noqa: ANN401 - a JSON-ready value
+def _project(value: Any, path: Path_) -> tuple[bool, Any]:  # a JSON-ready value
     if not path:
         return True, value
     (name, each), rest = path[0], path[1:]
@@ -162,7 +162,7 @@ def _project(value: Any, path: Path_) -> tuple[bool, Any]:  # noqa: ANN401 - a J
     return True, {name: [part if found else {} for found, part in parts]}
 
 
-def _merge(a: Any, b: Any) -> Any:  # noqa: ANN401 - JSON-ready values
+def _merge(a: Any, b: Any) -> Any:  # JSON-ready values
     if isinstance(a, dict) and isinstance(b, dict):
         out = dict(a)
         for key, value in b.items():
@@ -197,12 +197,12 @@ def max_bytes(given: int | None) -> int:
     return value
 
 
-def render(value: Any, *, indent: int | None) -> str:  # noqa: ANN401 - a JSON-ready result
+def as_json(value: Any, *, indent: int | None) -> str:  # a JSON-ready result
     """``value`` as the JSON text that would be printed."""
     return json.dumps(value, indent=indent, ensure_ascii=False)
 
 
-def check_size(text: str, value: Any, *, cap: int) -> None:  # noqa: ANN401 - the result the text renders
+def check_size(text: str, value: Any, *, cap: int) -> None:  # the result the text renders
     """Refuse ``text`` (rendering ``value``) when it's over ``cap`` bytes.
 
     Raises:
@@ -217,15 +217,15 @@ def check_size(text: str, value: Any, *, cap: int) -> None:  # noqa: ANN401 - th
         raise TooLargeError(msg, size=size, cap=cap, parts=parts(value))
 
 
-def parts(value: Any) -> dict[str, Any]:  # noqa: ANN401 - a JSON-ready result
+def parts(value: Any) -> dict[str, Any]:  # a JSON-ready result
     """The size of each part of ``value``, the biggest first: its keys, or its items' keys, summed."""
     sizes: dict[str, int] = {}
     if isinstance(value, dict):
-        sizes = {key: len(render(part, indent=None)) for key, part in value.items()}
+        sizes = {key: len(as_json(part, indent=None)) for key, part in value.items()}
     elif isinstance(value, list):
         for item in value:
             for key, part in item.items() if isinstance(item, dict) else ():
-                sizes[key] = sizes.get(key, 0) + len(render(part, indent=None))
+                sizes[key] = sizes.get(key, 0) + len(as_json(part, indent=None))
     biggest = sorted(sizes.items(), key=lambda kv: -kv[1])[:_PARTS]
     out: dict[str, Any] = {'items': len(value)} if isinstance(value, list) else {}
     out['bytes'] = dict(biggest)

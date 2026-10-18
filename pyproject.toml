@@ -92,6 +92,10 @@ ignore = [
     # policy/ is a subpackage whose modules reach the package's own (errors,
     # catalog) via `from ..x import`, the layout stored and zeared carry this for.
     "TID252",  # parent-relative imports are the subpackage layout working
+    # `Any` is the boundary type here, as in the sisters: a zenoh session, a
+    # decoded payload, a JSON-ready result, a JSON Schema node. A comment beside
+    # each says which; twenty-eight `noqa`s would say less.
+    "ANN401",  # dynamically typed expressions at the boundary
 ]
 fixable = ["ALL"]
 

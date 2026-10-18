@@ -1,11 +1,17 @@
+import asyncio
 import hashlib
 
+import _support_protocol as demo
 import pytest
+from _support_policy import write
 from _support_session import free_port
 from zeared import Mode, SessionConfig
 
-from parsed.errors import MeshError
+from parsed import executor
+from parsed.catalog import Catalog
+from parsed.errors import InvalidRequestError, MeshError, RefusedError, UsageError
 from parsed.executor import open_session
+from parsed.policy import Rules, load
 
 
 def test_opens_the_session_the_mesh_describes(listening):
@@ -21,14 +27,7 @@ def test_an_unreachable_router_is_a_mesh_error_with_zenoh_s_reason():
     assert exc.value.exit_code == 5
 
 
-# ---- reads -------------------------------------------------------------------------------------
-
-from _support_policy import write  # noqa: E402 - the read tests' own imports
-
-from parsed import executor  # noqa: E402
-from parsed.catalog import Catalog  # noqa: E402
-from parsed.errors import InvalidRequestError, RefusedError, UsageError  # noqa: E402
-from parsed.policy import Rules, load  # noqa: E402
+# ---- reads ----------------------------------------------------------------------------------
 
 POLICY = """
 [bind]
@@ -204,11 +203,7 @@ class TestHelpers:
         assert exc.value.path == ('token',)
 
 
-# ---- listen ------------------------------------------------------------------------------------
-
-import asyncio  # noqa: E402
-
-import _support_protocol as demo  # noqa: E402
+# ---- listen ---------------------------------------------------------------------------------
 
 
 async def publish_until(task, *messages, session, every=0.05, limit=200):

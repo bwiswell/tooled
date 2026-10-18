@@ -60,7 +60,7 @@ class Result:
     notes: list[str] = field(default_factory=list)
 
 
-def open_session(config: SessionConfig) -> Any:  # noqa: ANN401 - a zenoh.Session, or a ManagedSession
+def open_session(config: SessionConfig) -> Any:  # a zenoh.Session, or a ManagedSession
     """Open the session the policy's ``[mesh]`` describes.
 
     Raises:
@@ -118,7 +118,7 @@ def selector(template: str, values: Mapping[str, str]) -> str:
     return key
 
 
-def fetch(session: Any, contract: Contract, rules: Rules, values: Mapping[str, str], *, timeout: float) -> Result:  # noqa: ANN401
+def fetch(session: Any, contract: Contract, rules: Rules, values: Mapping[str, str], *, timeout: float) -> Result:
     """Read a retained contract's values: those the slots select, or every one.
 
     Raises:
@@ -142,7 +142,7 @@ def fetch(session: Any, contract: Contract, rules: Rules, values: Mapping[str, s
 
 
 def query(  # noqa: PLR0913 - one read: the contract, its slots, its request and the policy's part in it
-    session: Any,  # noqa: ANN401 - a zenoh.Session, or a ManagedSession
+    session: Any,  # a zenoh.Session, or a ManagedSession
     contract: Contract,
     rules: Rules,
     values: Mapping[str, str],
@@ -185,7 +185,7 @@ def query(  # noqa: PLR0913 - one read: the contract, its slots, its request and
 
 
 async def listen(  # noqa: PLR0913 - one subscription: the contract, its slots, and when to stop
-    session: Any,  # noqa: ANN401 - a zenoh.Session, or a ManagedSession
+    session: Any,  # a zenoh.Session, or a ManagedSession
     contract: Contract,
     rules: Rules,
     values: Mapping[str, str],
@@ -253,7 +253,7 @@ def _admit(contract: Contract, rules: Rules, selectors: list[str], key: str, tal
     return True
 
 
-def _shape(contract: Contract, message: Any, sample: Any, *, meta: bool) -> Any:  # noqa: ANN401 - JSON-ready
+def _shape(contract: Contract, message: Any, sample: Any, *, meta: bool) -> Any:  # JSON-ready
     """A sample as ``listen`` hands it on: the value, or the value with its key, origin and time."""
     value = dump(contract.cls, message)
     if not meta:
@@ -262,7 +262,7 @@ def _shape(contract: Contract, message: Any, sample: Any, *, meta: bool) -> Any:
     return {'key': sample.key_expr, 'origin': sample.origin.value, 'at': at, 'value': value}
 
 
-async def _until(work: Any, *, stop: asyncio.Event | None, duration: float | None) -> None:  # noqa: ANN401 - a coroutine
+async def _until(work: Any, *, stop: asyncio.Event | None, duration: float | None) -> None:  # a coroutine
     """Run ``work`` until it ends, ``stop`` is set, or ``duration`` passes; what it raised is raised again."""
     task = asyncio.create_task(work)
     waits = {task}
@@ -276,7 +276,7 @@ async def _until(work: Any, *, stop: asyncio.Event | None, duration: float | Non
         await task
 
 
-def build_request(cls: type[Seared], given: Mapping[str, Any], injected: Mapping[str, str]) -> Any:  # noqa: ANN401
+def build_request(cls: type[Seared], given: Mapping[str, Any], injected: Mapping[str, str]) -> Any:
     """``cls`` loaded strict from ``given`` and the injected fields.
 
     Raises:
@@ -297,7 +297,7 @@ def build_request(cls: type[Seared], given: Mapping[str, Any], injected: Mapping
         raise InvalidRequestError(str(exc), path=exc.path) from exc
 
 
-def variant_of(contract: Contract, request: Any) -> str | None:  # noqa: ANN401 - the request instance
+def variant_of(contract: Contract, request: Any) -> str | None:  # the request instance
     """The tag of the variant ``request`` carries in its root union, or ``None`` when it has no union."""
     if contract.request is None or not is_seared_class(contract.request):
         return None
@@ -311,7 +311,7 @@ def variant_of(contract: Contract, request: Any) -> str | None:  # noqa: ANN401 
     return None
 
 
-def _read(call: Any) -> list[Any]:  # noqa: ANN401 - a zeared read, deferred
+def _read(call: Any) -> list[Any]:  # a zeared read, deferred
     try:
         return list(call())
     except Exception as exc:  # zenoh and zeared raise their own types; any of them is the mesh failing
@@ -319,7 +319,7 @@ def _read(call: Any) -> list[Any]:  # noqa: ANN401 - a zeared read, deferred
         raise MeshError(msg) from exc
 
 
-def _collect(result: Result, contract: Contract) -> Any:  # noqa: ANN401 - zeared's on_error callback
+def _collect(result: Result, contract: Contract) -> Any:  # zeared's on_error callback
     def on_error(exc: Exception, _raw: bytes) -> None:
         result.notes.append(f'a reply would not decode as {contract.name}: {type(exc).__name__}: {_reason(exc)}')
 

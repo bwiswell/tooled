@@ -1,20 +1,16 @@
 """The ``parsed`` command (``python -m parsed``).
 
 Stdlib ``argparse`` only. Every verb takes ``--policy`` (else ``$PARSED_POLICY``, else ``./parsed.toml``) after
-the verb, so a permission rule can match a verb by its prefix (``parsed check``).
-
-Results go to stdout as JSON, indented on a terminal or with ``--pretty``. A failure goes to stderr as one JSON
-object, ``{"error": kind, "message": …, "path": […]}``, and the exit code says which kind (see
-:mod:`parsed.errors`). ``--version`` names the seared and zeared parsed runs on, since a protocol package parsed
-reads must pin the same zeared.
+the verb, so a permission rule can match a verb by its prefix (``parsed fetch``). ``--version`` names the seared
+and zeared parsed runs on, since a protocol package parsed reads must pin the same zeared.
 
 **Verbs:**
 - ``check``: load the policy and its protocol, resolve what it injects, and summarize what it shows. With
   ``--connect``, also open the session.
 - ``contracts``: every contract the policy shows, one line of each: its kind, the verbs that act on it, its topic
   with the bound slots filled, the slots left to give, and its summary.
-- ``describe CONTRACT``: one contract whole: its slots, and the JSON Schemas of what it takes and gives.
-  ``--variant TAG`` gives one variant of its request's union instead.
+- ``describe CONTRACT``: one contract, layered: its slots, its request's schema (a root union folded to its tags),
+  and its reply as a field list. ``--reply`` gives the reply's whole schema; ``--variant TAG`` one variant's.
 - ``fetch CONTRACT [slot=value …]``: a retained contract's values, those the slots select or every one.
 - ``query CONTRACT [slot=value …] [--request JSON]``: ask a read queryable. ``--request`` takes JSON, ``-`` for
   stdin, or ``@path`` for a file, in the protocol's wire form, without the fields the policy injects.
@@ -25,8 +21,14 @@ reads must pin the same zeared.
   SIGTERM, with exit 0: run under a tool that streams lines (Claude Code's Monitor), it reads like a feed.
 
 A slot left out widens to every value; a bound one is filled by the policy. ``--timeout`` bounds a query (5 s by
-default). A note on stderr (``{"note": …}``) says what was left out: a reply that wouldn't decode, no reply, a
-sample on a denied key. A library's log line goes to stderr as JSON too (``{"log": level, …}``).
+default).
+
+**Output.** Results go to stdout as JSON, indented on a terminal or with ``--pretty``. ``--select`` keeps parts of
+a result; a result over the cap (``--max-bytes``, else ``$PARSED_MAX_BYTES``, else 28,000 bytes) is refused with
+the size of each part; ``--out FILE`` writes it whole. A failure goes to stderr as one JSON object, ``{"error":
+kind, "message": …, "path": […]}``, and the exit code says which kind (see :mod:`parsed.errors`). A note on
+stderr (``{"note": …}``) says what a read left out, and a library's log line goes there as JSON too (``{"log":
+level, …}``).
 """
 
 from __future__ import annotations
@@ -48,11 +50,32 @@ if TYPE_CHECKING:
     from .policy import Policy, Rules
 
 
+#: The end of ``parsed --help``: where output goes, and what each exit code means.
+EPILOG = """\
+Results go to stdout as JSON. Errors go to stderr as one JSON object, notes
+and log lines as JSON lines. A result over the size cap (--max-bytes, else
+$PARSED_MAX_BYTES, else 28000 bytes) is refused with each part's size:
+--select keeps parts, --out writes it whole.
+
+exit codes:
+  0  done (an empty result included)
+  2  usage, the policy file, or the protocol
+  3  refused by the policy
+  4  a request that does not load: the field at fault is in "path"
+  5  the mesh: the session would not open, or the read failed
+  6  a result over the size cap
+
+The policy is --policy PATH, else $PARSED_POLICY, else ./parsed.toml.
+"""
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The ``parsed`` argument parser."""
     parser = argparse.ArgumentParser(
         prog='parsed',
         description='Typed, policy-guarded access to a zeared mesh, for agents and people.',
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument('--version', action='version', version=version())
     common = argparse.ArgumentParser(add_help=False)
@@ -160,19 +183,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         return exc.exit_code
 
 
-def emit(result: Any, args: argparse.Namespace) -> None:  # noqa: ANN401 - any JSON-ready value
+def emit(result: Any, args: argparse.Namespace) -> None:  # any JSON-ready value
     """Write ``result`` to stdout as JSON, after ``--select``.
 
     Indented when asked or on a terminal; written to ``--out``'s file instead, when given; refused when over the cap.
     """
-    from .output import check_size, max_bytes, render, select, write_out
+    from .output import as_json, check_size, max_bytes, select, write_out
 
     if args.select:
         result = select(result, args.select)
-    text = render(result, indent=2 if args.pretty or sys.stdout.isatty() else None)
+    text = as_json(result, indent=2 if args.pretty or sys.stdout.isatty() else None)
     out = getattr(args, 'out', None)
     if out:
-        text = render(write_out(out, text), indent=None)
+        text = as_json(write_out(out, text), indent=None)
     else:
         check_size(text, result, cap=max_bytes(args.max_bytes))
     sys.stdout.write(text + '\n')
@@ -352,7 +375,7 @@ def _seconds(text: str) -> float:
     return value
 
 
-def _finish(result: Any, args: argparse.Namespace) -> None:  # noqa: ANN401 - an executor.Result
+def _finish(result: Any, args: argparse.Namespace) -> None:  # an executor.Result
     """Print a read's replies, and its notes on stderr."""
     emit(result.items, args)
     for note in result.notes:
@@ -372,7 +395,7 @@ def _listen(args: argparse.Namespace) -> int:
 
     line = _Lines(args)
 
-    async def run(session: Any) -> executor.Result:  # noqa: ANN401 - a zenoh.Session
+    async def run(session: Any) -> executor.Result:  # a zenoh.Session
         stop = asyncio.Event()
         loop = asyncio.get_running_loop()
         # A loop takes signal handlers only on the main thread; elsewhere (parsed run inside another program) the
@@ -420,14 +443,14 @@ class _Lines:
         self.matched = [False] * len(self.paths)
         self.over = 0
 
-    def __call__(self, value: Any) -> None:  # noqa: ANN401 - a JSON-ready value
-        from .output import pick, render
+    def __call__(self, value: Any) -> None:  # a JSON-ready value
+        from .output import as_json, pick
 
         if self.paths:
             picked, found = pick(value['value'] if self.meta else value, self.paths)
             self.matched = [a or b for a, b in zip(self.matched, found, strict=True)]
             value = {**value, 'value': picked} if self.meta else picked
-        text = render(value, indent=None)
+        text = as_json(value, indent=None)
         if self.cap and len(text.encode()) > self.cap:
             self.over += 1
             return
@@ -451,7 +474,7 @@ class _Lines:
         return out
 
 
-def _paths(text: str) -> Any:  # noqa: ANN401 - output's parsed paths
+def _paths(text: str) -> Any:  # output's parsed paths
     from .errors import UsageError
     from .output import parse_paths
 
