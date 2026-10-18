@@ -97,7 +97,8 @@ Request fields every request that declares them carries, each from a source:
   its source and length.
 - There is no literal source, so a secret can't end up in the policy file.
 - **A generated value** is an id a server can tell a repeat by, such as an order's. It is no secret: a reply may
-  echo it. `check` names its source and makes none.
+  echo it. `check` names its source and makes none. A write that carries one is asked once more, with the same
+  value, when nothing answers (see [cli.md](cli.md)).
 
 ```toml
 [inject.order_id]               # every request that declares `order_id` carries a fresh one

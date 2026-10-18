@@ -447,6 +447,42 @@ class TestInvoke:
         assert out['visible']['invoke'] == ['EchoReply', 'MoveResult']
 
 
+class TestRetry:
+    def invoke(self, capsys, policy, to, *extra):
+        argv = ['invoke', 'MoveResult', 'player=ann', '--request', json.dumps({'to': to}), *extra, '--policy', policy]
+        return run(capsys, *argv)
+
+    def test_a_lost_reply_is_asked_once_more(self, writes, world, capsys):
+        code, out, err = self.invoke(capsys, writes, 'lossy')
+        assert (code, out) == (0, [{'world': 'w1', 'player': 'ann', 'ok': True}])
+        assert err == {'note': 'no reply within 5s; asked once more with the same move_id'}
+        first, second = world.asked
+        assert first.move_id == second.move_id
+
+    def test_a_lost_write_exits_five_with_its_id(self, writes, world, capsys):
+        code, out, err = self.invoke(capsys, writes, 'void')
+        assert (code, out) == (5, None)
+        assert err == {
+            'error': 'mesh',
+            'message': 'no reply to MoveResult within 5s, after one retry: it may or may not have been carried out',
+            'generated': {'move_id': world.asked[0].move_id},
+        }
+        assert len(world.asked) == 2
+
+    def test_no_retry(self, writes, world, capsys):
+        code, _, err = self.invoke(capsys, writes, 'void', '--no-retry')
+        assert (code, err['message']) == (
+            5,
+            'no reply to MoveResult within 5s: it may or may not have been carried out',
+        )
+        assert len(world.asked) == 1
+
+    def test_an_error_reply_exits_zero_with_a_note(self, writes, world, capsys):
+        code, out, err = self.invoke(capsys, writes, 'broken')
+        assert (code, out, err) == (0, [], {'note': 'MoveResult answered with an error: the dock is closed'})
+        assert len(world.asked) == 1
+
+
 class TestEndToEnd:
     def test_python_dash_m_fetches_over_tcp(self, reads):
         env = {**os.environ, 'PYTHONPATH': os.pathsep.join(sys.path)}
