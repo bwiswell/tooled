@@ -111,6 +111,8 @@ class LookReply(zeared.Message):
     EFFECT = zeared.Effect.READ
     REQUEST: ClassVar[type | None] = LookRequest
 
+    world: str = zeared.Str(required=True, doc="the world's name")
+    player: str = zeared.Str(required=True, doc="the player's key")
     seen: str = zeared.Str(default='', doc='what was seen')
 
 
@@ -122,6 +124,8 @@ class MoveResult(zeared.Message):
     EFFECT = zeared.Effect.WRITE
     REQUEST: ClassVar[type | None] = MoveRequest
 
+    world: str = zeared.Str(required=True, doc="the world's name")
+    player: str = zeared.Str(required=True, doc="the player's key")
     ok: bool = zeared.Bool(required=True, doc='whether it moved')
 
 

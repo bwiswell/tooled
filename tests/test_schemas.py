@@ -102,7 +102,7 @@ class TestSlots:
         }
 
     def test_a_slot_that_is_no_field_is_a_string(self, rules, catalog):
-        assert slot_schemas(catalog.get('LookReply'), rules)['player'] == {'type': 'string'}
+        assert slot_schemas(catalog.get('Seen'), rules)['player'] == {'type': 'string'}
 
     def test_a_multi_slot_takes_several_chunks(self, rules, catalog):
         assert slot_schemas(catalog.get('Trace'), rules)['path']['description'] == 'one chunk or more: `a/b`'

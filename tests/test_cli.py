@@ -1,4 +1,6 @@
+import io
 import json
+import os
 import subprocess
 import sys
 
@@ -197,3 +199,158 @@ class TestDescribe:
         code, out, _ = run(capsys, 'describe', '_support_protocol_two:Station', '--policy', policy)
         assert code == 0
         assert out['name'] == '_support_protocol_two:Station'
+
+
+READS = """
+[bind]
+world = "w1"
+
+[inject.token]
+env = "DEMO_TOKEN"
+
+[[allow]]
+ops = ["read", "query"]
+keys = ["demo/w1/**"]
+
+[[deny]]
+ops = ["query"]
+variants = ["dev-*"]
+"""
+
+
+@pytest.fixture
+def reads(tmp_path, world, monkeypatch):
+    """A policy over the served fixture world, with its token set."""
+    monkeypatch.setenv('DEMO_TOKEN', 'tok-ann')
+    return str(write(tmp_path, READS, head=HEAD.replace('tcp/127.0.0.1:7447', world.endpoint)))
+
+
+def lines(err):
+    return [json.loads(line) for line in err.splitlines()]
+
+
+class TestFetch:
+    def test_every_value_sorted(self, reads, capsys):
+        code, out, err = run(capsys, 'fetch', 'Station', '--policy', reads)
+        assert (code, err) == (0, None)
+        assert out == [{'world': 'w1', 'station': 's1', 'stock': 3}, {'world': 'w1', 'station': 's2', 'stock': 5}]
+
+    def test_narrowed_by_a_slot(self, reads, capsys):
+        assert run(capsys, 'fetch', 'Station', 'station=s2', '--policy', reads)[1] == [
+            {'world': 'w1', 'station': 's2', 'stock': 5}
+        ]
+
+    def test_a_queryable_is_not_fetched(self, reads, capsys):
+        code, _, err = run(capsys, 'fetch', 'LookReply', '--policy', reads)
+        assert code == 2
+        assert err['message'] == 'fetch does not act on LookReply, a queryable contract; what does: query'
+
+    def test_a_write_has_no_verb_yet(self, tmp_path, world, capsys):
+        head = HEAD.replace('tcp/127.0.0.1:7447', world.endpoint)
+        policy = str(write(tmp_path, '[[allow]]\nops = ["invoke"]\n', head=head))
+        code, _, err = run(capsys, 'query', 'MoveResult', '--policy', policy)
+        assert code == 2
+        assert err['message'].endswith('what does: nothing in this version of parsed')
+
+    def test_a_hidden_contract_is_refused(self, reads, capsys):
+        code, _, err = run(capsys, 'fetch', 'MoveResult', '--policy', reads)
+        assert (code, err['error']) == (3, 'refused')
+
+    @pytest.mark.parametrize(('slots', 'message'), [(['station'], 'name=value'), (['station=a', 'station=b'], 'twice')])
+    def test_malformed_slot_arguments(self, reads, capsys, slots, message):
+        code, _, err = run(capsys, 'fetch', 'Station', *slots, '--policy', reads)
+        assert code == 2
+        assert message in err['message']
+
+    def test_an_unreachable_mesh_exits_five(self, tmp_path, capsys):
+        head = HEAD.replace('tcp/127.0.0.1:7447', f'tcp/127.0.0.1:{free_port()}')
+        code, _, err = run(capsys, 'fetch', 'Station', '--policy', str(write(tmp_path, READS, head=head)))
+        assert (code, err['error']) == (5, 'mesh')
+
+
+class TestQuery:
+    def test_a_request_as_json(self, reads, capsys):
+        code, out, err = run(
+            capsys,
+            'query',
+            'LookReply',
+            'player=ann',
+            '--request',
+            '{"kind": "ping", "station": "s1"}',
+            '--policy',
+            reads,
+        )
+        assert (code, err) == (0, None)
+        assert out == [
+            {
+                'world': 'w1',
+                'player': 'ann',
+                'seen': "ping {'station': 's1'} at [('player', 'ann'), ('world', 'w1')] {}",
+            }
+        ]
+
+    def test_a_request_on_stdin(self, reads, capsys, monkeypatch):
+        monkeypatch.setattr('sys.stdin', io.StringIO('{"kind": "pong", "times": 2}'))
+        code, out, _ = run(capsys, 'query', 'LookReply', 'player=ann', '--request', '-', '--policy', reads)
+        assert code == 0
+        assert out[0]['seen'].startswith("pong {'times': 2}")
+
+    def test_a_request_from_a_file_with_params(self, reads, capsys, tmp_path):
+        (tmp_path / 'look.json').write_text('{"kind": "ping", "station": "s2"}')
+        argv = ['query', 'LookReply', 'player=bo', '--request', f'@{tmp_path / "look.json"}', '--param', 'since=3']
+        code, out, _ = run(capsys, *argv, '--policy', reads)
+        assert code == 0
+        assert out[0]['seen'] == "ping {'station': 's2'} at [('player', 'bo'), ('world', 'w1')] {'since': '3'}"
+
+    @pytest.mark.parametrize(
+        ('request_text', 'code', 'kind'),
+        [
+            ('{"kind": "ping"', 2, 'usage'),
+            ('[1, 2]', 2, 'usage'),
+            ('@/no/such/file.json', 2, 'usage'),
+            ('{"kind": "ping"}', 4, 'validation'),
+            ('{"kind": "dev-peek"}', 3, 'refused'),
+            ('{"kind": "ping", "station": "s1", "token": "mine"}', 3, 'refused'),
+        ],
+    )
+    def test_requests_that_go_nowhere(self, reads, capsys, request_text, code, kind):
+        got, out, err = run(capsys, 'query', 'LookReply', 'player=ann', '--request', request_text, '--policy', reads)
+        assert (got, out, err['error']) == (code, None, kind)
+
+    def test_no_reply_is_a_note_not_an_error(self, tmp_path, listening, capsys, monkeypatch):
+        monkeypatch.setenv('DEMO_TOKEN', 'tok-ann')
+        policy = str(write(tmp_path, READS, head=HEAD.replace('tcp/127.0.0.1:7447', listening)))  # nothing served
+        argv = [
+            'query',
+            'LookReply',
+            'player=ann',
+            '--request',
+            '{"kind": "ping", "station": "s1"}',
+            '--timeout',
+            '0.3',
+        ]
+        assert main([*argv, '--policy', policy]) == 0
+        out, err = capsys.readouterr()
+        assert json.loads(out) == []
+        assert lines(err) == [{'note': 'no replies within 0.3s'}]
+
+    def test_a_timeout_above_zero(self, reads, capsys):
+        with pytest.raises(SystemExit) as exc:
+            main(['query', 'LookReply', '--timeout', '0', '--policy', reads])
+        assert exc.value.code == 2
+        assert 'above zero' in capsys.readouterr().err
+
+
+class TestEndToEnd:
+    def test_python_dash_m_fetches_over_tcp(self, reads):
+        env = {**os.environ, 'PYTHONPATH': os.pathsep.join(sys.path)}
+        done = subprocess.run(
+            [sys.executable, '-m', 'parsed', 'fetch', 'Station', 'station=s1', '--policy', reads],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+            env=env,
+        )
+        assert done.returncode == 0, done.stderr
+        assert json.loads(done.stdout) == [{'world': 'w1', 'station': 's1', 'stock': 3}]
