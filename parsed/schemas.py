@@ -33,8 +33,8 @@ if TYPE_CHECKING:
 
 #: The verbs that act on each kind of contract, in this version.
 VERBS: dict[tuple[Kind, Op], tuple[str, ...]] = {
-    (Kind.RETAINED, Op.READ): ('fetch', 'listen'),
-    (Kind.STREAM, Op.READ): ('listen',),
+    (Kind.RETAINED, Op.READ): ('fetch', 'listen', 'wait'),
+    (Kind.STREAM, Op.READ): ('listen', 'wait'),
     (Kind.QUERYABLE, Op.QUERY): ('query',),
     (Kind.QUERYABLE, Op.INVOKE): ('invoke',),
 }

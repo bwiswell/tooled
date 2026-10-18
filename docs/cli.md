@@ -18,6 +18,7 @@ Every verb takes `--policy` after the verb (else `$PARSED_POLICY`, else `./parse
 | `query CONTRACT [slot=value …] [--request JSON]` | a queryable that declares `EFFECT = READ` | its replies, in the order they arrived |
 | `listen CONTRACT [slot=value …]` | a retained contract or a stream | one JSON line per value as it arrives |
 | `invoke CONTRACT [slot=value …] [--request JSON] [--dry-run]` | a queryable that writes: `EFFECT = WRITE` or `ACTION`, or none declared | its replies, in the order they arrived; with `--dry-run`, what it would send |
+| `wait CONTRACT [slot=value …] --until PATH=VALUE [--until …]` | a retained contract or a stream | the first value that meets every condition |
 
 A contract is its class's name, or `module:Class`. Presence feeds have no verb in this version; `contracts` lists
 them with none, and a verb that doesn't act on a contract says which ones do.
@@ -58,6 +59,10 @@ call is refused with exit 2. The replies print as a JSON array; a refusal the se
 say) is a reply, and exits 0. So is an error reply: it's noted, and the result is empty. `--timeout S` bounds the
 wait, 5 seconds by default.
 
+Once a write is sent, nothing about its output reads as the write not having happened: a `--select` path that
+matches nothing in the replies is a note (a refusal's reply leaves out what an accepted one carries), and replies
+over the size cap are refused with a message that says the write was sent and answered.
+
 **A lost reply.** When nothing answers within the timeout, a write is asked once more, with the same request, if
 it carries a generated id (`[inject.order_id] generate = "uuid"`, say): a server that tells a repeat by its id
 answers with the result it gave before, rather than doing the work twice. A note says so. The retry waits the
@@ -85,6 +90,28 @@ Values arrive one JSON line each, flushed as they come: a retained contract's cu
 `--meta` wraps each as `{"key", "origin", "at", "value"}`, where `origin` is `replay` or `live`. It stops after
 `--count N`, after `--for DURATION` (`30`, `30s`, `5m`, `1h`), or on SIGINT or SIGTERM, always with exit 0.
 
+### `wait`
+
+`wait` reads back what a write changed, in one call. It subscribes as `listen` does, and prints the first value
+that meets every `--until`; a retained contract already in that state answers at once, from its replay.
+
+- **Each `--until`** is a path and the value it must equal: `--until activity=idle`, `--until numbers.fuel=40`.
+  The path is dotted, and a whole number picks a list's element (`ships.0.name`). The value reads as JSON if it
+  can (`40`, `true`, `null`, `"30%"`), else as a string (`idle`, `-4,-1.0`); quote a string that would read as
+  JSON (`--until 'name="true"'`). A number never equals a boolean, and `40` equals `40.0`.
+- **Several `--until`s** must all hold for one value. They are separate flags, since a value may hold a comma.
+- **`--timeout S`** bounds the wait, 30 seconds by default. Past it, or on SIGINT or SIGTERM, it exits 7 with the
+  last value seen on a selected key, or `null` for none. The message counts the values seen, and names an
+  `--until` path none of them had, which is how a typo shows:
+
+  ```json
+  {"error": "timeout", "message": "no FleetState value met activity=idle within 30s: 4 seen", "last": {…}}
+  ```
+
+- **`--meta`** wraps the value as `listen`'s does; the conditions read the value inside.
+- **`--select`** keeps parts of the value, and of `last`. A path that matches nothing is a note, not an error:
+  the wait is over by then. A `last` over the size cap is left out, and the message says so.
+
 ## Output
 
 - **Results** go to stdout as JSON, indented on a terminal or with `--pretty` (`listen`'s lines are always compact).
@@ -108,7 +135,7 @@ The cap is `--max-bytes N`, else `$PARSED_MAX_BYTES`, else 28,000 bytes; `0` rem
 - **`--select PATHS`** keeps parts of a result, structure kept: comma-separated paths, dotted (`size.w`), with `[]`
   mapping over a list (`systems[].key`). It applies to each item of a list result (`fetch`, `query`, `invoke`,
   `contracts`), and to each line of `listen`. A path that matches nothing in a non-empty result is refused, so a
-  typo shows.
+  typo shows; in `listen`, `wait` and a sent `invoke`, it's noted instead, since there's no taking those back.
 - **`--out FILE`** writes the whole result to a file, uncapped, and prints `{"written": path, "bytes": n}`. Every
   verb but `listen` takes it.
 
@@ -124,3 +151,4 @@ In `listen`, a line over the cap is left out and noted at the end.
 | 4 | `validation` | the request doesn't load as its class; `path` names the field |
 | 5 | `mesh` | the session wouldn't open, a read or a write failed, or a write got no reply (`generated` holds its generated values) |
 | 6 | `too_large` | the result is over the size cap |
+| 7 | `timeout` | `wait`: no value met the conditions in time; `last` holds the last one seen |

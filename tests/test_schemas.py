@@ -55,9 +55,9 @@ class TestVerbs:
     @pytest.mark.parametrize(
         ('name', 'expected'),
         [
-            ('Station', ('fetch', 'listen')),
-            ('Status', ('fetch', 'listen')),
-            ('Notice', ('listen',)),
+            ('Station', ('fetch', 'listen', 'wait')),
+            ('Status', ('fetch', 'listen', 'wait')),
+            ('Notice', ('listen', 'wait')),
             ('LookReply', ('query',)),
             ('MoveResult', ('invoke',)),
             ('EchoReply', ('invoke',)),  # no effect declared: a write, to fail safe
@@ -85,7 +85,7 @@ class TestListing:
         assert station == {
             'name': 'Station',
             'kind': 'retained',
-            'verbs': ['fetch', 'listen'],
+            'verbs': ['fetch', 'listen', 'wait'],
             'topic': 'demo/w1/station/{station}',
             'slots': ['station'],
             'summary': "A station's state, retained.",

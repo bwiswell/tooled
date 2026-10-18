@@ -21,7 +21,9 @@ lines as it lands, and the entry is dated when that version is released.
 - **`parsed invoke CONTRACT [slot=value …] --request …`** asks a queryable that writes: one that declares `EFFECT =
   WRITE` or `ACTION`, or no effect at all. It's shown only where an allow rule names `invoke`, and `contracts` and
   `describe` list it as the contract's verb. The request is built and checked as `query`'s is, and the replies print
-  as a JSON array. A refusal the server sends back is a reply, and exits 0.
+  as a JSON array. A refusal the server sends back is a reply, and exits 0. Once the write is sent, a `--select`
+  path that matches nothing is a note, not an error, and replies over the cap say the write was answered, so the
+  output never reads as the write not having happened.
 - **A write reaches one key.** Every slot of the contract must be given or bound, and none may hold a wildcard, so
   a write can't fan out to every queryable a widened selector would reach. A call that could is refused with exit
   2, naming the slots to give.
@@ -35,6 +37,13 @@ lines as it lands, and the entry is dated when that version is released.
 - **A lost write exits 5.** A write still unanswered, after its retry if it had one, is a `mesh` error saying it may
   or may not have been carried out, with a `generated` object holding the request's generated values, so the
   effect can be looked for.
+
+- **`parsed wait CONTRACT [slot=value …] --until PATH=VALUE`** reads back what a write changed, in one call. It
+  subscribes to a retained contract or a stream, as `listen` does, and prints the first value that meets every
+  `--until`; a retained contract already in that state answers at once. A path is dotted, and a value reads as JSON
+  if it can, else as a string. `--timeout` is 30 seconds by default.
+- **Exit 7, kind `timeout`:** a `wait` that ran out of time, or was stopped by a signal, with the last value seen in
+  `last`, and the message naming any `--until` path no value had.
 
 ### Changed
 
