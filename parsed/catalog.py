@@ -33,6 +33,7 @@ from .errors import CatalogError, UsageError
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
 
+    from seared import Seared
     from zeared import Effect, Message
     from zeared.doc import SlotDoc
 
@@ -72,7 +73,7 @@ class Contract:
     kind: Kind
     templates: tuple[str, ...]
     slots: tuple[SlotDoc, ...]
-    request: type | None
+    request: type[Seared] | None
     effect: Effect | None
     variants: tuple[str, ...]
 
@@ -165,14 +166,17 @@ def read(cls: type[Message]) -> Contract:
     """Read one ``Message`` class into a :class:`Contract`.
 
     Raises:
-        CatalogError: Its ``EFFECT`` isn't an effect.
+        CatalogError: Its ``EFFECT`` isn't an effect, or its ``REQUEST`` isn't a seared class.
     """
     try:
         doc = introspect_message(cls)  # reads EFFECT through zeared.effect_of, which checks it
     except (TypeError, ValueError) as exc:
         msg = f'{cls.__module__}:{cls.__name__}: {exc}'
         raise CatalogError(msg) from exc
-    effect = doc.effect
+    effect, request = doc.effect, doc.request
+    if request is not None and not is_seared_class(request):
+        msg = f'{cls.__module__}:{cls.__name__}: its REQUEST, {request!r}, is not a seared class'
+        raise CatalogError(msg)
     if doc.retained:
         kind = Kind.RETAINED
     elif doc.request is not None or effect is not None:
@@ -188,9 +192,9 @@ def read(cls: type[Message]) -> Contract:
         kind=kind,
         templates=tuple(t for t in (doc.topic, *doc.extra_topics) if t),
         slots=doc.slots,
-        request=doc.request,
+        request=request,
         effect=effect,
-        variants=union_tags(doc.request) if doc.request is not None else (),
+        variants=union_tags(request) if request is not None else (),
     )
 
 

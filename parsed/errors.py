@@ -8,6 +8,7 @@ and exits with the error's code. stdout carries results only.
 |---|---|
 | 2 | ``usage``, ``policy``, ``catalog``: the command, its policy file or its protocol can't be used as given |
 | 3 | ``refused``: the policy refuses the call |
+| 4 | ``validation``: the request doesn't load as its class: seared's error, with its path |
 | 5 | ``mesh``: the session wouldn't open, or the link failed |
 """
 
@@ -69,6 +70,13 @@ class RefusedError(ParsedError):
 
     kind = 'refused'
     exit_code = 3
+
+
+class InvalidRequestError(ParsedError):
+    """The request doesn't load as its class. The message is seared's, and the path names the field at fault."""
+
+    kind = 'validation'
+    exit_code = 4
 
 
 class MeshError(ParsedError):
