@@ -15,7 +15,7 @@ The examples here read a small protocol, `demo.protocol`, on keys under `demo/{w
 | `Status` | retained, and a presence feed | `demo/{world}/status` |
 | `Notice` | stream | `demo/{world}/notice/{player}` |
 | `LookReply` | queryable, `EFFECT = READ`; its request takes a `token` and a union of `ping`, `pong` and `dev-peek` | `demo/{world}/look/{player}` |
-| `MoveResult` | queryable, `EFFECT = WRITE` | `demo/{world}/move/{player}` |
+| `MoveResult` | queryable, `EFFECT = WRITE`; its request takes a `token`, a `move_id` and where to (`to`) | `demo/{world}/move/{player}` |
 
 ## A whole policy
 
@@ -36,9 +36,17 @@ table = "players"
 match = { world = "w1", player = "ann" }
 key = "token"
 
+[inject.move_id]                # made fresh for each call: an id the server tells a repeat by
+generate = "uuid"
+
 [[allow]]
 ops = ["read", "query"]
 keys = ["demo/w1/**"]
+
+[[allow]]                       # one write, for one player
+ops = ["invoke"]
+contracts = ["MoveResult"]
+keys = ["demo/w1/move/ann"]
 
 [[deny]]                        # deny wins
 ops = ["query"]
@@ -134,6 +142,10 @@ variants allows only those tags.
 The tag is read from the request as given, before it loads, so a denied variant is refused (exit 3) whatever its
 fields hold, and no error describes them. An error about a tag the union doesn't have names only the tags the
 policy shows.
+
+**Only a union at the request's root is checked.** A union nested deeper, such as one inside a list of follow-on
+steps, carries tags no rule sees. Where those tags matter, the server's own checks are what stop them, or the
+policy denies the contract.
 
 **Names must name something.** A contract name, a variant tag, a bound slot or an injected field written without a
 glob must exist in the protocol, so a typo is refused at load. A glob may match nothing.
