@@ -32,8 +32,8 @@ and zeared parsed runs on, since a protocol package parsed reads must pin the sa
   (``numbers.fuel``); a value reads as JSON if it can (``40``, ``true``, ``"30%"``), else as a string (``idle``).
   Past ``--timeout`` (30 s by default), or on SIGINT or SIGTERM, it exits 7 with the last value seen.
 
-A slot left out widens to every value; a bound one is filled by the policy. ``--timeout`` bounds a query or an
-invoke (5 s by default).
+A slot left out widens to every value; a bound one is filled by the policy. ``--timeout`` bounds a fetch, a query
+or an invoke (5 s by default), and a wait (30 s).
 
 **Output.** Results go to stdout as JSON, indented on a terminal or with ``--pretty``. ``--select`` keeps parts of
 a result; a result over the cap (``--max-bytes``, else ``$PARSED_MAX_BYTES``, else 28,000 bytes) is refused with
@@ -408,7 +408,7 @@ def _invoke(args: argparse.Namespace) -> int:
         call = executor.prepare(contract, rules, values, request=request, injected=injected)
         secrets = [name for name in injected if name not in generated]
         emit(executor.preview(contract, call, hidden=secrets), args)
-        sys.stderr.write(json.dumps({'note': 'a dry run: checked, and not sent'}) + '\n')
+        _notes(['a dry run: checked, and not sent'])
         return 0
     session = executor.open_session(loaded.mesh)
     try:
@@ -530,6 +530,7 @@ def _finish(result: Any, args: argparse.Namespace, *, sent: bool = False) -> Non
 
 
 def _notes(notes: Sequence[str]) -> None:
+    """Write each note to stderr, as one JSON line."""
     for note in notes:
         sys.stderr.write(json.dumps({'note': note}) + '\n')
 
@@ -575,8 +576,7 @@ def _listen(args: argparse.Namespace) -> int:
         result = asyncio.run(run(session))
     finally:
         session.close()
-    for note in [*result.notes, *line.notes()]:
-        sys.stderr.write(json.dumps({'note': note}) + '\n')
+    _notes([*result.notes, *line.notes()])
     return 0
 
 

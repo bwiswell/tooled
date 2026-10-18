@@ -23,6 +23,11 @@ Every verb takes `--policy` after the verb (else `$PARSED_POLICY`, else `./parse
 A contract is its class's name, or `module:Class`. Presence feeds have no verb in this version; `contracts` lists
 them with none, and a verb that doesn't act on a contract says which ones do.
 
+`--timeout S` bounds how long a verb waits on the mesh: 5 seconds for `fetch`, `query` and `invoke`, 30 for
+`wait`. One case it doesn't reach: a `fetch` of a contract with several topics and no slot given reads through
+zeared's own retained fetch, which waits Zenoh's default query timeout (10 seconds, unless the session's config
+sets another).
+
 ### Slots
 
 `slot=value` narrows a read to keys whose slot has that value; a slot left out widens to every value, and a bound

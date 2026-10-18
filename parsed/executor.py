@@ -71,7 +71,7 @@ _QUERY_ARGS = frozenset({'session', 'params', 'request', 'timeout', 'target', 'c
 
 @dataclass
 class Result:
-    """What a read gives: the replies, dumped, and notes on what was left out or missing."""
+    """What a call gives: its replies or values, dumped, and notes on what was left out or missing."""
 
     items: list[Any] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)

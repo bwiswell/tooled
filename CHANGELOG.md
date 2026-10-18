@@ -14,10 +14,6 @@ lines as it lands, and the entry is dated when that version is released.
 
 ### Added
 
-- **Generated request fields.** `[inject.<field>] generate = "uuid"` fills a field with a fresh uuid4, 32 lowercase
-  hex digits, on every call: an id a server can tell a repeat by, such as an order's. Like any injected field it
-  reaches every request that declares it, is left out of `describe`, and is refused if given. Unlike a secret, it
-  may show in a reply. `check` names its source and makes none.
 - **`parsed invoke CONTRACT [slot=value …] --request …`** asks a queryable that writes: one that declares `EFFECT =
   WRITE` or `ACTION`, or no effect at all. It's shown only where an allow rule names `invoke`, and `contracts` and
   `describe` list it as the contract's verb. The request is built and checked as `query`'s is, and the replies print
@@ -30,6 +26,10 @@ lines as it lands, and the entry is dated when that version is released.
 - **`parsed invoke --dry-run`** builds the request and checks it and the policy, then prints the selector, the
   variant and the request, each injected secret as `"<injected>"`, without sending anything. A generated field
   shows the value made for the dry run; a real call makes a fresh one.
+- **Generated request fields.** `[inject.<field>] generate = "uuid"` fills a field with a fresh uuid4, 32 lowercase
+  hex digits, on every call: an id a server can tell a repeat by, such as an order's. Like any injected field it
+  reaches every request that declares it, is left out of `describe`, and is refused if given. Unlike a secret, it
+  may show in a reply. `check` names its source and makes none.
 - **One retry after a lost reply.** A write nothing answered within `--timeout` is asked once more, with the same
   request, when it carries a generated id: a server that tells a repeat by its id answers with the result it gave
   before. A note says it was retried. `--no-retry` turns it off, and a request with no generated id is never
@@ -37,7 +37,6 @@ lines as it lands, and the entry is dated when that version is released.
 - **A lost write exits 5.** A write still unanswered, after its retry if it had one, is a `mesh` error saying it may
   or may not have been carried out, with a `generated` object holding the request's generated values, so the
   effect can be looked for.
-
 - **`parsed wait CONTRACT [slot=value …] --until PATH=VALUE`** reads back what a write changed, in one call. It
   subscribes to a retained contract or a stream, as `listen` does, and prints the first value that meets every
   `--until`; a retained contract already in that state answers at once. A path is dotted, and a value reads as JSON
