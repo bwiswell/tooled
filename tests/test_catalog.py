@@ -100,7 +100,7 @@ class TestNames:
 
     def test_slot_names_and_request_fields(self, catalog):
         assert catalog.slot_names == {'world', 'station', 'player', 'path'}
-        assert catalog.request_fields == {'token', 'ask_id', 'to', 'text'}  # a flat union adds no wire name
+        assert catalog.request_fields == {'token', 'ask_id', 'to', 'move_id', 'text'}  # a flat union adds no wire name
 
 
 class TestLoad:

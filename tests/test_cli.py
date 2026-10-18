@@ -249,10 +249,8 @@ class TestFetch:
         assert code == 2
         assert err['message'] == 'fetch does not act on LookReply, a queryable contract; what does: query'
 
-    def test_a_write_has_no_verb_yet(self, tmp_path, world, capsys):
-        head = HEAD.replace('tcp/127.0.0.1:7447', world.endpoint)
-        policy = str(write(tmp_path, '[[allow]]\nops = ["invoke"]\n', head=head))
-        code, _, err = run(capsys, 'query', 'MoveResult', '--policy', policy)
+    def test_a_presence_feed_has_no_verb_yet(self, reads, capsys):
+        code, _, err = run(capsys, 'fetch', 'Seen', '--policy', reads)
         assert code == 2
         assert err['message'].endswith('what does: nothing in this version of parsed')
 
@@ -343,6 +341,110 @@ class TestQuery:
             main(['query', 'LookReply', '--timeout', '0', '--policy', reads])
         assert exc.value.code == 2
         assert 'above zero' in capsys.readouterr().err
+
+
+WRITES = (
+    READS
+    + """
+[inject.move_id]
+generate = "uuid"
+
+[[allow]]
+ops = ["invoke"]
+keys = ["demo/w1/**"]
+
+[[deny]]
+ops = ["invoke"]
+keys = ["demo/w1/move/bo"]
+"""
+)
+
+
+@pytest.fixture
+def writes(tmp_path, world, monkeypatch):
+    """A policy that also writes, over the served fixture world, with its token set and a generated move id."""
+    monkeypatch.setenv('DEMO_TOKEN', 'tok-ann')
+    return str(write(tmp_path, WRITES, head=HEAD.replace('tcp/127.0.0.1:7447', world.endpoint)))
+
+
+class TestInvoke:
+    def test_a_write_and_its_reply(self, writes, world, capsys):
+        code, out, err = run(
+            capsys, 'invoke', 'MoveResult', 'player=ann', '--request', '{"to": "dock"}', '--policy', writes
+        )
+        assert (code, err) == (0, None)
+        assert out == [{'world': 'w1', 'player': 'ann', 'ok': True}]
+        (sent,) = world.asked
+        assert (sent.token, sent.to) == ('tok-ann', 'dock')
+        assert re.fullmatch('[0-9a-f]{32}', sent.move_id)
+
+    def test_a_refusal_by_the_server_exits_zero(self, writes, capsys):
+        argv = ['invoke', 'MoveResult', 'player=ann', '--request', '{"to": "nowhere"}', '--policy', writes]
+        assert run(capsys, *argv)[:2] == (0, [{'world': 'w1', 'player': 'ann', 'ok': False}])
+
+    def test_a_queryable_that_declares_no_effect(self, writes, capsys):
+        code, out, _ = run(capsys, 'invoke', 'EchoReply', '--request', '{"text": "hi"}', '--policy', writes)
+        assert (code, out) == (0, [{'world': 'w1', 'text': 'hi'}])
+
+    def test_a_dry_run_prints_the_request_and_sends_nothing(self, writes, world, capsys):
+        argv = ['invoke', 'MoveResult', 'player=ann', '--request', '{"to": "dock"}', '--dry-run', '--policy', writes]
+        assert main(argv) == 0
+        out, err = capsys.readouterr()
+        assert 'tok-ann' not in out
+        preview = json.loads(out)
+        move_id = preview['request'].pop('move_id')
+        assert re.fullmatch('[0-9a-f]{32}', move_id)  # a generated value is no secret
+        assert preview == {
+            'selector': 'demo/w1/move/ann',
+            'variant': None,
+            'request': {'token': '<injected>', 'to': 'dock'},
+        }
+        assert lines(err) == [{'note': 'a dry run: checked, and not sent'}]
+        assert world.asked == []
+
+    @pytest.mark.parametrize(
+        ('argv', 'expected'),
+        [
+            (['MoveResult', '--request', '{"to": "dock"}'], (2, 'usage')),  # no player: it could reach every one
+            (['MoveResult', 'player=bo', '--request', '{"to": "dock"}'], (3, 'refused')),
+            (['MoveResult', 'player=ann', '--request', '{"to": "dock", "token": "mine"}'], (3, 'refused')),
+            (['MoveResult', 'player=ann', '--request', '{"to": "dock", "move_id": "mine"}'], (3, 'refused')),
+            (['MoveResult', 'player=ann', '--request', '{}'], (4, 'validation')),
+            (['LookReply', 'player=ann', '--request', '{"kind": "pong"}'], (2, 'usage')),  # a read: query's
+        ],
+    )
+    def test_writes_that_go_nowhere(self, writes, world, capsys, argv, expected):
+        for dry_run in ([], ['--dry-run']):  # a dry run is checked as a write is
+            code, out, err = run(capsys, 'invoke', *argv, *dry_run, '--policy', writes)
+            assert (code, out, err['error']) == (expected[0], None, expected[1])
+        assert world.asked == []
+
+    def test_a_write_reaches_one_key(self, writes, capsys):
+        _, _, err = run(capsys, 'invoke', 'MoveResult', '--request', '{"to": "dock"}', '--policy', writes)
+        assert err['message'] == 'a write reaches one key, and demo/w1/move/* could reach more: give player'
+
+    def test_a_read_policy_does_not_show_a_write(self, reads, capsys):
+        code, _, err = run(
+            capsys, 'invoke', 'MoveResult', 'player=ann', '--request', '{"to": "dock"}', '--policy', reads
+        )
+        assert (code, err['message']) == (3, 'the policy does not show MoveResult')
+
+    def test_query_does_not_act_on_a_write(self, writes, capsys):
+        code, _, err = run(capsys, 'query', 'MoveResult', 'player=ann', '--policy', writes)
+        assert code == 2
+        assert err['message'] == 'query does not act on MoveResult, a queryable contract; what does: invoke'
+
+    def test_contracts_and_describe_list_it(self, writes, capsys):
+        rows = {row['name']: row for row in run(capsys, 'contracts', '--policy', writes)[1]}
+        assert (rows['MoveResult']['verbs'], rows['EchoReply']['verbs']) == (['invoke'], ['invoke'])
+        _, out, _ = run(capsys, 'describe', 'MoveResult', '--policy', writes)
+        assert out['verbs'] == ['invoke']
+        assert out['injected'] == ['token', 'move_id']
+        assert list(out['request']['properties']) == ['to']
+
+    def test_check_shows_the_writes(self, writes, capsys):
+        _, out, _ = run(capsys, 'check', '--policy', writes)
+        assert out['visible']['invoke'] == ['EchoReply', 'MoveResult']
 
 
 class TestEndToEnd:

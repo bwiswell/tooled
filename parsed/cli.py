@@ -20,9 +20,13 @@ and zeared parsed runs on, since a protocol package parsed reads must pin the sa
   each: a retained contract's current values first, then live ones. ``--meta`` adds each one's key, origin and
   time. It stops after ``--count N``, after ``--for DURATION`` (``30``, ``30s``, ``5m``, ``1h``), or on SIGINT or
   SIGTERM, with exit 0: run under a tool that streams lines (Claude Code's Monitor), it reads like a feed.
+- ``invoke CONTRACT [slot=value …] [--request JSON]``: ask a queryable that writes, its request given as
+  ``query``'s is, at one key: every slot given or bound. A refusal the server sends back is a reply, and exits 0.
+  ``--dry-run`` builds the request and checks it and the policy, then prints the selector and the request,
+  injected secrets as ``"<injected>"``, without sending anything.
 
-A slot left out widens to every value; a bound one is filled by the policy. ``--timeout`` bounds a query (5 s by
-default).
+A slot left out widens to every value; a bound one is filled by the policy. ``--timeout`` bounds a query or an
+invoke (5 s by default).
 
 **Output.** Results go to stdout as JSON, indented on a terminal or with ``--pretty``. ``--select`` keeps parts of
 a result; a result over the cap (``--max-bytes``, else ``$PARSED_MAX_BYTES``, else 28,000 bytes) is refused with
@@ -63,7 +67,7 @@ exit codes:
   2  usage, the policy file, or the protocol
   3  refused by the policy
   4  a request that does not load: the field at fault is in "path"
-  5  the mesh: the session would not open, or the read failed
+  5  the mesh: the session would not open, or a read or a write failed
   6  a result over the size cap
 
 The policy is --policy PATH, else $PARSED_POLICY, else ./parsed.toml.
@@ -158,6 +162,27 @@ def build_parser() -> argparse.ArgumentParser:
     listen.add_argument('--for', dest='duration', type=_duration, metavar='DURATION', help='stop after 30, 30s, 5m, 1h')
     listen.add_argument('--meta', action='store_true', help="add each value's key, origin and time")
     listen.set_defaults(run=_listen)
+    invoke = verbs.add_parser(
+        'invoke',
+        parents=[common, saving],
+        help='ask a queryable that writes',
+        description=(
+            'Ask a queryable that writes (EFFECT = WRITE or ACTION, or none declared), and print its replies. A '
+            'refusal the server sends back is a reply.'
+        ),
+    )
+    invoke.add_argument('contract', help='a contract: its class name, or module:Class')
+    invoke.add_argument(
+        'slots', nargs='*', metavar='slot=value', help='a slot: a write reaches one key, so each is given or bound'
+    )
+    invoke.add_argument('--timeout', type=_seconds, default=5.0, metavar='S', help='seconds to wait (default 5)')
+    invoke.add_argument('--request', metavar='JSON', help='the request, in its wire form: JSON, - for stdin, @path')
+    invoke.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='build the request and check it, and print it without sending; injected secrets show as <injected>',
+    )
+    invoke.set_defaults(run=_invoke)
     return parser
 
 
@@ -295,14 +320,13 @@ def _fetch(args: argparse.Namespace) -> int:
 
 
 def _query(args: argparse.Namespace) -> int:
-    from . import executor, policy, schemas
+    from . import executor
 
     path, loaded, catalog, rules = load(args.policy)
     contract = _readable(catalog, rules, args.contract, 'query')
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
     request = _request(args.request) if args.request is not None else None
-    names = schemas.injected(contract, rules)
-    injected = {name: policy.resolve(name, loaded.inject[name], base=path.parent).value for name in names}
+    injected = _injected(path, loaded, contract, rules)
     session = executor.open_session(loaded.mesh)
     try:
         result = executor.query(
@@ -319,6 +343,39 @@ def _query(args: argparse.Namespace) -> int:
         session.close()
     _finish(result, args)
     return 0
+
+
+def _invoke(args: argparse.Namespace) -> int:
+    from . import executor, policy
+
+    path, loaded, catalog, rules = load(args.policy)
+    contract = _readable(catalog, rules, args.contract, 'invoke')
+    values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
+    request = _request(args.request) if args.request is not None else None
+    injected = _injected(path, loaded, contract, rules)
+    if args.dry_run:
+        call = executor.prepare(contract, rules, values, request=request, injected=injected)
+        secrets = [name for name in injected if not policy.generated(loaded.inject[name])]
+        emit(executor.preview(contract, call, hidden=secrets), args)
+        sys.stderr.write(json.dumps({'note': 'a dry run: checked, and not sent'}) + '\n')
+        return 0
+    session = executor.open_session(loaded.mesh)
+    try:
+        result = executor.invoke(
+            session, contract, rules, values, request=request, injected=injected, timeout=args.timeout
+        )
+    finally:
+        session.close()
+    _finish(result, args)
+    return 0
+
+
+def _injected(path: Path, loaded: Policy, contract: Contract, rules: Rules) -> dict[str, str]:
+    """The values the policy injects into ``contract``'s request: each source read, each generated value made."""
+    from . import policy, schemas
+
+    names = schemas.injected(contract, rules)
+    return {name: policy.resolve(name, loaded.inject[name], base=path.parent).value for name in names}
 
 
 def _readable(catalog: Catalog, rules: Rules, name: str, verb: str) -> Contract:

@@ -1,8 +1,8 @@
-"""The executor: the session a command opens, and the reads it makes on it.
+"""The executor: the session a command opens, and the reads and writes it makes on it.
 
-Every read follows the same steps. The slots given are checked against the contract's, and merged with the ones
+Every call follows the same steps. The slots given are checked against the contract's, and merged with the ones
 the policy binds. The selector they render is checked against the policy, before anything reaches the mesh. Then
-zeared does the reading, and each reply is dumped as seared's JSON form.
+zeared does the asking, and each reply is dumped as seared's JSON form.
 
 - **fetch** reads a retained contract. With slots to narrow by, it's a query on the retention queryables, which
   answer whatever intersects the selector; with none, and several topics, it's ``fetch_retained`` across them all.
@@ -10,6 +10,9 @@ zeared does the reading, and each reply is dumped as seared's JSON form.
 - **query** asks a queryable that declares ``EFFECT = READ``. The request is the given JSON, with the policy's
   injected fields added, loaded strict by its own class, so seared's checks (and any ``__post_init__``) run before
   the query is sent. Replies come back in the order they arrived.
+- **invoke** asks a queryable that writes, the same way, at one key: every slot given or bound, and none a
+  wildcard. A server's refusal is a reply, not an error. ``prepare`` builds and checks a call without sending it,
+  which is what a dry run prints (``preview``), injected secrets masked.
 - **listen** subscribes to a retained contract or a stream, and hands on each value as it arrives: a retained
   contract's current values first (``origin`` ``replay``), then live ones. Each sample's key is checked against the
   slots asked for and against the policy, so a sample on a denied key is left out rather than the whole stream
@@ -35,9 +38,10 @@ from zeared import KeyExprError, keyexpr
 from .catalog import render
 from .errors import InvalidRequestError, MeshError, RefusedError, UsageError
 from .output import dump
+from .policy import Op, op_of
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Collection, Mapping
 
     from seared import Seared
     from zeared import SessionConfig
@@ -47,6 +51,9 @@ if TYPE_CHECKING:
 
 #: Zenoh appends where in its source it refused; the reason is what's useful.
 _SOURCE = re.compile(r'\s+at /\S+$')
+
+#: What a dry run shows in place of an injected secret.
+HIDDEN = '<injected>'
 
 #: zeared's ``query`` takes slots as keyword arguments beside these, so a slot by one of these names can't be given.
 _QUERY_ARGS = frozenset({'session', 'params', 'request', 'timeout', 'target', 'consolidation', 'on_error'})
@@ -141,6 +148,53 @@ def fetch(session: Any, contract: Contract, rules: Rules, values: Mapping[str, s
     return result
 
 
+@dataclass
+class Call:
+    """A call built and checked, before anything is sent: its slots, the selector they render, and its request."""
+
+    values: Mapping[str, str]
+    selector: str
+    request: Any = None  # the request, loaded; None for a contract that takes none
+    variant: str | None = None
+
+
+def prepare(
+    contract: Contract,
+    rules: Rules,
+    values: Mapping[str, str],
+    *,
+    request: Mapping[str, Any] | None,
+    injected: Mapping[str, str],
+) -> Call:
+    """A call on a queryable, built from ``request`` and the policy's injected fields, and checked against the policy.
+
+    A write reaches one key: on a contract whose operation is ``invoke``, every slot must be given or bound, and
+    none may hold a wildcard, so a write can't fan out to every queryable a widened selector would reach.
+
+    Raises:
+        UsageError: A request given to a contract that takes none; or a write whose selector isn't one key.
+        RefusedError: A value given for an injected field; or the policy refuses the selector, or the request's
+            variant.
+        InvalidRequestError: The request doesn't load as its class.
+    """
+    built, variant = None, None
+    if contract.request is None:
+        if request is not None:
+            msg = f'{rules.catalog.label(contract)} takes no request'
+            raise UsageError(msg)
+    else:
+        built = build_request(contract.request, request or {}, injected)
+        variant = variant_of(contract, built)
+    key = selector(contract.templates[0], values)
+    if op_of(contract) is Op.INVOKE and not keyexpr.is_concrete(key):
+        missing = [slot.name for slot in contract.slots if slot.name not in values]
+        hint = f'give {", ".join(missing)}' if missing else 'give each slot a value without a wildcard'
+        msg = f'a write reaches one key, and {key} could reach more: {hint}'
+        raise UsageError(msg)
+    rules.check(contract, key, variant=variant)
+    return Call(values, key, built, variant)
+
+
 def query(  # noqa: PLR0913 - one read: the contract, its slots, its request and the policy's part in it
     session: Any,  # a zenoh.Session, or a ManagedSession
     contract: Contract,
@@ -161,22 +215,69 @@ def query(  # noqa: PLR0913 - one read: the contract, its slots, its request and
         InvalidRequestError: The request doesn't load as its class.
         MeshError: The query failed.
     """
-    label, built, variant = rules.catalog.label(contract), None, None
-    if contract.request is None:
-        if request is not None:
-            msg = f'{label} takes no request'
-            raise UsageError(msg)
-    else:
-        built = build_request(contract.request, request or {}, injected)
-        variant = variant_of(contract, built)
-    rules.check(contract, selector(contract.templates[0], values), variant=variant)
+    call = prepare(contract, rules, values, request=request, injected=injected)
+    return _ask(session, contract, call, params=params, timeout=timeout, what='read')
+
+
+def invoke(  # noqa: PLR0913 - one write: the contract, its slots, its request and the policy's part in it
+    session: Any,  # a zenoh.Session, or a ManagedSession
+    contract: Contract,
+    rules: Rules,
+    values: Mapping[str, str],
+    *,
+    request: Mapping[str, Any] | None,
+    injected: Mapping[str, str],
+    timeout: float,
+) -> Result:
+    """Ask a queryable that writes, with a request built from ``request`` and the policy's injected fields.
+
+    A refusal the server sends back is a reply like any other: what it says is the protocol's business.
+
+    Raises:
+        UsageError: A request given to a contract that takes none.
+        RefusedError: A value given for an injected field; or the policy refuses the selector, or the request's
+            variant.
+        InvalidRequestError: The request doesn't load as its class.
+        MeshError: The write failed.
+    """
+    call = prepare(contract, rules, values, request=request, injected=injected)
+    return _ask(session, contract, call, params={}, timeout=timeout, what='write')
+
+
+def preview(contract: Contract, call: Call, *, hidden: Collection[str]) -> dict[str, Any]:
+    """What a dry run prints: the selector, the variant, and the request's wire form, ``hidden`` fields masked."""
+    request = None
+    if contract.request is not None and call.request is not None:
+        request = dump(contract.request, call.request)
+        for name in hidden:
+            if name in request:
+                request[name] = HIDDEN
+    return {'selector': call.selector, 'variant': call.variant, 'request': request}
+
+
+def _ask(  # noqa: PLR0913 - a prepared call, and how to send it
+    session: Any,  # a zenoh.Session, or a ManagedSession
+    contract: Contract,
+    call: Call,
+    *,
+    params: Mapping[str, str],
+    timeout: float,
+    what: str,
+) -> Result:
+    """Send a prepared call, and gather its replies in the order they arrived; ``what`` it is names a failure."""
     result = Result()
     on_error = _collect(result, contract)
-    slots: dict[str, Any] = dict(values)
+    slots: dict[str, Any] = dict(call.values)
     items = _read(
         lambda: contract.cls.query(
-            session=session, request=built, params=dict(params) or None, timeout=timeout, on_error=on_error, **slots
-        )
+            session=session,
+            request=call.request,
+            params=dict(params) or None,
+            timeout=timeout,
+            on_error=on_error,
+            **slots,
+        ),
+        what=what,
     )
     result.items = [dump(contract.cls, item) for item in items]
     if not items:
@@ -311,11 +412,11 @@ def variant_of(contract: Contract, request: Any) -> str | None:  # the request i
     return None
 
 
-def _read(call: Any) -> list[Any]:  # a zeared read, deferred
+def _read(call: Any, *, what: str = 'read') -> list[Any]:  # a zeared call, deferred
     try:
         return list(call())
     except Exception as exc:  # zenoh and zeared raise their own types; any of them is the mesh failing
-        msg = f'the read failed: {_reason(exc)}'
+        msg = f'the {what} failed: {_reason(exc)}'
         raise MeshError(msg) from exc
 
 

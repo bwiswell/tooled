@@ -36,11 +36,12 @@ VERBS: dict[tuple[Kind, Op], tuple[str, ...]] = {
     (Kind.RETAINED, Op.READ): ('fetch', 'listen'),
     (Kind.STREAM, Op.READ): ('listen',),
     (Kind.QUERYABLE, Op.QUERY): ('query',),
+    (Kind.QUERYABLE, Op.INVOKE): ('invoke',),
 }
 
 
 def verbs(contract: Contract) -> tuple[str, ...]:
-    """The verbs that act on ``contract`` in this version: none yet for a write, or a presence feed."""
+    """The verbs that act on ``contract`` in this version: none yet for a presence feed."""
     return VERBS.get((contract.kind, op_of(contract)), ())
 
 
