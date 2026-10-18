@@ -58,10 +58,19 @@ def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument('--policy', metavar='PATH', help='the policy file (else $PARSED_POLICY, else ./parsed.toml)')
     common.add_argument('--pretty', action='store_true', help='indent the JSON (the default on a terminal)')
+    common.add_argument('--select', type=_paths, metavar='PATHS', help='keep parts: a.b, list[].key; comma-separated')
+    common.add_argument(
+        '--max-bytes',
+        type=_bytes,
+        metavar='N',
+        help='refuse a result over N bytes (else $PARSED_MAX_BYTES, else 28000; 0: none)',
+    )
+    saving = argparse.ArgumentParser(add_help=False)
+    saving.add_argument('--out', metavar='FILE', help='write the whole result to FILE, uncapped, and say where')
     verbs = parser.add_subparsers(dest='verb', metavar='verb', required=True)
     check = verbs.add_parser(
         'check',
-        parents=[common],
+        parents=[common, saving],
         help='check the policy and its protocol, and summarize what it shows',
         description='Load the policy and its protocol, resolve what it injects, and summarize what it shows.',
     )
@@ -69,19 +78,21 @@ def build_parser() -> argparse.ArgumentParser:
     check.set_defaults(run=_check)
     contracts = verbs.add_parser(
         'contracts',
-        parents=[common],
+        parents=[common, saving],
         help='list the contracts the policy shows',
         description='Every contract the policy shows, one line of each.',
     )
     contracts.set_defaults(run=_contracts)
     describe = verbs.add_parser(
         'describe',
-        parents=[common],
+        parents=[common, saving],
         help='describe one contract: its slots, and the schemas of what it takes and gives',
         description='One contract whole: its slots, and the JSON Schemas of what it takes and gives.',
     )
     describe.add_argument('contract', help='a contract: its class name, or module:Class')
-    describe.add_argument('--variant', metavar='TAG', help="one variant of the request's union, by its tag")
+    layers = describe.add_mutually_exclusive_group()
+    layers.add_argument('--variant', metavar='TAG', help="one variant of the request's union, by its tag")
+    layers.add_argument('--reply', action='store_true', help="the reply's whole schema, not its field list")
     describe.set_defaults(run=_describe)
     reads = argparse.ArgumentParser(add_help=False)
     reads.add_argument('contract', help='a contract: its class name, or module:Class')
@@ -89,14 +100,14 @@ def build_parser() -> argparse.ArgumentParser:
     reads.add_argument('--timeout', type=_seconds, default=5.0, metavar='S', help='seconds to wait (default 5)')
     fetch = verbs.add_parser(
         'fetch',
-        parents=[common, reads],
+        parents=[common, saving, reads],
         help="read a retained contract's values",
         description="A retained contract's values: those the slots select, or every one.",
     )
     fetch.set_defaults(run=_fetch)
     query = verbs.add_parser(
         'query',
-        parents=[common, reads],
+        parents=[common, saving, reads],
         help='ask a read queryable',
         description='Ask a queryable that declares EFFECT = READ, and print its replies.',
     )
@@ -149,10 +160,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         return exc.exit_code
 
 
-def emit(result: Any, *, pretty: bool) -> None:  # noqa: ANN401 - any JSON-ready value
-    """Write ``result`` to stdout as JSON: indented when asked, or on a terminal."""
-    indent = 2 if pretty or sys.stdout.isatty() else None
-    sys.stdout.write(json.dumps(result, indent=indent, ensure_ascii=False) + '\n')
+def emit(result: Any, args: argparse.Namespace) -> None:  # noqa: ANN401 - any JSON-ready value
+    """Write ``result`` to stdout as JSON, after ``--select``.
+
+    Indented when asked or on a terminal; written to ``--out``'s file instead, when given; refused when over the cap.
+    """
+    from .output import check_size, max_bytes, render, select, write_out
+
+    if args.select:
+        result = select(result, args.select)
+    text = render(result, indent=2 if args.pretty or sys.stdout.isatty() else None)
+    out = getattr(args, 'out', None)
+    if out:
+        text = render(write_out(out, text), indent=None)
+    else:
+        check_size(text, result, cap=max_bytes(args.max_bytes))
+    sys.stdout.write(text + '\n')
 
 
 def load(given: str | None) -> tuple[Path, Policy, Catalog, Rules]:
@@ -191,7 +214,7 @@ def _check(args: argparse.Namespace) -> int:
         started = time.perf_counter()
         open_session(mesh).close()
         summary['connect'] = {'ok': True, 'seconds': round(time.perf_counter() - started, 3)}
-    emit(summary, pretty=args.pretty)
+    emit(summary, args)
     return 0
 
 
@@ -199,7 +222,7 @@ def _contracts(args: argparse.Namespace) -> int:
     from .schemas import listing
 
     *_, rules = load(args.policy)
-    emit(listing(rules), pretty=args.pretty)
+    emit(listing(rules), args)
     return 0
 
 
@@ -213,9 +236,9 @@ def _describe(args: argparse.Namespace) -> int:
         msg = f'the policy does not show {catalog.label(contract)}'
         raise RefusedError(msg)
     if args.variant is not None:
-        emit(describe_variant(contract, args.variant, rules), pretty=args.pretty)
+        emit(describe_variant(contract, args.variant, rules), args)
     else:
-        emit(describe(contract, rules), pretty=args.pretty)
+        emit(describe(contract, rules, reply=args.reply), args)
     return 0
 
 
@@ -230,7 +253,7 @@ def _fetch(args: argparse.Namespace) -> int:
         result = executor.fetch(session, contract, rules, values, timeout=args.timeout)
     finally:
         session.close()
-    _finish(result, pretty=args.pretty)
+    _finish(result, args)
     return 0
 
 
@@ -257,7 +280,7 @@ def _query(args: argparse.Namespace) -> int:
         )
     finally:
         session.close()
-    _finish(result, pretty=args.pretty)
+    _finish(result, args)
     return 0
 
 
@@ -329,9 +352,9 @@ def _seconds(text: str) -> float:
     return value
 
 
-def _finish(result: Any, *, pretty: bool) -> None:  # noqa: ANN401 - an executor.Result
+def _finish(result: Any, args: argparse.Namespace) -> None:  # noqa: ANN401 - an executor.Result
     """Print a read's replies, and its notes on stderr."""
-    emit(result.items, pretty=pretty)
+    emit(result.items, args)
     for note in result.notes:
         sys.stderr.write(json.dumps({'note': note}) + '\n')
 
@@ -347,9 +370,7 @@ def _listen(args: argparse.Namespace) -> int:
     contract = _readable(catalog, rules, args.contract, 'listen')
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
 
-    def line(value: Any) -> None:  # noqa: ANN401 - a JSON-ready value
-        sys.stdout.write(json.dumps(value, ensure_ascii=False) + '\n')
-        sys.stdout.flush()
+    line = _Lines(args)
 
     async def run(session: Any) -> executor.Result:  # noqa: ANN401 - a zenoh.Session
         stop = asyncio.Event()
@@ -380,9 +401,72 @@ def _listen(args: argparse.Namespace) -> int:
         result = asyncio.run(run(session))
     finally:
         session.close()
-    for note in result.notes:
+    for note in [*result.notes, *line.notes()]:
         sys.stderr.write(json.dumps({'note': note}) + '\n')
     return 0
+
+
+class _Lines:
+    """``listen``'s writer: each value, after ``--select``, as one flushed JSON line; one over the cap is left out.
+
+    A path that matches nothing in one value doesn't end the stream; :meth:`notes` says which never matched.
+    """
+
+    def __init__(self, args: argparse.Namespace) -> None:
+        from .output import max_bytes
+
+        self.paths, self.meta = args.select or [], args.meta
+        self.cap = max_bytes(args.max_bytes)
+        self.matched = [False] * len(self.paths)
+        self.over = 0
+
+    def __call__(self, value: Any) -> None:  # noqa: ANN401 - a JSON-ready value
+        from .output import pick, render
+
+        if self.paths:
+            picked, found = pick(value['value'] if self.meta else value, self.paths)
+            self.matched = [a or b for a, b in zip(self.matched, found, strict=True)]
+            value = {**value, 'value': picked} if self.meta else picked
+        text = render(value, indent=None)
+        if self.cap and len(text.encode()) > self.cap:
+            self.over += 1
+            return
+        sys.stdout.write(text + '\n')
+        sys.stdout.flush()
+
+    def notes(self) -> list[str]:
+        """What the writer left out, and the paths that matched nothing."""
+        from .output import path_text
+
+        out = (
+            [f'{self.over} values over the {self.cap:,}-byte cap were left out; --select narrows them']
+            if self.over
+            else []
+        )
+        out += [
+            f'--select {path_text(path)!r} matched nothing in the stream'
+            for path, found in zip(self.paths, self.matched, strict=True)
+            if not found
+        ]
+        return out
+
+
+def _paths(text: str) -> Any:  # noqa: ANN401 - output's parsed paths
+    from .errors import UsageError
+    from .output import parse_paths
+
+    try:
+        return parse_paths(text)
+    except UsageError as exc:
+        raise argparse.ArgumentTypeError(exc.message) from exc
+
+
+def _bytes(text: str) -> int:
+    value = int(text)
+    if value < 0:
+        msg = f'a cap is a whole number of bytes, zero or more, not {text}'
+        raise argparse.ArgumentTypeError(msg)
+    return value
 
 
 def _count(text: str) -> int:

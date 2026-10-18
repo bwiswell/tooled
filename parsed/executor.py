@@ -34,6 +34,7 @@ from zeared import KeyExprError, keyexpr
 
 from .catalog import render
 from .errors import InvalidRequestError, MeshError, RefusedError, UsageError
+from .output import dump
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -135,7 +136,7 @@ def fetch(session: Any, contract: Contract, rules: Rules, values: Mapping[str, s
         for template in contract.templates:
             rules.check(contract, selector(template, {}))
         items = _read(lambda: cls.fetch_retained(session=session, on_error=on_error))
-    dumps = [cls.dump(item) for item in items]
+    dumps = [dump(cls, item) for item in items]
     result.items = sorted(dumps, key=lambda item: json.dumps(item, sort_keys=True, default=str))
     return result
 
@@ -177,7 +178,7 @@ def query(  # noqa: PLR0913 - one read: the contract, its slots, its request and
             session=session, request=built, params=dict(params) or None, timeout=timeout, on_error=on_error, **slots
         )
     )
-    result.items = [contract.cls.dump(item) for item in items]
+    result.items = [dump(contract.cls, item) for item in items]
     if not items:
         result.notes.append(f'no replies within {timeout:g}s')
     return result
@@ -254,7 +255,7 @@ def _admit(contract: Contract, rules: Rules, selectors: list[str], key: str, tal
 
 def _shape(contract: Contract, message: Any, sample: Any, *, meta: bool) -> Any:  # noqa: ANN401 - JSON-ready
     """A sample as ``listen`` hands it on: the value, or the value with its key, origin and time."""
-    value = contract.cls.dump(message)
+    value = dump(contract.cls, message)
     if not meta:
         return value
     at = sample.issued_at.isoformat() if sample.issued_at is not None else None

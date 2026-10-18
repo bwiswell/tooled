@@ -12,6 +12,8 @@ from parsed.schemas import (
     describe_variant,
     drop_fields,
     drop_variants,
+    field_list,
+    fold_unions,
     injected,
     listing,
     prune_defs,
@@ -160,14 +162,33 @@ class TestDescribe:
             {'tag': 'ping', 'summary': 'Ask a station how it is.'},
             {'tag': 'pong', 'summary': 'Ask for a number back.'},
         ]
-        assert doc['reply']['title'] == 'LookReply'
+        assert doc['reply'] == [
+            {'name': 'world', 'type': 'str', 'doc': "the world's name"},
+            {'name': 'player', 'type': 'str', 'doc': "the player's key"},
+            {'name': 'seen', 'type': 'str', 'doc': 'what was seen'},
+        ]
+        (envelope,) = doc['request']['allOf']
+        assert 'allOf' not in envelope  # the union folds to its tags
+        assert envelope['properties']['kind']['enum'] == ['ping', 'pong']
+        assert envelope['description'] == "what; a variant's fields: describe --variant TAG"
+        assert '$defs' not in doc['request']
+        assert doc['more'] == {
+            'variant': "parsed describe LookReply --variant TAG: one variant's fields",
+            'reply': "parsed describe LookReply --reply: the reply's whole schema",
+        }
 
     def test_a_retained_class_has_no_request(self, rules, catalog):
         doc = describe(catalog.get('Station'), rules)
         assert 'request' not in doc
         assert 'variants' not in doc
         assert doc['effect'] is None
+        assert [field['name'] for field in doc['reply']] == ['world', 'station', 'stock']
+        assert doc['more'] == {'reply': "parsed describe Station --reply: the reply's whole schema"}
+
+    def test_reply_prints_the_whole_reply_schema(self, rules, catalog):
+        doc = describe(catalog.get('Station'), rules, reply=True)
         assert doc['reply']['properties']['stock']['type'] == 'integer'
+        assert 'more' not in doc
 
     def test_one_variant(self, rules, catalog):
         doc = describe_variant(catalog.get('LookReply'), 'ping', rules)
@@ -211,3 +232,17 @@ class TestDropping:
         assert schema == before
         assert dropped['allOf'][0]['properties']['kind']['enum'] == ['pong', 'dev-peek']
         assert 'Ping' not in dropped['$defs']
+
+
+class TestLayers:
+    def test_field_list_of_a_non_seared_class_is_empty(self):
+        assert field_list(int) == []
+
+    def test_fold_unions_leaves_its_input_alone_and_keeps_the_tags(self, rules, catalog):
+        schema = request_schema(catalog.get('LookReply'), rules)
+        assert schema is not None
+        before = copy.deepcopy(schema)
+        folded = fold_unions(schema)
+        assert schema == before
+        assert folded['allOf'][0]['properties']['kind']['enum'] == ['ping', 'pong']
+        assert 'allOf' not in folded['allOf'][0]

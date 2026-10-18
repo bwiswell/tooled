@@ -430,3 +430,92 @@ class TestListen:
         assert proc.returncode == 0, err
         first = (got + out).splitlines()[0]
         assert json.loads(first) == {'world': 'w1', 'player': 'ann', 'text': 'hello'}
+
+
+class TestOutput:
+    def test_select_keeps_parts_of_each_reply(self, reads, capsys):
+        code, out, _ = run(capsys, 'fetch', 'Station', '--select', 'station', '--policy', reads)
+        assert (code, out) == (0, [{'station': 's1'}, {'station': 's2'}])
+
+    def test_select_on_a_document(self, tmp_path, capsys, monkeypatch):
+        monkeypatch.setenv('DEMO_TOKEN', 'tok-ann')
+        code, out, _ = run(capsys, 'check', '--select', 'visible.read,hidden', '--policy', str(write(tmp_path, POLICY)))
+        assert code == 0
+        assert out == {'visible': {'read': ['Notice', 'Seen', 'Station', 'Status', 'Trace']}, 'hidden': 2}
+
+    def test_a_select_that_matches_nothing(self, reads, capsys):
+        code, _, err = run(capsys, 'fetch', 'Station', '--select', 'stok', '--policy', reads)
+        assert code == 2
+        assert err['message'] == "--select 'stok' matches nothing in the result"
+
+    def test_a_malformed_select_is_a_usage_error(self, reads, capsys):
+        with pytest.raises(SystemExit) as exc:
+            main(['fetch', 'Station', '--select', 'a..b', '--policy', reads])
+        assert exc.value.code == 2
+
+    def test_over_the_cap_is_refused_with_its_parts(self, reads, capsys):
+        code, out, err = run(capsys, 'fetch', 'Station', '--max-bytes', '50', '--policy', reads)
+        assert (code, out) == (6, None)
+        assert err['error'] == 'too_large'
+        assert err['cap'] == 50
+        assert err['parts']['items'] == 2
+        assert set(err['parts']['bytes']) == {'world', 'station', 'stock'}
+
+    def test_the_cap_from_the_environment_and_no_cap(self, reads, capsys, monkeypatch):
+        monkeypatch.setenv('PARSED_MAX_BYTES', '50')
+        assert run(capsys, 'fetch', 'Station', '--policy', reads)[0] == 6
+        assert run(capsys, 'fetch', 'Station', '--max-bytes', '0', '--policy', reads)[0] == 0
+
+    def test_out_writes_the_whole_result_uncapped(self, reads, capsys, tmp_path):
+        target = tmp_path / 'stations.json'
+        code, out, _ = run(capsys, 'fetch', 'Station', '--max-bytes', '50', '--out', str(target), '--policy', reads)
+        assert code == 0
+        assert out['written'] == str(target.resolve())
+        assert len(json.loads(target.read_text())) == 2
+
+    def test_bytes_show_their_length_and_hash(self, reads, capsys):
+        code, out, _ = run(capsys, 'fetch', 'Status', '--select', 'logo', '--policy', reads)
+        assert code == 0
+        assert set(out[0]['logo']) == {'bytes', 'sha256'}
+
+
+class TestDescribeLayers:
+    def test_the_reply_is_a_field_list_unless_asked(self, tmp_path, capsys):
+        policy = str(write(tmp_path, POLICY))
+        _, out, _ = run(capsys, 'describe', 'Station', '--policy', policy)
+        assert out['reply'][2] == {'name': 'stock', 'type': 'int', 'doc': 'units in stock'}
+        _, out, _ = run(capsys, 'describe', 'Station', '--reply', '--policy', policy)
+        assert out['reply']['title'] == 'Station'
+
+    def test_variant_and_reply_are_one_or_the_other(self, tmp_path, capsys):
+        with pytest.raises(SystemExit) as exc:
+            main(['describe', 'LookReply', '--variant', 'ping', '--reply', '--policy', str(write(tmp_path, POLICY))])
+        assert exc.value.code == 2
+
+
+class TestListenOutput:
+    def test_select_on_each_line(self, reads, capsys):
+        assert main(['listen', 'Station', '--count', '2', '--select', 'station', '--policy', reads]) == 0
+        lines_out = sorted(capsys.readouterr().out.splitlines())
+        assert lines_out == ['{"station": "s1"}', '{"station": "s2"}']
+
+    def test_select_with_meta_narrows_the_value(self, reads, capsys):
+        assert (
+            main(['listen', 'Station', 'station=s1', '--count', '1', '--meta', '--select', 'stock', '--policy', reads])
+            == 0
+        )
+        (row,) = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        assert row['value'] == {'stock': 3}
+        assert row['key'] == 'demo/w1/station/s1'
+
+    def test_a_line_over_the_cap_is_left_out_and_noted(self, reads, capsys):
+        assert main(['listen', 'Station', '--for', '0.5', '--max-bytes', '20', '--policy', reads]) == 0
+        out, err = capsys.readouterr()
+        assert out == ''
+        assert lines(err) == [{'note': '2 values over the 20-byte cap were left out; --select narrows them'}]
+
+    def test_a_path_that_never_matched_is_noted(self, reads, capsys):
+        assert main(['listen', 'Station', '--count', '2', '--select', 'station,stok', '--policy', reads]) == 0
+        out, err = capsys.readouterr()
+        assert len(out.splitlines()) == 2
+        assert lines(err) == [{'note': "--select 'stok' matched nothing in the stream"}]
