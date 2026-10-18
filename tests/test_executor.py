@@ -1,8 +1,11 @@
 import asyncio
+import dataclasses
 import hashlib
+from typing import ClassVar
 
 import _support_protocol as demo
 import pytest
+import zeared
 from _support_policy import write
 from _support_session import free_port
 from zeared import Mode, SessionConfig
@@ -339,6 +342,52 @@ class TestPrepare:
         preview = executor.preview(look, call, hidden=['token'])
         assert preview['variant'] == 'ping'
         assert preview['request'] == {'token': '<injected>', 'kind': 'ping', 'station': 's1'}  # a flat union
+
+
+@zeared.zeared
+class FallbackLook(zeared.Zeared):
+    """A look whose union takes an unknown tag as its developer's variant."""
+
+    token: str = zeared.Str(required=True, doc="the player's token")
+    probe: object = zeared.Union(
+        variants={'ping': demo.Ping, 'pong': demo.Pong, 'dev-peek': demo.Peek}, tag_key='kind', fallback=demo.Peek
+    )
+
+
+class TestVariantFirst:
+    """The policy reads a request's root tag before the request loads, so a denied variant never reaches seared."""
+
+    VALUES: ClassVar[dict[str, str]] = {'world': 'w1', 'player': 'ann'}
+
+    def prepare(self, contract, rules, request):
+        return executor.prepare(contract, rules, self.VALUES, request=request, injected={'token': 't'})
+
+    def test_a_denied_tag_is_refused_whatever_its_fields(self, rules, catalog):
+        with pytest.raises(RefusedError, match="variant 'dev-peek' is denied"):
+            self.prepare(catalog.get('LookReply'), rules, {'kind': 'dev-peek', 'depth': 'deep'})  # loading names depth
+
+    @pytest.mark.parametrize('tag', ['poke', 5, ['ping']])  # a list fails seared outright
+    def test_an_unknown_tag_names_only_the_shown_tags(self, rules, catalog, tag):
+        with pytest.raises(InvalidRequestError) as exc:
+            self.prepare(catalog.get('LookReply'), rules, {'kind': tag, 'station': 's1'})
+        assert exc.value.message == f"LookRequest.kind: Union: unknown tag {tag!r}; expected one of ['ping', 'pong']"
+        assert exc.value.path == ('kind',)
+
+    def test_a_missing_tag_is_for_loading_to_report(self, rules, catalog):
+        with pytest.raises(InvalidRequestError, match="missing tag 'kind'"):
+            self.prepare(catalog.get('LookReply'), rules, {'station': 's1'})
+
+    def test_the_policy_comes_before_the_request(self, writes, catalog):
+        move, values = catalog.get('MoveResult'), {'world': 'w1', 'player': 'bo'}
+        with pytest.raises(RefusedError, match='at demo/w1/move/bo is denied'):  # though the request lacks `to`
+            executor.prepare(move, writes, values, request={}, injected={'token': 't'})
+
+    def test_a_fallback_variant_is_checked_once_loaded(self, rules, catalog):
+        look = dataclasses.replace(catalog.get('LookReply'), request=FallbackLook)
+        with pytest.raises(RefusedError, match="variant 'dev-peek' is denied"):  # poke falls back to dev-peek
+            self.prepare(look, rules, {'kind': 'poke'})
+        with pytest.raises(InvalidRequestError, match='unknown tag 5'):  # a tag is a string, fallback or none
+            self.prepare(look, rules, {'kind': 5})
 
 
 class TestHelpers:

@@ -180,6 +180,11 @@ def prepare(
 ) -> Call:
     """A call on a queryable, built from ``request`` and the policy's injected fields, and checked against the policy.
 
+    The policy comes before the request's own checks: the selector, and the tag of the request's root union, read
+    from the request as given, are checked before it loads. So a denied variant is refused whatever its fields,
+    and seared's errors never describe one. Once loaded, the variant it holds is checked again, for a union whose
+    ``fallback`` takes a tag it doesn't know.
+
     A write reaches one key: on a contract whose operation is ``invoke``, every slot must be given or bound, and
     none may hold a wildcard, so a write can't fan out to every queryable a widened selector would reach.
 
@@ -187,24 +192,60 @@ def prepare(
         UsageError: A request given to a contract that takes none; or a write whose selector isn't one key.
         RefusedError: A value given for an injected field; or the policy refuses the selector, or the request's
             variant.
-        InvalidRequestError: The request doesn't load as its class.
+        InvalidRequestError: The request doesn't load as its class; or its root union's tag is none of the
+            union's, when the error names only the tags the policy shows.
     """
-    built, variant = None, None
-    if contract.request is None:
-        if request is not None:
-            msg = f'{rules.catalog.label(contract)} takes no request'
-            raise UsageError(msg)
-    else:
-        built = build_request(contract.request, request or {}, injected)
-        variant = variant_of(contract, built)
+    if contract.request is None and request is not None:
+        msg = f'{rules.catalog.label(contract)} takes no request'
+        raise UsageError(msg)
     key = selector(contract.templates[0], values)
     if op_of(contract) is Op.INVOKE and not keyexpr.is_concrete(key):
         missing = [slot.name for slot in contract.slots if slot.name not in values]
         hint = f'give {", ".join(missing)}' if missing else 'give each slot a value without a wildcard'
         msg = f'a write reaches one key, and {key} could reach more: {hint}'
         raise UsageError(msg)
+    built, variant = None, None
+    if contract.request is not None:
+        given = request or {}
+        rules.check(contract, key, variant=given_tag(contract, rules, given))
+        built = build_request(contract.request, given, injected)
+        variant = variant_of(contract, built)
     rules.check(contract, key, variant=variant)
     return Call(values, key, built, variant)
+
+
+def given_tag(contract: Contract, rules: Rules, given: Mapping[str, Any]) -> str | None:
+    """The tag a request carries in its root union, read from its wire form before it loads.
+
+    It's ``None`` when the request carries none, which loading reports, or one a ``fallback`` takes.
+
+    Raises:
+        InvalidRequestError: A tag the union doesn't have, and no ``fallback`` to take it; or a tag that isn't a
+            string, which seared can't always tell apart (a list fails it outright). The error names only the tags
+            the policy shows, where seared's would name them all.
+    """
+    from .schemas import tag_keys
+
+    request = contract.request
+    if request is None:
+        return None
+    for key in tag_keys(request):
+        tag = given.get(key)
+        if tag is None:
+            continue  # loading says it's missing
+        if isinstance(tag, str) and tag in contract.variants:
+            return tag
+        if isinstance(tag, str) and _falls_back(request):
+            continue  # the fallback variant takes it, and is checked once loaded
+        shown = list(rules.allowed_variants(contract))
+        msg = f'{request.__name__}.{key}: Union: unknown tag {tag!r}; expected one of {shown}'
+        raise InvalidRequestError(msg, path=(key,))
+    return None
+
+
+def _falls_back(cls: type[Seared]) -> bool:
+    """Whether a root union of ``cls`` takes a tag it doesn't know, as its ``fallback`` variant."""
+    return any(field.kind is FieldKind.UNION and field.fallback is not None for field in introspect(cls).fields)
 
 
 def query(  # noqa: PLR0913 - one read: the contract, its slots, its request and the policy's part in it

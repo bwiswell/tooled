@@ -19,6 +19,7 @@ from parsed.schemas import (
     prune_defs,
     request_schema,
     slot_schemas,
+    tag_keys,
     topic,
     variant_classes,
     verbs,
@@ -200,9 +201,16 @@ class TestDescribe:
         with pytest.raises(RefusedError, match="denies variant 'dev-peek'"):
             describe_variant(catalog.get('LookReply'), 'dev-peek', rules)
 
-    def test_an_unknown_variant_lists_the_tags(self, rules, catalog):
-        with pytest.raises(UsageError, match='its variants: ping, pong, dev-peek'):
+    def test_an_unknown_variant_lists_only_the_shown_tags(self, rules, catalog):
+        with pytest.raises(UsageError) as exc:
             describe_variant(catalog.get('LookReply'), 'poke', rules)
+        assert exc.value.message == "LookReply has no variant 'poke'; the variants the policy shows: ping, pong"
+
+
+class TestTagKeys:
+    def test_the_root_union_s_tag_key(self, catalog):
+        assert tag_keys(catalog.get('LookReply').request) == ['kind']
+        assert tag_keys(catalog.get('MoveResult').request) == []
 
 
 SCHEMA = {

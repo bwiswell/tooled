@@ -51,6 +51,18 @@ lines as it lands, and the entry is dated when that version is released.
   longer as a reply that would not decode, and counts as an answer, so no "no replies" note follows it. Zenoh's
   own `Timeout` reply, for a queryable that outlived the timeout, is no answer: alongside other replies it reads
   "a queryable did not answer within …".
+- **The policy comes before the request.** A call's selector, and the tag of its request's root union, are
+  checked against the policy before the request loads, so a call the policy refuses exits 3 even when its
+  request has faults of its own.
+
+### Fixed
+
+- **A denied variant is refused before its fields are read.** A request whose tag the policy denies was loaded
+  first, so a field it lacked or got wrong came back as a validation error naming the field, and only a corrected
+  request was refused. It is refused at once now.
+- **An unknown tag no longer lists the denied ones.** A request with a tag its union doesn't have, and `describe
+  --variant` with one, name only the tags the policy shows. A tag that isn't a string (a list, say) is a validation
+  error, not a crash.
 
 ## 0.1.1 — 2026-10-18
 

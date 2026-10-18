@@ -131,6 +131,10 @@ operation and one of its globs matches the contract's name. Then its keys decide
 refuses those tags, not the contract, and `describe` leaves them out of the request's schema. An allow rule with
 variants allows only those tags.
 
+The tag is read from the request as given, before it loads, so a denied variant is refused (exit 3) whatever its
+fields hold, and no error describes them. An error about a tag the union doesn't have names only the tags the
+policy shows.
+
 **Names must name something.** A contract name, a variant tag, a bound slot or an injected field written without a
 glob must exist in the protocol, so a typo is refused at load. A glob may match nothing.
 

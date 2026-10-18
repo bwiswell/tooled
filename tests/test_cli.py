@@ -312,6 +312,9 @@ class TestQuery:
             ('@/no/such/file.json', 2, 'usage'),
             ('{"kind": "ping"}', 4, 'validation'),
             ('{"kind": "dev-peek"}', 3, 'refused'),
+            ('{"kind": "dev-peek", "depth": "deep"}', 3, 'refused'),  # refused before its fields are read
+            ('{"kind": "poke"}', 4, 'validation'),
+            ('{"kind": ["ping"]}', 4, 'validation'),
             ('{"kind": "ping", "station": "s1", "token": "mine"}', 3, 'refused'),
         ],
     )
