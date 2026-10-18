@@ -35,6 +35,12 @@ lines as it lands, and the entry is dated when that version is released.
   `module:Class` when two packages share the name. A queryable that declares no effect counts as mutating.
 - **`parsed check`** loads the policy and its protocol, resolves what it injects, and prints what the policy shows,
   by operation, with each injected field's source and length. `--connect` also opens the session.
+- **`parsed contracts`** lists every contract the policy shows, one line of each: its kind, the verbs that act on
+  it in this version, its topic with the bound slots filled, the slots left to give, and its summary.
+- **`parsed describe CONTRACT`** prints one contract whole: its slots (a bound one shows its value), its effect, and
+  the JSON Schemas of what it takes and gives. The request's is seared's load schema, closed, without the fields
+  the policy injects or the variants it denies; the reply's is its dump schema. A request with unions lists its
+  variants, and `--variant TAG` prints one variant's schema. A contract the policy hides is refused.
 - **Errors** go to stderr as one JSON object, `{"error", "message", "path"}`, and the exit code names the kind: 2
   for the command, the policy file or the protocol; 3 for a call the policy refuses; 5 for the mesh. Results go to
   stdout as JSON, indented on a terminal or with `--pretty`.

@@ -11,6 +11,10 @@ reads must pin the same zeared.
 **Verbs:**
 - ``check``: load the policy and its protocol, resolve what it injects, and summarize what it shows. With
   ``--connect``, also open the session.
+- ``contracts``: every contract the policy shows, one line of each: its kind, the verbs that act on it, its topic
+  with the bound slots filled, the slots left to give, and its summary.
+- ``describe CONTRACT``: one contract whole: its slots, and the JSON Schemas of what it takes and gives.
+  ``--variant TAG`` gives one variant of its request's union instead.
 """
 
 from __future__ import annotations
@@ -50,6 +54,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     check.add_argument('--connect', action='store_true', help='also open the session the policy describes')
     check.set_defaults(run=_check)
+    contracts = verbs.add_parser(
+        'contracts',
+        parents=[common],
+        help='list the contracts the policy shows',
+        description='Every contract the policy shows, one line of each.',
+    )
+    contracts.set_defaults(run=_contracts)
+    describe = verbs.add_parser(
+        'describe',
+        parents=[common],
+        help='describe one contract: its slots, and the schemas of what it takes and gives',
+        description='One contract whole: its slots, and the JSON Schemas of what it takes and gives.',
+    )
+    describe.add_argument('contract', help='a contract: its class name, or module:Class')
+    describe.add_argument('--variant', metavar='TAG', help="one variant of the request's union, by its tag")
+    describe.set_defaults(run=_describe)
     return parser
 
 
@@ -123,4 +143,28 @@ def _check(args: argparse.Namespace) -> int:
         open_session(mesh).close()
         summary['connect'] = {'ok': True, 'seconds': round(time.perf_counter() - started, 3)}
     emit(summary, pretty=args.pretty)
+    return 0
+
+
+def _contracts(args: argparse.Namespace) -> int:
+    from .schemas import listing
+
+    *_, rules = load(args.policy)
+    emit(listing(rules), pretty=args.pretty)
+    return 0
+
+
+def _describe(args: argparse.Namespace) -> int:
+    from .errors import RefusedError
+    from .schemas import describe, describe_variant
+
+    *_, catalog, rules = load(args.policy)
+    contract = catalog.get(args.contract)
+    if not rules.visible(contract):
+        msg = f'the policy does not show {catalog.label(contract)}'
+        raise RefusedError(msg)
+    if args.variant is not None:
+        emit(describe_variant(contract, args.variant, rules), pretty=args.pretty)
+    else:
+        emit(describe(contract, rules), pretty=args.pretty)
     return 0

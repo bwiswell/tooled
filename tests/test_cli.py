@@ -143,3 +143,57 @@ class TestCheckConnect:
         code, out, err = run(capsys, 'check', '--connect', '--policy', str(write(tmp_path, head=head)))
         assert (code, out) == (5, None)
         assert err['error'] == 'mesh'
+
+
+class TestContracts:
+    def test_lists_what_the_policy_shows(self, tmp_path, capsys):
+        code, out, err = run(capsys, 'contracts', '--policy', str(write(tmp_path, POLICY)))
+        assert (code, err) == (0, None)
+        assert [row['name'] for row in out] == ['LookReply', 'Notice', 'Seen', 'Station', 'Status', 'Trace']
+        assert out[0]['verbs'] == ['query']
+        assert out[0]['topic'] == 'demo/w1/look/{player}'
+
+    def test_an_empty_policy_lists_nothing(self, tmp_path, capsys):
+        assert run(capsys, 'contracts', '--policy', str(write(tmp_path))) == (0, [], None)
+
+
+class TestDescribe:
+    def test_one_contract(self, tmp_path, capsys):
+        code, out, _ = run(capsys, 'describe', 'LookReply', '--policy', str(write(tmp_path, POLICY)))
+        assert code == 0
+        assert out['name'] == 'LookReply'
+        assert [v['tag'] for v in out['variants']] == ['ping', 'pong']
+        assert 'token' not in out['request']['properties']
+
+    def test_one_variant(self, tmp_path, capsys):
+        code, out, _ = run(
+            capsys, 'describe', 'LookReply', '--variant', 'pong', '--policy', str(write(tmp_path, POLICY))
+        )
+        assert code == 0
+        assert out['schema']['title'] == 'Pong'
+
+    def test_a_denied_variant_is_refused(self, tmp_path, capsys):
+        policy = str(write(tmp_path, POLICY))
+        code, out, err = run(capsys, 'describe', 'LookReply', '--variant', 'dev-peek', '--policy', policy)
+        assert (code, out) == (3, None)
+        assert err['error'] == 'refused'
+
+    def test_a_contract_the_policy_hides_is_refused(self, tmp_path, capsys):
+        code, _, err = run(capsys, 'describe', 'MoveResult', '--policy', str(write(tmp_path, POLICY)))
+        assert code == 3
+        assert err == {'error': 'refused', 'message': 'the policy does not show MoveResult'}
+
+    def test_an_unknown_contract_is_a_usage_error(self, tmp_path, capsys):
+        code, _, err = run(capsys, 'describe', 'Stations', '--policy', str(write(tmp_path, POLICY)))
+        assert code == 2
+        assert err == {'error': 'usage', 'message': "no contract named 'Stations'"}
+
+    def test_an_ambiguous_name_names_both(self, tmp_path, capsys):
+        head = HEAD.replace('["_support_protocol"]', '["_support_protocol", "_support_protocol_two"]')
+        policy = str(write(tmp_path, '[[allow]]\nops = ["read"]\n', head=head))
+        code, _, err = run(capsys, 'describe', 'Station', '--policy', policy)
+        assert code == 2
+        assert '_support_protocol_two:Station' in err['message']
+        code, out, _ = run(capsys, 'describe', '_support_protocol_two:Station', '--policy', policy)
+        assert code == 0
+        assert out['name'] == '_support_protocol_two:Station'

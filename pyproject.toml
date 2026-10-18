@@ -20,6 +20,9 @@ parsed = "parsed.cli:main"
 [dependency-groups]
 dev = [
     "deptry",
+    # Test-only: the schema tests validate against what `describe` prints. parsed
+    # itself never validates a schema; seared's load does the checking.
+    "jsonschema>=4.23",
     "prek",
     "pytest>=8.0,<10.0",
     "pytest-asyncio>=0.24",
