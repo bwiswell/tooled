@@ -9,6 +9,11 @@ Every schema is seared's own (``seared.doc.json_schema`` and ``field_schema``), 
 - **A reply's** is its dump schema: what ``dump`` writes, and so what a command prints.
 - **A slot's** is its payload field's schema, when the slot is also a field; a string otherwise. A bound slot
   shows its value instead, since it can't be given.
+
+**``describe`` is layered,** so even a large contract describes in a few kilobytes. By default the reply shows as a
+field list (each top-level field's name, type and doc), and a request's root union folds to its tag list, its
+branches left out. ``--reply`` prints the reply's whole schema, and ``--variant TAG`` one variant's; the document's
+``more`` names those commands.
 """
 
 from __future__ import annotations
@@ -62,8 +67,16 @@ def listing(rules: Rules) -> list[dict[str, Any]]:
     ]
 
 
-def describe(contract: Contract, rules: Rules) -> dict[str, Any]:
-    """What ``describe`` prints for one contract: what it is, its slots, and what it takes and gives."""
+def describe(contract: Contract, rules: Rules, *, reply: bool = False) -> dict[str, Any]:
+    """What ``describe`` prints for one contract: what it is, its slots, and what it takes and gives.
+
+    Args:
+        contract: The contract.
+        rules: The policy's rules, which shape the request and bind slots.
+        reply: Print the reply's whole dump schema, rather than its field list.
+    """
+    label = rules.catalog.label(contract)
+    more: dict[str, str] = {}
     doc: dict[str, Any] = {
         'name': rules.catalog.label(contract),
         'qualname': contract.qualname,
@@ -76,14 +89,23 @@ def describe(contract: Contract, rules: Rules) -> dict[str, Any]:
         'slots': slot_schemas(contract, rules),
     }
     if contract.request is not None:
-        doc['request'] = request_schema(contract, rules)
+        request = request_schema(contract, rules)
         doc['injected'] = injected(contract, rules)
         if contract.variants:
             allowed = rules.allowed_variants(contract)
             doc['variants'] = [
                 {'tag': tag, 'summary': summary_line(cls)} for tag, cls in variant_classes(contract) if tag in allowed
             ]
-    doc['reply'] = json_schema(contract.cls, mode='dump')
+            request = fold_unions(request) if request is not None else None
+            more['variant'] = f"parsed describe {label} --variant TAG: one variant's fields"
+        doc['request'] = request
+    if reply:
+        doc['reply'] = json_schema(contract.cls, mode='dump')
+    else:
+        doc['reply'] = field_list(contract.cls)
+        more['reply'] = f"parsed describe {label} --reply: the reply's whole schema"
+    if more:
+        doc['more'] = more
     return doc
 
 
@@ -173,6 +195,34 @@ def variant_classes(contract: Contract) -> list[tuple[str, type]]:
         for variant in field.variants or ():
             out.setdefault(variant.tag, variant.cls)
     return list(out.items())
+
+
+def field_list(cls: type) -> list[dict[str, str]]:
+    """Each top-level field of ``cls``: its wire name, its type, and its doc, when it has one."""
+    if not is_seared_class(cls):
+        return []
+    out = []
+    for field in introspect(cls).fields:
+        entry = {'name': field.wire_key or field.attr, 'type': field.type_str}
+        if field.doc:
+            entry['doc'] = field.doc
+        out.append(entry)
+    return out
+
+
+def fold_unions(schema: dict[str, Any]) -> dict[str, Any]:
+    """A copy of a request schema with each root union folded to its tags.
+
+    The branches, and the definitions only they used, are left out: it documents the request, and no longer
+    validates a variant's fields.
+    """
+    out = copy.deepcopy(schema)
+    for envelope in out.get('allOf', ()):
+        if isinstance(envelope.get('allOf'), list):
+            del envelope['allOf']
+            note = "a variant's fields: describe --variant TAG"
+            envelope['description'] = f'{envelope["description"]}; {note}' if envelope.get('description') else note
+    return prune_defs(out)
 
 
 def drop_fields(schema: dict[str, Any], names: list[str]) -> None:

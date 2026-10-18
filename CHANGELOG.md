@@ -37,10 +37,12 @@ lines as it lands, and the entry is dated when that version is released.
   by operation, with each injected field's source and length. `--connect` also opens the session.
 - **`parsed contracts`** lists every contract the policy shows, one line of each: its kind, the verbs that act on
   it in this version, its topic with the bound slots filled, the slots left to give, and its summary.
-- **`parsed describe CONTRACT`** prints one contract whole: its slots (a bound one shows its value), its effect, and
-  the JSON Schemas of what it takes and gives. The request's is seared's load schema, closed, without the fields
-  the policy injects or the variants it denies; the reply's is its dump schema. A request with unions lists its
-  variants, and `--variant TAG` prints one variant's schema. A contract the policy hides is refused.
+- **`parsed describe CONTRACT`** prints one contract: its slots (a bound one shows its value), its effect, the JSON
+  Schema of what it takes, and what it gives. The request's schema is seared's load schema, closed, without the
+  fields the policy injects or the variants it denies. It is layered, so even a large contract describes in a few
+  kilobytes: the reply shows as a field list (each top-level field's name, type and doc), and a request's root union
+  folds to its list of tags. `--reply` prints the reply's whole dump schema, `--variant TAG` one variant's schema,
+  and the document's `more` names both. A contract the policy hides is refused.
 - **`parsed fetch CONTRACT [slot=value …]`** reads a retained contract's values: those the slots select, or every
   one, sorted. A slot left out widens to every value; a bound one is filled by the policy, and given another value
   is refused.
@@ -55,6 +57,13 @@ lines as it lands, and the entry is dated when that version is released.
   SIGINT or SIGTERM, with exit 0, so under a tool that streams a command's lines (Claude Code's Monitor) it reads
   like a feed. Each sample's key is checked against the slots asked for and against the policy: a sample on a denied
   key is left out and counted, rather than the whole stream refused.
+- **Output that fits.** A result over the size cap is refused rather than printed (exit 6), with its size and the
+  size of each part, so the way to narrow it shows. The cap is 28,000 bytes by default, just under the 30,000
+  characters Claude Code shows of a command's output inline; `--max-bytes` or `$PARSED_MAX_BYTES` moves it, and `0`
+  removes it. `--select PATHS` keeps parts of a result, structure kept (`commander.name`, `systems[].key`,
+  comma-separated), applied to each item of a list. `--out FILE` writes the whole result to a file and prints where.
+  In `listen`, `--select` narrows each line and a line over the cap is left out and noted.
+- **`Bytes` fields** print as their length and SHA-256, `{"bytes", "sha256"}`, not their base64.
 - **Policy on every read:** the selector a read renders is checked before it is sent. One that could reach a denied
   key is refused, with a hint to narrow the slots, since replies carry no keys to filter by.
 - **Notes** go to stderr as `{"note": …}` lines: a reply that would not decode and was left out, no reply at all, a
@@ -62,5 +71,6 @@ lines as it lands, and the entry is dated when that version is released.
   stderr as a JSON line too (`{"log": level, "logger", "message"}`), so stderr stays one JSON object a line.
 - **Errors** go to stderr as one JSON object, `{"error", "message", "path"}`, and the exit code names the kind: 2
   for the command, the policy file or the protocol; 3 for a call the policy refuses; 4 for a request that does not
-  load; 5 for the mesh. Results go to stdout as JSON, indented on a terminal or with `--pretty`.
+  load; 5 for the mesh; 6 for a result over the size cap. Results go to stdout as JSON, indented on a terminal or
+  with `--pretty`.
 - **Dependencies:** seared `>=0.4.3,<0.5` and zeared `>=0.4.3,<0.5`, pinned to `tag = "v0.4.3"` each.

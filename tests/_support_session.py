@@ -52,7 +52,8 @@ def listening(mesh):
 def world(mesh):
     """The fixture protocol served on the listening peer.
 
-    - Retained: stations ``s1`` and ``s2`` of ``w1`` (stock 3 and 5), ``s1`` of ``w2``, and ``w1``'s status.
+    - Retained: stations ``s1`` and ``s2`` of ``w1`` (stock 3 and 5), ``s1`` of ``w2``, and ``w1``'s status, with
+      a logo (bytes).
     - ``LookReply`` answers what it was asked: the variant's kind and fields, the slot captures, and the params.
     - ``MoveResult`` answers too, though no read may reach it.
     """
@@ -60,7 +61,7 @@ def world(mesh):
 
     for world_name, station, stock in (('w1', 's1', 3), ('w1', 's2', 5), ('w2', 's1', 7)):
         demo.Station(world=world_name, station=station, stock=stock).send(session=mesh.session)
-    demo.Status(world='w1', up=True).send(session=mesh.session)
+    demo.Status(world='w1', up=True, logo=b'\x89PNG-ish').send(session=mesh.session)
 
     def look(ctx):
         probe = ctx.request.probe

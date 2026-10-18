@@ -26,3 +26,17 @@ def test_the_json_carries_a_path():
     error = PolicyFileError('unknown key', path=('allow', 0, 'key'))
     assert error.to_json() == {'error': 'policy', 'message': 'unknown key', 'path': ['allow', 0, 'key']}
     assert str(error) == 'unknown key'
+
+
+def test_too_large_carries_its_sizes():
+    from parsed.errors import TooLargeError
+
+    error = TooLargeError('over', size=500, cap=100, parts={'bytes': {'a': 400}})
+    assert (error.kind, error.exit_code) == ('too_large', 6)
+    assert error.to_json() == {
+        'error': 'too_large',
+        'message': 'over',
+        'size': 500,
+        'cap': 100,
+        'parts': {'bytes': {'a': 400}},
+    }

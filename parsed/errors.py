@@ -10,6 +10,7 @@ and exits with the error's code. stdout carries results only.
 | 3 | ``refused``: the policy refuses the call |
 | 4 | ``validation``: the request doesn't load as its class: seared's error, with its path |
 | 5 | ``mesh``: the session wouldn't open, or the link failed |
+| 6 | ``too_large``: the result is over the size cap; the error says its size and each part's |
 """
 
 from __future__ import annotations
@@ -84,3 +85,25 @@ class MeshError(ParsedError):
 
     kind = 'mesh'
     exit_code = 5
+
+
+class TooLargeError(ParsedError):
+    """The result is over the size cap, so it isn't printed. The error carries what to narrow it by.
+
+    Args:
+        message: What went wrong, and the ways round it.
+        size: The result's size, in bytes.
+        cap: The cap, in bytes.
+        parts: The size of each part of the result, the biggest first.
+    """
+
+    kind = 'too_large'
+    exit_code = 6
+
+    def __init__(self, message: str, *, size: int, cap: int, parts: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.size, self.cap, self.parts = size, cap, parts
+
+    def to_json(self) -> dict[str, Any]:
+        """The error, with the result's size, the cap, and each part's size."""
+        return {**super().to_json(), 'size': self.size, 'cap': self.cap, 'parts': self.parts}

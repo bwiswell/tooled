@@ -60,4 +60,5 @@ Tests mirror the source layout.
 Under construction toward 0.1.0: read-only access to a mesh (`check`, `contracts`, `describe`, `fetch`, `query`,
 `listen`), with a policy file deciding what is visible. Today the policy file loads, `parsed check` reports what it
 shows, `parsed contracts` and `parsed describe` say what each contract takes and gives, `parsed fetch` and
-`parsed query` read the mesh, and `parsed listen` streams it.
+`parsed query` read the mesh, and `parsed listen` streams it, each sized to fit an agent's view (`--select`,
+`--out`, a cap).

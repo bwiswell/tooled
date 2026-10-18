@@ -73,6 +73,7 @@ class Status(zeared.Message):
 
     world: str = zeared.Str(required=True, doc="the world's name")
     up: bool = zeared.Bool(default=True, doc='whether it is up')
+    logo: bytes | None = zeared.Bytes(default=None, doc="the world's logo, as an image")
 
 
 @zeared.zeared

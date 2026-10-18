@@ -1,3 +1,5 @@
+import hashlib
+
 import pytest
 from _support_session import free_port
 from zeared import Mode, SessionConfig
@@ -171,7 +173,10 @@ class TestQuery:
             params={},
             timeout=0.2,
         )
-        assert result.items == [{'world': 'w1', 'up': True}]  # a retained class answers a query too
+        (status,) = result.items  # a retained class answers a query too
+        assert status['up'] is True
+        logo = b'\x89PNG-ish'
+        assert status['logo'] == {'bytes': len(logo), 'sha256': hashlib.sha256(logo).hexdigest()}
         empty = executor.query(
             client, catalog.get('Notice'), rules, {'world': 'w1'}, request=None, injected={}, params={}, timeout=0.2
         )
