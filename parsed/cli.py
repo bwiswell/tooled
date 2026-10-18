@@ -6,7 +6,8 @@ and zeared parsed runs on, since a protocol package parsed reads must pin the sa
 
 **Verbs:**
 - ``check``: load the policy and its protocol, resolve what it injects, and summarize what it shows. With
-  ``--connect``, also open the session.
+  ``--connect``, also open the session; with ``--no-resolve``, read no inject source, so a policy can be checked
+  against its protocol without its secrets (in CI, say).
 - ``contracts``: every contract the policy shows, one line of each: its kind, the verbs that act on it, its topic
   with the bound slots filled, the slots left to give, and its summary.
 - ``describe CONTRACT``: one contract, layered: its slots, its request's schema (a root union folded to its tags),
@@ -98,6 +99,11 @@ def build_parser() -> argparse.ArgumentParser:
         description='Load the policy and its protocol, resolve what it injects, and summarize what it shows.',
     )
     check.add_argument('--connect', action='store_true', help='also open the session the policy describes')
+    check.add_argument(
+        '--no-resolve',
+        action='store_true',
+        help='read no inject source: check the policy against its protocol without its secrets, as in CI',
+    )
     check.set_defaults(run=_check)
     contracts = verbs.add_parser(
         'contracts',
@@ -221,7 +227,13 @@ def _check(args: argparse.Namespace) -> int:
     visible = rules.visible_contracts()
     for contract in visible:
         shown.setdefault(policy.op_of(contract).value, []).append(catalog.label(contract))
-    injected = {name: policy.resolve(name, source, base=path.parent) for name, source in sorted(loaded.inject.items())}
+    inject: dict[str, Any] = {}
+    for name, source in sorted(loaded.inject.items()):
+        if args.no_resolve:
+            inject[name] = {'source': policy.describe(source), 'resolved': False}
+        else:
+            found = policy.resolve(name, source, base=path.parent)
+            inject[name] = {'source': found.source, 'length': len(found.value)}
     mesh = loaded.mesh
     summary: dict[str, Any] = {
         'policy': str(path),
@@ -231,7 +243,7 @@ def _check(args: argparse.Namespace) -> int:
         'visible': {op.value: shown[op.value] for op in policy.Op if op.value in shown},
         'hidden': len(catalog.contracts) - len(visible),
         'bind': dict(sorted(loaded.bind.items())),
-        'inject': {name: {'source': i.source, 'length': len(i.value)} for name, i in injected.items()},
+        'inject': inject,
     }
     if args.connect:
         started = time.perf_counter()

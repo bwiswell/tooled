@@ -1,6 +1,6 @@
 [project]
 name = "parsed"
-version = "0.1.0"
+version = "0.1.1"
 description = "Typed, policy-guarded access to a zeared mesh, for agents and people"
 authors = [
     { name = "Benj Wiswell", email = "benjwiswell@gmail.com" },

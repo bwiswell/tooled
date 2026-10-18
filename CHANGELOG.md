@@ -8,6 +8,17 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
+## 0.1.1 — 2026-10-18
+
+**A policy checked in CI, without its secrets.**
+
+### Added
+
+- **`parsed check --no-resolve`** checks a policy against its protocol without reading any inject source: the file
+  loads, the protocol imports, and every contract, variant tag, bound slot and injected field it names exists. Each
+  injected field shows its source, with `"resolved": false`. Where there is no identity file to read, in a
+  protocol's own CI say, it checks everything else `check` does; `--connect` still opens the session.
+
 ## 0.1.0 — 2026-10-18
 
 **Read-only access to a zeared mesh, typed by its protocol and guarded by a policy file.**

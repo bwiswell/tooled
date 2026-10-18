@@ -28,8 +28,8 @@ parsed runs in the same environment as the protocol packages it reads, and they 
 refuses two sources for one package). Install it as a uv tool, with the protocol beside it:
 
 ```sh
-uv tool install "git+https://github.com/bwiswell/parsed@v0.1.0" --with <protocol-package>
-parsed --version            # parsed 0.1.0 (seared 0.4.3, zeared 0.4.3)
+uv tool install "git+https://github.com/bwiswell/parsed@v0.1.1" --with <protocol-package>
+parsed --version            # parsed 0.1.1 (seared 0.4.3, zeared 0.4.3)
 ```
 
 `--with` takes whatever names the protocol: a path to its checkout, a git URL, or a package name. From a checkout of
@@ -106,7 +106,7 @@ nothing outside the repo is needed.
 
 ## Status
 
-0.1.0 reads a mesh: `check`, `contracts`, `describe`, `fetch`, `query` and `listen`, under a strict policy file
+0.1.1 reads a mesh: `check`, `contracts`, `describe`, `fetch`, `query` and `listen`, under a strict policy file
 with bound slots, injected fields, and allow and deny rules over operations, contracts, keys and union variants.
 Not yet: writes (invoking a write or action queryable, publishing), a long-lived `parsed serve` with an MCP face,
 and per-protocol extensions.

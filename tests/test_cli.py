@@ -529,3 +529,36 @@ def test_the_help_names_every_exit_code(capsys):
     assert codes == {2, 3, 4, 5, 6}
     for code in (0, *codes):
         assert f'\n  {code}  ' in EPILOG
+
+
+class TestCheckWithoutResolving:
+    def test_checks_the_policy_without_its_secrets(self, tmp_path, capsys, monkeypatch):
+        monkeypatch.delenv('DEMO_TOKEN', raising=False)
+        code, out, err = run(capsys, 'check', '--no-resolve', '--policy', str(write(tmp_path, POLICY)))
+        assert (code, err) == (0, None)
+        assert out['inject'] == {'token': {'source': 'env DEMO_TOKEN', 'resolved': False}}
+        assert out['visible']['query'] == ['LookReply']
+
+    def test_a_file_that_is_not_there_is_not_read(self, tmp_path, capsys):
+        body = POLICY.replace('env = "DEMO_TOKEN"', 'toml = "no-such-identity.toml"\nkey = "token"')
+        code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', str(write(tmp_path, body)))
+        assert code == 0
+        assert out['inject']['token'] == {'source': 'toml no-such-identity.toml, key token', 'resolved': False}
+
+    def test_everything_else_is_still_checked(self, tmp_path, capsys):
+        body = POLICY.replace('[inject.token]', '[inject.tokn]')
+        code, _, err = run(capsys, 'check', '--no-resolve', '--policy', str(write(tmp_path, body)))
+        assert code == 2
+        assert err == {
+            'error': 'policy',
+            'message': "injects 'tokn', which no request declares",
+            'path': ['inject', 'tokn'],
+        }
+
+    def test_with_connect(self, tmp_path, capsys, listening, monkeypatch):
+        monkeypatch.delenv('DEMO_TOKEN', raising=False)
+        head = HEAD.replace('tcp/127.0.0.1:7447', listening)
+        policy = str(write(tmp_path, POLICY, head=head))
+        code, out, _ = run(capsys, 'check', '--no-resolve', '--connect', '--policy', policy)
+        assert code == 0
+        assert out['connect']['ok'] is True
