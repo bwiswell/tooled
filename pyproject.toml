@@ -85,6 +85,10 @@ ignore = [
     "TD",      # TODO formatting
     "FIX002",  # disallow TODOs
     "TRY003",  # long messages outside exception class
+    # --- parsed-specific deviations from the house list ---
+    # policy/ is a subpackage whose modules reach the package's own (errors,
+    # catalog) via `from ..x import`, the layout stored and zeared carry this for.
+    "TID252",  # parent-relative imports are the subpackage layout working
 ]
 fixable = ["ALL"]
 

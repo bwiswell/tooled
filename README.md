@@ -58,4 +58,5 @@ Tests mirror the source layout.
 ## Status
 
 Under construction toward 0.1.0: read-only access to a mesh (`check`, `contracts`, `describe`, `fetch`, `query`,
-`listen`), with a policy file deciding what is visible. Today the command answers only `--version`.
+`listen`), with a policy file deciding what is visible. Today the policy file loads, and `parsed check` reports
+what it shows.
