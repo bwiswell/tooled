@@ -1,0 +1,17 @@
+# Claude Code artifacts
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+
+# In-project plans (local working docs, not committed)
+/project-plans/
+
+# Python / uv / build
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
