@@ -68,7 +68,7 @@ class Contract:
 
     name: str
     qualname: str
-    cls: type
+    cls: type[Message]
     kind: Kind
     templates: tuple[str, ...]
     slots: tuple[SlotDoc, ...]
