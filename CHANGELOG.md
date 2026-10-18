@@ -10,7 +10,15 @@ lines as it lands, and the entry is dated when that version is released.
 
 ## 0.2.1 — unreleased
 
-**Paths that know their schema.**
+**Paths that know their schema, and variables in inject paths.**
+
+### Added
+
+- **Variables in an inject source's path.** A `file` or `toml` path may hold `${NAME}`, or `${NAME:-default}`, the
+  default when `NAME` is unset or empty: `toml = "${XDG_CONFIG_HOME:-~/.config}/demo/identity.toml"` reads where a
+  client keeps its identity, wherever that is. They expand as the source is read, before `~`. An unset `${NAME}`
+  with no default is refused, never read as empty, and a malformed one, or a bare `$NAME`, is refused at load with
+  its path. `check` shows the path each source read; `--no-resolve` expands nothing.
 
 ### Changed
 
