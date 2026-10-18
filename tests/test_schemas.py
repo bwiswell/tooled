@@ -59,8 +59,8 @@ class TestVerbs:
             ('Status', ('fetch', 'listen')),
             ('Notice', ('listen',)),
             ('LookReply', ('query',)),
-            ('MoveResult', ()),  # a write: no verb in this version
-            ('EchoReply', ()),
+            ('MoveResult', ('invoke',)),
+            ('EchoReply', ('invoke',)),  # no effect declared: a write, to fail safe
             ('Seen', ()),  # a presence feed: no verb in this version
         ],
     )
@@ -119,7 +119,7 @@ class TestRequest:
         assert injected(move, rules) == ['token']
         schema = request_schema(move, rules)
         assert schema is not None
-        assert list(schema['properties']) == ['to']
+        assert list(schema['properties']) == ['to', 'move_id']
         assert schema['required'] == ['to']
 
     def test_denied_variants_are_taken_out(self, rules, catalog):

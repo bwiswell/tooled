@@ -188,6 +188,113 @@ class TestQuery:
             )
 
 
+# ---- writes ---------------------------------------------------------------------------------
+
+WRITES = (
+    POLICY
+    + """
+[[allow]]
+ops = ["invoke"]
+keys = ["demo/w1/**"]
+
+[[deny]]
+ops = ["invoke"]
+keys = ["demo/w1/move/bo"]
+"""
+)
+
+
+@pytest.fixture
+def writes(tmp_path, catalog):
+    return Rules(load(write(tmp_path, WRITES)), catalog)
+
+
+class TestInvoke:
+    def move(self, client, writes, catalog, *, player='ann', to='dock'):
+        contract = catalog.get('MoveResult')
+        given = {} if player is None else {'player': player}
+        return executor.invoke(
+            client,
+            contract,
+            writes,
+            executor.slot_values(contract, writes, given),
+            request={'to': to},
+            injected={'token': 'tok-ann'},
+            timeout=5,
+        )
+
+    def test_the_request_is_built_with_the_injected_fields_and_sent(self, client, writes, catalog, world):
+        result = self.move(client, writes, catalog)
+        assert (result.items, result.notes) == ([{'world': 'w1', 'player': 'ann', 'ok': True}], [])
+        (sent,) = world.asked
+        assert (sent.token, sent.to) == ('tok-ann', 'dock')
+
+    def test_a_refusal_by_the_server_is_a_reply(self, client, writes, catalog):
+        result = self.move(client, writes, catalog, to='nowhere')
+        assert (result.items, result.notes) == ([{'world': 'w1', 'player': 'ann', 'ok': False}], [])
+
+    def test_a_queryable_that_declares_no_effect(self, client, writes, catalog):
+        echo = catalog.get('EchoReply')
+        result = executor.invoke(client, echo, writes, {'world': 'w1'}, request={'text': 'hi'}, injected={}, timeout=5)
+        assert result.items == [{'world': 'w1', 'text': 'hi'}]
+
+    @pytest.mark.parametrize(
+        ('player', 'message'),
+        [
+            (None, 'a write reaches one key, and demo/w1/move/* could reach more: give player'),
+            ('a$*', 'a write reaches one key, and demo/w1/move/a$* could reach more: give each slot a value'),
+        ],
+    )
+    def test_a_write_reaches_one_key(self, writes, catalog, world, player, message):
+        with pytest.raises(UsageError) as exc:
+            self.move(object(), writes, catalog, player=player)  # refused before a session is used
+        assert exc.value.message.startswith(message)
+        assert world.asked == []
+
+    def test_a_denied_key_is_refused_before_sending(self, client, writes, catalog, world):
+        with pytest.raises(RefusedError, match='invoke on MoveResult at demo/w1/move/bo is denied by deny'):
+            self.move(client, writes, catalog, player='bo')
+        assert world.asked == []
+
+    def test_a_failure_names_the_write(self, writes, catalog, monkeypatch):
+        def refuse(**_kwargs):
+            msg = 'no route'
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(demo.MoveResult, 'query', refuse)
+        with pytest.raises(MeshError, match=r'^the write failed: no route$'):
+            self.move(object(), writes, catalog)
+
+
+class TestPrepare:
+    def test_a_read_may_still_widen(self, writes, catalog):
+        look = catalog.get('LookReply')
+        call = executor.prepare(look, writes, {'world': 'w1'}, request={'kind': 'pong'}, injected={'token': 't'})
+        assert (call.selector, call.variant) == ('demo/w1/look/*', 'pong')
+
+    def test_the_preview_masks_what_it_is_told_to(self, writes, catalog):
+        move = catalog.get('MoveResult')
+        injected = {'token': 'tok-ann', 'move_id': 'f' * 32}
+        call = executor.prepare(
+            move, writes, {'world': 'w1', 'player': 'ann'}, request={'to': 'dock'}, injected=injected
+        )
+        assert executor.preview(move, call, hidden=['token']) == {
+            'selector': 'demo/w1/move/ann',
+            'variant': None,
+            'request': {'token': '<injected>', 'to': 'dock', 'move_id': 'f' * 32},
+        }
+
+    def test_the_preview_names_the_variant(self, writes, catalog):
+        look = catalog.get('LookReply')
+        values = {'world': 'w1', 'player': 'ann'}
+        call = executor.prepare(
+            look, writes, values, request={'kind': 'ping', 'station': 's1'}, injected={'token': 't'}
+        )
+        preview = executor.preview(look, call, hidden=['token'])
+        assert preview['variant'] == 'ping'
+        assert preview['request'] == {'token': '<injected>', 'kind': 'ping', 'station': 's1'}  # a flat union
+
+
 class TestHelpers:
     def test_variant_of(self, catalog):
         look = catalog.get('LookReply')

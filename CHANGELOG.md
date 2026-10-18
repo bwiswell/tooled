@@ -18,6 +18,16 @@ lines as it lands, and the entry is dated when that version is released.
   hex digits, on every call: an id a server can tell a repeat by, such as an order's. Like any injected field it
   reaches every request that declares it, is left out of `describe`, and is refused if given. Unlike a secret, it
   may show in a reply. `check` names its source and makes none.
+- **`parsed invoke CONTRACT [slot=value …] --request …`** asks a queryable that writes: one that declares `EFFECT =
+  WRITE` or `ACTION`, or no effect at all. It's shown only where an allow rule names `invoke`, and `contracts` and
+  `describe` list it as the contract's verb. The request is built and checked as `query`'s is, and the replies print
+  as a JSON array. A refusal the server sends back is a reply, and exits 0.
+- **A write reaches one key.** Every slot of the contract must be given or bound, and none may hold a wildcard, so
+  a write can't fan out to every queryable a widened selector would reach. A call that could is refused with exit
+  2, naming the slots to give.
+- **`parsed invoke --dry-run`** builds the request and checks it and the policy, then prints the selector, the
+  variant and the request, each injected secret as `"<injected>"`, without sending anything. A generated field
+  shows the value made for the dry run; a real call makes a fresh one.
 
 ## 0.1.1 — 2026-10-18
 

@@ -23,7 +23,7 @@ def free_port() -> int:
 class Mesh:
     """A loopback peer listening at ``endpoint``, and its ``session``, for the test to serve from.
 
-    ``asked`` holds each request the served ``LookReply`` was sent, in order.
+    ``asked`` holds each request the served ``LookReply`` and ``MoveResult`` were sent, in order.
     """
 
     endpoint: str
@@ -59,7 +59,10 @@ def world(mesh):
     - Retained: stations ``s1`` and ``s2`` of ``w1`` (stock 3 and 5), ``s1`` of ``w2``, and ``w1``'s status, with
       a logo (bytes).
     - ``LookReply`` answers what it was asked: the variant's kind and fields, the slot captures, and the params.
-    - ``MoveResult`` answers too, though no read may reach it.
+    - ``MoveResult`` answers a move, and refuses one to ``nowhere`` (``ok`` false).
+    - ``EchoReply`` says back the text it's sent.
+
+    Each look and move it's sent is kept in ``mesh.asked``.
     """
     import _support_protocol as demo
 
@@ -76,9 +79,15 @@ def world(mesh):
         return demo.LookReply(world=ctx.captures['world'], player=ctx.captures['player'], seen=seen)
 
     demo.LookReply.on_query(look, session=mesh.session)
-    demo.MoveResult.on_query(
-        lambda ctx: demo.MoveResult(world=ctx.captures['world'], player=ctx.captures['player'], ok=True),
-        session=mesh.session,
+
+    def move(ctx):
+        mesh.asked.append(ctx.request)
+        ok = ctx.request.to != 'nowhere'
+        return demo.MoveResult(world=ctx.captures['world'], player=ctx.captures['player'], ok=ok)
+
+    demo.MoveResult.on_query(move, session=mesh.session)
+    demo.EchoReply.on_query(
+        lambda ctx: demo.EchoReply(world=ctx.captures['world'], text=ctx.request.text), session=mesh.session
     )
     return mesh
 

@@ -43,6 +43,7 @@ class MoveRequest(zeared.Zeared):
 
     token: str = zeared.Str(required=True, doc="the player's token")
     to: str = zeared.Str(required=True, doc='where')
+    move_id: str | None = zeared.Str(default=None, doc='an id for this move, to tell a repeat by')
 
 
 @zeared.zeared
@@ -138,4 +139,5 @@ class EchoReply(zeared.Message):
     TOPIC: ClassVar[str] = 'demo/{world}/echo'
     REQUEST: ClassVar[type | None] = EchoRequest
 
+    world: str = zeared.Str(required=True, doc="the world's name")
     text: str = zeared.Str(required=True, doc='what was said')

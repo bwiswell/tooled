@@ -108,7 +108,7 @@ generate = "uuid"
 
 | Key | Default | Meaning |
 |---|---|---|
-| `ops` | required | `read`, `query`, `invoke`, `publish`, `unretain`. This version acts on `read` and `query`; the others load, so a policy written now carries forward |
+| `ops` | required | `read`, `query`, `invoke`, `publish`, `unretain`. This version acts on `read`, `query` and `invoke`; `publish` and `unretain` load, so a policy written now carries forward |
 | `contracts` | `["*"]` | globs over contract names, or `module:Class` |
 | `keys` | `["**"]` | Zenoh key expressions (`*` one chunk, `**` any number, `$*` within a chunk) |
 | `variants` | none | globs over the tags of a request's root union; none covers the whole contract |
@@ -117,11 +117,12 @@ generate = "uuid"
 operation and one of its globs matches the contract's name. Then its keys decide, with Zenoh's own matching:
 
 - **What's shown.** A contract is shown when an allow rule's keys intersect one of its topics (as `[bind]` renders
-  it) and no deny rule covers all of them. `contracts`, `describe` and every read see only what's shown.
-- **What a fetch or a query may reach.** A call renders one selector: the topic with its given and bound slots
-  filled, the rest widened. It is allowed when an allow rule's keys include the whole selector, and no deny rule's
-  keys intersect it. Replies carry no keys to filter by afterwards, so a selector that could reach a denied key is
-  refused outright, with a hint to narrow the slots.
+  it) and no deny rule covers all of them. `contracts`, `describe` and every call see only what's shown.
+- **What a fetch, a query or a write may reach.** A call renders one selector: the topic with its given and bound
+  slots filled, the rest widened. It is allowed when an allow rule's keys include the whole selector, and no deny
+  rule's keys intersect it. Replies carry no keys to filter by afterwards, so a selector that could reach a denied
+  key is refused outright, with a hint to narrow the slots. A write (`invoke`) is never widened: every slot must be
+  given or bound, so it reaches one key.
 - **What a stream hands on.** `listen` checks each sample's key, which it does carry: a sample on a denied key is
   left out and counted, rather than the whole stream refused.
 
