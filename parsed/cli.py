@@ -19,15 +19,21 @@ reads must pin the same zeared.
 - ``query CONTRACT [slot=value …] [--request JSON]``: ask a read queryable. ``--request`` takes JSON, ``-`` for
   stdin, or ``@path`` for a file, in the protocol's wire form, without the fields the policy injects.
   ``--param k=v`` adds a selector parameter, as a chronicler's history reads take.
+- ``listen CONTRACT [slot=value …]``: each value of a retained contract or a stream as it arrives, one JSON line
+  each: a retained contract's current values first, then live ones. ``--meta`` adds each one's key, origin and
+  time. It stops after ``--count N``, after ``--for DURATION`` (``30``, ``30s``, ``5m``, ``1h``), or on SIGINT or
+  SIGTERM, with exit 0: run under a tool that streams lines (Claude Code's Monitor), it reads like a feed.
 
 A slot left out widens to every value; a bound one is filled by the policy. ``--timeout`` bounds a query (5 s by
-default). A note on stderr (``{"note": …}``) says what was left out: a reply that wouldn't decode, or no reply.
+default). A note on stderr (``{"note": …}``) says what was left out: a reply that wouldn't decode, no reply, a
+sample on a denied key. A library's log line goes to stderr as JSON too (``{"log": level, …}``).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 import time
 from typing import TYPE_CHECKING, Any
@@ -97,6 +103,21 @@ def build_parser() -> argparse.ArgumentParser:
     query.add_argument('--request', metavar='JSON', help='the request, in its wire form: JSON, - for stdin, @path')
     query.add_argument('--param', action='append', default=[], metavar='k=v', help='a selector parameter')
     query.set_defaults(run=_query)
+    listen = verbs.add_parser(
+        'listen',
+        parents=[common],
+        help='stream a retained contract or a stream, one JSON line per value',
+        description=(
+            'Each value of a retained contract or a stream as it arrives, one JSON line each (--pretty has no '
+            "effect): a retained contract's current values first, then live ones."
+        ),
+    )
+    listen.add_argument('contract', help='a contract: its class name, or module:Class')
+    listen.add_argument('slots', nargs='*', metavar='slot=value', help='a slot to narrow by; left out, it widens')
+    listen.add_argument('--count', type=_count, metavar='N', help='stop after N values')
+    listen.add_argument('--for', dest='duration', type=_duration, metavar='DURATION', help='stop after 30, 30s, 5m, 1h')
+    listen.add_argument('--meta', action='store_true', help="add each value's key, origin and time")
+    listen.set_defaults(run=_listen)
     return parser
 
 
@@ -120,6 +141,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         The exit code.
     """
     args = build_parser().parse_args(argv)
+    _log_as_json()
     try:
         return args.run(args)
     except ParsedError as exc:
@@ -312,3 +334,92 @@ def _finish(result: Any, *, pretty: bool) -> None:  # noqa: ANN401 - an executor
     emit(result.items, pretty=pretty)
     for note in result.notes:
         sys.stderr.write(json.dumps({'note': note}) + '\n')
+
+
+def _listen(args: argparse.Namespace) -> int:
+    import asyncio
+    import signal
+    import threading
+
+    from . import executor
+
+    _, loaded, catalog, rules = load(args.policy)
+    contract = _readable(catalog, rules, args.contract, 'listen')
+    values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
+
+    def line(value: Any) -> None:  # noqa: ANN401 - a JSON-ready value
+        sys.stdout.write(json.dumps(value, ensure_ascii=False) + '\n')
+        sys.stdout.flush()
+
+    async def run(session: Any) -> executor.Result:  # noqa: ANN401 - a zenoh.Session
+        stop = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        # A loop takes signal handlers only on the main thread; elsewhere (parsed run inside another program) the
+        # program's own handling stands, and --count or --for ends the stream.
+        signals = (signal.SIGINT, signal.SIGTERM) if threading.current_thread() is threading.main_thread() else ()
+        for signum in signals:
+            loop.add_signal_handler(signum, stop.set)
+        try:
+            return await executor.listen(
+                session,
+                contract,
+                rules,
+                values,
+                each=line,
+                meta=args.meta,
+                count=args.count,
+                duration=args.duration,
+                stop=stop,
+            )
+        finally:
+            for signum in signals:
+                loop.remove_signal_handler(signum)
+
+    session = executor.open_session(loaded.mesh)
+    try:
+        result = asyncio.run(run(session))
+    finally:
+        session.close()
+    for note in result.notes:
+        sys.stderr.write(json.dumps({'note': note}) + '\n')
+    return 0
+
+
+def _count(text: str) -> int:
+    value = int(text)
+    if value <= 0:
+        msg = f'a count is a whole number above zero, not {text}'
+        raise argparse.ArgumentTypeError(msg)
+    return value
+
+
+_UNITS = {'s': 1.0, 'm': 60.0, 'h': 3600.0}
+
+
+def _duration(text: str) -> float:
+    """``30``, ``30s``, ``5m`` or ``1h``, as seconds above zero."""
+    unit = text[-1:] if text[-1:] in _UNITS else 's'
+    number = text[:-1] if text[-1:] in _UNITS else text
+    try:
+        value = float(number) * _UNITS[unit]
+    except ValueError:
+        value = 0.0
+    if value <= 0:
+        msg = f'a duration is seconds above zero, or with s, m or h: 30, 30s, 5m, 1h; not {text}'
+        raise argparse.ArgumentTypeError(msg)
+    return value
+
+
+class _JsonLogHandler(logging.Handler):
+    """A log record as one JSON line on stderr, so stderr stays one JSON object a line."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        line = {'log': record.levelname.lower(), 'logger': record.name, 'message': record.getMessage()}
+        sys.stderr.write(json.dumps(line) + '\n')
+
+
+def _log_as_json() -> None:
+    """Send warnings and worse, from parsed's libraries, to stderr as JSON lines (once)."""
+    root = logging.getLogger()
+    if not any(isinstance(handler, _JsonLogHandler) for handler in root.handlers):
+        root.addHandler(_JsonLogHandler(logging.WARNING))

@@ -197,3 +197,84 @@ class TestHelpers:
             executor.build_request(move.request, {'to': 'x'}, {'token': 12345})  # an int: no str
         assert '12345' not in exc.value.message
         assert exc.value.path == ('token',)
+
+
+# ---- listen ------------------------------------------------------------------------------------
+
+import asyncio  # noqa: E402
+
+import _support_protocol as demo  # noqa: E402
+
+
+async def publish_until(task, *messages, session, every=0.05, limit=200):
+    """Publish ``messages`` on ``session`` every ``every`` seconds until ``task`` is done."""
+    for _ in range(limit):
+        if task.done():
+            return
+        for message in messages:
+            message.send(session=session)
+        await asyncio.sleep(every)
+
+
+class TestListen:
+    async def test_replays_the_retained_set_then_hands_on_live_values(self, client, rules, catalog, world):
+        got = []
+        station = catalog.get('Station')
+        task = asyncio.create_task(
+            executor.listen(client, station, rules, {'world': 'w1'}, each=got.append, meta=True, count=3)
+        )
+        await asyncio.sleep(0.3)  # the replay is the set as it stands when the subscription is declared
+        live = [
+            demo.Station(world='w1', station='secret', stock=1),  # a denied key: left out, counted
+            demo.Station(world='w2', station='s9', stock=1),  # another world: not asked for
+            demo.Station(world='w1', station='s3', stock=9),
+        ]
+        await publish_until(task, *live, session=world.session)
+        result = await task
+        assert [g['origin'] for g in got] == ['replay', 'replay', 'live']
+        assert {g['value']['station'] for g in got[:2]} == {'s1', 's2'}
+        assert got[2]['key'] == 'demo/w1/station/s3'
+        assert got[2]['value'] == {'world': 'w1', 'station': 's3', 'stock': 9}
+        assert got[2]['at'] is not None
+        (note,) = result.notes
+        assert note.endswith('samples on keys the policy denies were left out')
+
+    async def test_a_stream_narrowed_by_a_slot(self, client, rules, catalog, world):
+        got = []
+        notice = catalog.get('Notice')
+        values = executor.slot_values(notice, rules, {'player': 'ann'})
+        task = asyncio.create_task(executor.listen(client, notice, rules, values, each=got.append, count=2))
+        await asyncio.sleep(0.2)
+        await publish_until(
+            task,
+            demo.Notice(world='w1', player='bo', text='not for ann'),
+            demo.Notice(world='w1', player='ann', text='hello'),
+            session=world.session,
+        )
+        assert (await task).notes == []
+        assert got == [{'world': 'w1', 'player': 'ann', 'text': 'hello'}] * 2
+
+    async def test_stops_after_a_duration(self, client, rules, catalog, world):
+        got = []
+        result = await executor.listen(
+            client, catalog.get('Notice'), rules, {'world': 'w1'}, each=got.append, duration=0.2
+        )
+        assert (got, result.notes) == ([], [])
+
+    async def test_stops_when_told(self, client, rules, catalog, world):
+        stop = asyncio.Event()
+        task = asyncio.create_task(
+            executor.listen(client, catalog.get('Notice'), rules, {'world': 'w1'}, each=print, stop=stop)
+        )
+        await asyncio.sleep(0.1)
+        stop.set()
+        assert (await asyncio.wait_for(task, 5)).notes == []
+
+    async def test_what_the_consumer_raises_is_raised(self, client, rules, catalog, world):
+        def boom(_value):
+            msg = 'consumer failed'
+            raise RuntimeError(msg)
+
+        task = asyncio.create_task(executor.listen(client, catalog.get('Station'), rules, {'world': 'w1'}, each=boom))
+        with pytest.raises(RuntimeError, match='consumer failed'):
+            await asyncio.wait_for(task, 5)
