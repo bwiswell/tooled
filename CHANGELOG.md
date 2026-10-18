@@ -15,9 +15,11 @@ lines as it lands, and the entry is dated when that version is released.
 ### Added
 
 - **The project:** the `parsed` command (also `python -m parsed`). `--version` names the seared and zeared it runs
-  on, since a protocol package parsed reads must pin the same zeared. The house toolchain gates every commit:
-  `ruff`, `deptry` and `ty` as `prek` hooks, and a hook that refuses a commit on `master`. A merge to `master` that
-  changes the version tags the release.
+  on, since a protocol package parsed reads must pin the same zeared, and `--help` ends with where output goes and
+  what each exit code means. The house toolchain gates every commit: `ruff`, `deptry` and `ty` as `prek` hooks, and
+  a hook that refuses a commit on `master`. A merge to `master` that changes the version tags the release.
+- **Documentation:** the README's install and quick start, and `docs/`: the command (`cli.md`), the policy file
+  (`policy.md`), and using parsed from an agent (`agents.md`).
 - **The policy file.** `parsed.toml` says which mesh parsed reaches and what it may do there. It is found by
   `--policy` (after the verb), else `$PARSED_POLICY`, else the working directory, and loaded strict, so a misspelt
   key anywhere is refused with its path.

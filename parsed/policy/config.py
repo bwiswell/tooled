@@ -9,21 +9,21 @@ mode = "client"
 router = "tcp/127.0.0.1:7447"
 
 [protocol]
-packages = ["farlandia.protocol"]
+packages = ["demo.protocol"]
 
 [bind]                  # these slots render every key
-galaxy = "farlandia"
+world = "w1"
 
 [inject.token]          # every request that declares `token` carries it
-env = "FARLANDIA_TOKEN"
+env = "DEMO_TOKEN"
 
 [[allow]]
 ops = ["read", "query"]
-keys = ["farlandia/farlandia/**"]
+keys = ["demo/w1/**"]
 
 [[deny]]                # deny wins
 ops = ["invoke"]
-contracts = ["OrderResult"]
+contracts = ["MoveResult"]
 variants = ["dev-*"]
 ```
 

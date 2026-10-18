@@ -8,13 +8,13 @@ from parsed.errors import TooLargeError, UsageError
 from parsed.output import (
     DEFAULT_MAX_BYTES,
     MAX_BYTES_ENV,
+    as_json,
     check_size,
     dump,
     max_bytes,
     parse_paths,
     parts,
     pick,
-    render,
     select,
     summarize_bytes,
     write_out,
@@ -129,7 +129,7 @@ class TestCap:
     def test_over_the_cap_is_refused_with_each_part_s_size(self):
         value = {'small': 'x', 'big': 'y' * 200}
         with pytest.raises(TooLargeError) as exc:
-            check_size(render(value, indent=None), value, cap=100)
+            check_size(as_json(value, indent=None), value, cap=100)
         assert exc.value.exit_code == 6
         assert exc.value.to_json()['parts'] == {'bytes': {'big': 202, 'small': 3}}
         assert exc.value.to_json()['cap'] == 100

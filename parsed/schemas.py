@@ -263,7 +263,7 @@ def drop_variants(schema: dict[str, Any], denied: set[str]) -> dict[str, Any]:
     return prune_defs(out)
 
 
-def _branch_tag(branch: Any) -> tuple[str | None, str | None]:  # noqa: ANN401 - a JSON Schema node
+def _branch_tag(branch: Any) -> tuple[str | None, str | None]:  # a JSON Schema node
     """The tag key and tag an ``if``/``then`` branch selects on: ``if: {properties: {key: {const: tag}}}``."""
     condition = branch.get('if', {}) if isinstance(branch, dict) else {}
     for key, rule in condition.get('properties', {}).items():
@@ -291,7 +291,7 @@ def prune_defs(schema: dict[str, Any]) -> dict[str, Any]:
     return schema
 
 
-def _refs(node: Any) -> set[str]:  # noqa: ANN401 - a JSON Schema node
+def _refs(node: Any) -> set[str]:  # a JSON Schema node
     found: set[str] = set()
     if isinstance(node, dict):
         ref = node.get('$ref')

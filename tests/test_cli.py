@@ -519,3 +519,13 @@ class TestListenOutput:
         out, err = capsys.readouterr()
         assert len(out.splitlines()) == 2
         assert lines(err) == [{'note': "--select 'stok' matched nothing in the stream"}]
+
+
+def test_the_help_names_every_exit_code(capsys):
+    from parsed.cli import EPILOG
+    from parsed.errors import ParsedError
+
+    codes = {cls.exit_code for cls in ParsedError.__subclasses__()}
+    assert codes == {2, 3, 4, 5, 6}
+    for code in (0, *codes):
+        assert f'\n  {code}  ' in EPILOG
