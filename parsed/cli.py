@@ -27,6 +27,11 @@ and zeared parsed runs on, since a protocol package parsed reads must pin the sa
   checks it and the policy, then prints the selector and the request, injected secrets as ``"<injected>"``,
   without sending anything.
 
+- ``wait CONTRACT [slot=value …] --until PATH=VALUE [--until …]``: subscribe as ``listen`` does, until a value
+  meets every condition, and print it: a retained contract already in that state answers at once. A path is dotted
+  (``numbers.fuel``); a value reads as JSON if it can (``40``, ``true``, ``"30%"``), else as a string (``idle``).
+  Past ``--timeout`` (30 s by default), or on SIGINT or SIGTERM, it exits 7 with the last value seen.
+
 A slot left out widens to every value; a bound one is filled by the policy. ``--timeout`` bounds a query or an
 invoke (5 s by default).
 
@@ -41,6 +46,7 @@ level, …}``).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import sys
@@ -50,7 +56,8 @@ from typing import TYPE_CHECKING, Any
 from .errors import ParsedError
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    import asyncio
+    from collections.abc import Generator, Sequence
     from pathlib import Path
 
     from .catalog import Catalog, Contract
@@ -72,6 +79,7 @@ exit codes:
   5  the mesh: the session would not open, a read or a write failed, or a
      write got no reply: "generated" holds its generated values
   6  a result over the size cap
+  7  wait: no value met the conditions in time; "last" holds the last one seen
 
 The policy is --policy PATH, else $PARSED_POLICY, else ./parsed.toml.
 """
@@ -165,9 +173,16 @@ def build_parser() -> argparse.ArgumentParser:
     listen.add_argument('--for', dest='duration', type=_duration, metavar='DURATION', help='stop after 30, 30s, 5m, 1h')
     listen.add_argument('--meta', action='store_true', help="add each value's key, origin and time")
     listen.set_defaults(run=_listen)
+    _add_invoke(verbs, [common, saving])
+    _add_wait(verbs, [common, saving])
+    return parser
+
+
+def _add_invoke(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # argparse's subparsers
+    """``invoke``'s parser."""
     invoke = verbs.add_parser(
         'invoke',
-        parents=[common, saving],
+        parents=parents,
         help='ask a queryable that writes',
         description=(
             'Ask a queryable that writes (EFFECT = WRITE or ACTION, or none declared), and print its replies. A '
@@ -191,7 +206,34 @@ def build_parser() -> argparse.ArgumentParser:
         help='after no reply, do not ask once more (a request with a generated id is asked twice by default)',
     )
     invoke.set_defaults(run=_invoke)
-    return parser
+
+
+def _add_wait(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # argparse's subparsers
+    """``wait``'s parser."""
+    wait = verbs.add_parser(
+        'wait',
+        parents=parents,
+        help='wait for a retained contract or a stream to hold a value, and print it',
+        description=(
+            'Subscribe to a retained contract or a stream until a value meets every --until, and print it: a '
+            'retained contract already in that state answers at once. Past --timeout, exit 7 with the last value '
+            'seen.'
+        ),
+    )
+    wait.add_argument('contract', help='a contract: its class name, or module:Class')
+    wait.add_argument('slots', nargs='*', metavar='slot=value', help='a slot to narrow by; left out, it widens')
+    wait.add_argument(
+        '--until',
+        action='append',
+        required=True,
+        type=_condition,
+        metavar='PATH=VALUE',
+        help='a dotted path and the value it must equal, read as JSON if it can be (40, true), else as a string; '
+        'repeat for several, all required',
+    )
+    wait.add_argument('--timeout', type=_seconds, default=30.0, metavar='S', help='seconds to wait (default 30)')
+    wait.add_argument('--meta', action='store_true', help="add the value's key, origin and time")
+    wait.set_defaults(run=_wait)
 
 
 def version() -> str:
@@ -383,7 +425,7 @@ def _invoke(args: argparse.Namespace) -> int:
         )
     finally:
         session.close()
-    _finish(result, args)
+    _finish(result, args, sent=True)
     return 0
 
 
@@ -463,17 +505,48 @@ def _seconds(text: str) -> float:
     return value
 
 
-def _finish(result: Any, args: argparse.Namespace) -> None:  # an executor.Result
-    """Print a read's replies, and its notes on stderr."""
-    emit(result.items, args)
-    for note in result.notes:
+def _finish(result: Any, args: argparse.Namespace, *, sent: bool = False) -> None:  # an executor.Result
+    """Print a call's replies, and its notes on stderr.
+
+    Once a write is ``sent``, nothing about the output may read as the write not having happened: a ``--select``
+    path that matches nothing is a note, and a result over the cap says the write was answered.
+    """
+    from .errors import TooLargeError
+
+    items, notes = result.items, list(result.notes)
+    if sent:
+        items, missed = _lenient(items, args)
+        notes += missed
+        args = argparse.Namespace(**{**vars(args), 'select': None})
+    try:
+        emit(items, args)
+    except TooLargeError as exc:
+        if not sent:
+            raise
+        exc.message = f'the write was sent and answered, but {exc.message}'
+        _notes(notes)
+        raise
+    _notes(notes)
+
+
+def _notes(notes: Sequence[str]) -> None:
+    for note in notes:
         sys.stderr.write(json.dumps({'note': note}) + '\n')
+
+
+def _lenient(value: Any, args: argparse.Namespace, *, meta: bool = False) -> tuple[Any, list[str]]:  # JSON-ready
+    """``--select``'s parts of a result there's no taking back (a write sent, a wait over); a miss is a note."""
+    from .output import path_text
+
+    if not args.select or value == []:
+        return value, []
+    value, found = _picked(value, args.select, meta=meta)
+    missed = [path for path, hit in zip(args.select, found, strict=True) if not hit]
+    return value, [f'--select {path_text(path)!r} matched nothing' for path in missed]
 
 
 def _listen(args: argparse.Namespace) -> int:
     import asyncio
-    import signal
-    import threading
 
     from . import executor
 
@@ -484,14 +557,7 @@ def _listen(args: argparse.Namespace) -> int:
     line = _Lines(args)
 
     async def run(session: Any) -> executor.Result:  # a zenoh.Session
-        stop = asyncio.Event()
-        loop = asyncio.get_running_loop()
-        # A loop takes signal handlers only on the main thread; elsewhere (parsed run inside another program) the
-        # program's own handling stands, and --count or --for ends the stream.
-        signals = (signal.SIGINT, signal.SIGTERM) if threading.current_thread() is threading.main_thread() else ()
-        for signum in signals:
-            loop.add_signal_handler(signum, stop.set)
-        try:
+        with _stopped_by_signals() as stop:
             return await executor.listen(
                 session,
                 contract,
@@ -503,9 +569,6 @@ def _listen(args: argparse.Namespace) -> int:
                 duration=args.duration,
                 stop=stop,
             )
-        finally:
-            for signum in signals:
-                loop.remove_signal_handler(signum)
 
     session = executor.open_session(loaded.mesh)
     try:
@@ -515,6 +578,95 @@ def _listen(args: argparse.Namespace) -> int:
     for note in [*result.notes, *line.notes()]:
         sys.stderr.write(json.dumps({'note': note}) + '\n')
     return 0
+
+
+def _wait(args: argparse.Namespace) -> int:
+    import asyncio
+
+    from . import executor
+    from .errors import TimedOutError
+
+    _, loaded, catalog, rules = load(args.policy)
+    contract = _readable(catalog, rules, args.contract, 'wait')
+    values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
+
+    async def run(session: Any) -> executor.Result:  # a zenoh.Session
+        with _stopped_by_signals() as stop:
+            return await executor.wait(
+                session, contract, rules, values, until=args.until, meta=args.meta, within=args.timeout, stop=stop
+            )
+
+    session = executor.open_session(loaded.mesh)
+    try:
+        result = asyncio.run(run(session))
+    except TimedOutError as exc:
+        exc.message, exc.last = _last_shown(exc.message, exc.last, args)
+        raise
+    finally:
+        session.close()
+    value, missed = _lenient(result.items[0], args, meta=args.meta)
+    emit(value, argparse.Namespace(**{**vars(args), 'select': None}))
+    _notes([*result.notes, *missed])
+    return 0
+
+
+def _last_shown(message: str, last: Any, args: argparse.Namespace) -> tuple[str, Any]:  # a JSON-ready value
+    """A timed-out wait's last value, after ``--select``, and left out (the message says so) when over the cap."""
+    from .output import as_json, max_bytes
+
+    if last is None:
+        return message, None
+    if args.select:
+        last, _found = _picked(last, args.select, meta=args.meta)
+    cap, size = max_bytes(args.max_bytes), len(as_json(last, indent=None).encode())
+    if cap and size > cap:
+        note = f'the last value seen is {size:,} bytes, over the {cap:,}-byte cap, so it is left out'
+        note += ': --select keeps parts of it'
+        return f'{message}; {note}', None
+    return message, last
+
+
+def _picked(value: Any, paths: Any, *, meta: bool) -> tuple[Any, list[bool]]:  # a JSON-ready value; parsed paths
+    """``--select``'s parts of one value, or of the value inside its ``--meta`` wrapper; and which paths matched."""
+    from .output import pick
+
+    if not meta:
+        return pick(value, paths)
+    picked, found = pick(value['value'], paths)
+    return {**value, 'value': picked}, found
+
+
+@contextlib.contextmanager
+def _stopped_by_signals() -> Generator[asyncio.Event]:
+    """An event SIGINT or SIGTERM sets, while the block runs on the running loop.
+
+    A loop takes signal handlers only on the main thread; elsewhere (parsed run inside another program) the
+    program's own handling stands, and the verb's own bound ends it.
+    """
+    import asyncio
+    import signal
+    import threading
+
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    signals = (signal.SIGINT, signal.SIGTERM) if threading.current_thread() is threading.main_thread() else ()
+    for signum in signals:
+        loop.add_signal_handler(signum, stop.set)
+    try:
+        yield stop
+    finally:
+        for signum in signals:
+            loop.remove_signal_handler(signum)
+
+
+def _condition(text: str) -> Any:  # an executor.Condition
+    from .errors import UsageError
+    from .executor import Condition
+
+    try:
+        return Condition.parse(text)
+    except UsageError as exc:
+        raise argparse.ArgumentTypeError(exc.message) from exc
 
 
 class _Lines:
@@ -532,12 +684,11 @@ class _Lines:
         self.over = 0
 
     def __call__(self, value: Any) -> None:  # a JSON-ready value
-        from .output import as_json, pick
+        from .output import as_json
 
         if self.paths:
-            picked, found = pick(value['value'] if self.meta else value, self.paths)
+            value, found = _picked(value, self.paths, meta=self.meta)
             self.matched = [a or b for a, b in zip(self.matched, found, strict=True)]
-            value = {**value, 'value': picked} if self.meta else picked
         text = as_json(value, indent=None)
         if self.cap and len(text.encode()) > self.cap:
             self.over += 1

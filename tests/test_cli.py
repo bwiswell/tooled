@@ -447,6 +447,26 @@ class TestInvoke:
         assert out['visible']['invoke'] == ['EchoReply', 'MoveResult']
 
 
+class TestWriteOutput:
+    """Once a write is sent, nothing about the output may read as the write not having happened."""
+
+    ARGV = ('invoke', 'MoveResult', 'player=ann', '--request', '{"to": "dock"}')
+
+    def test_a_select_that_misses_is_a_note(self, writes, world, capsys):
+        code, out, err = run(capsys, *self.ARGV, '--select', 'ok,reason', '--policy', writes)
+        assert (code, out, err) == (0, [{'ok': True}], {'note': "--select 'reason' matched nothing"})
+        assert len(world.asked) == 1
+
+    def test_a_reply_over_the_cap_says_the_write_was_sent(self, writes, capsys):
+        code, out, err = run(capsys, *self.ARGV, '--max-bytes', '10', '--policy', writes)
+        assert (code, out, err['error']) == (6, None, 'too_large')
+        assert err['message'].startswith('the write was sent and answered, but the result is')
+
+    def test_a_dry_run_still_refuses_a_select_that_misses(self, writes, capsys):
+        code, _, err = run(capsys, *self.ARGV, '--dry-run', '--select', 'nope', '--policy', writes)
+        assert (code, err['message']) == (2, "--select 'nope' matches nothing in the result")
+
+
 class TestRetry:
     def invoke(self, capsys, policy, to, *extra):
         argv = ['invoke', 'MoveResult', 'player=ann', '--request', json.dumps({'to': to}), *extra, '--policy', policy]
@@ -571,6 +591,81 @@ class TestListen:
         assert json.loads(first) == {'world': 'w1', 'player': 'ann', 'text': 'hello'}
 
 
+class TestWait:
+    def test_a_retained_value_already_so(self, reads, capsys):
+        code, out, err = run(capsys, 'wait', 'Station', 'station=s2', '--until', 'stock=5', '--policy', reads)
+        assert (code, out, err) == (0, {'world': 'w1', 'station': 's2', 'stock': 5}, None)
+
+    def test_every_until_must_hold(self, reads, capsys):
+        argv = ['wait', 'Station', '--until', 'station=s1', '--until', 'stock=3', '--meta', '--policy', reads]
+        code, out, _ = run(capsys, *argv)
+        assert code == 0
+        assert (out['key'], out['origin'], out['value']['stock']) == ('demo/w1/station/s1', 'replay', 3)
+
+    def test_select_keeps_parts_and_notes_a_miss(self, reads, capsys):
+        argv = ['wait', 'Station', 'station=s2', '--until', 'stock=5', '--select', 'stock,stok', '--policy', reads]
+        code, out, err = run(capsys, *argv)
+        assert (code, out, err) == (0, {'stock': 5}, {'note': "--select 'stok' matched nothing"})
+
+    def test_the_timeout_exits_seven_with_the_last_value(self, reads, capsys):
+        argv = ['wait', 'Station', '--until', 'stock=99', '--timeout', '0.3', '--select', 'station']
+        code, out, err = run(capsys, *argv, '--policy', reads)
+        assert (code, out) == (7, None)
+        assert (err['error'], err['message']) == ('timeout', 'no Station value met stock=99 within 0.3s: 2 seen')
+        assert err['last'] in ({'station': 's1'}, {'station': 's2'})
+
+    def test_a_last_value_over_the_cap_is_left_out(self, reads, capsys):
+        argv = ['wait', 'Station', '--until', 'stock=99', '--timeout', '0.3', '--max-bytes', '10']
+        _, _, err = run(capsys, *argv, '--policy', reads)
+        assert err['last'] is None
+        tail = (
+            r'2 seen; the last value seen is \d+ bytes, over the 10-byte cap, so it is left out: --select keeps parts'
+        )
+        assert re.search(tail + ' of it$', err['message'])
+
+    def test_a_queryable_is_not_waited_on(self, reads, capsys):
+        code, _, err = run(capsys, 'wait', 'LookReply', '--until', 'seen=x', '--policy', reads)
+        assert (code, err['message']) == (2, 'wait does not act on LookReply, a queryable contract; what does: query')
+
+    @pytest.mark.parametrize(
+        ('argv', 'message'),
+        [
+            (['Station'], 'the following arguments are required: --until'),
+            (['Station', '--until', 'stock'], '--until is path=value'),
+        ],
+    )
+    def test_usage(self, reads, capsys, argv, message):
+        with pytest.raises(SystemExit) as exc:
+            main(['wait', *argv, '--policy', reads])
+        assert exc.value.code == 2
+        assert message in capsys.readouterr().err
+
+    def test_the_default_timeout_is_thirty_seconds(self):
+        from parsed.cli import build_parser
+
+        assert build_parser().parse_args(['wait', 'Station', '--until', 'stock=1']).timeout == 30.0
+
+    def test_sigterm_ends_it_as_not_met(self, reads, world):
+        env = {**os.environ, 'PYTHONPATH': os.pathsep.join(sys.path)}
+        argv = ['wait', 'Notice', 'player=ann', '--until', 'text=never', '--timeout', '60', '--policy', reads]
+        publisher = world.session.declare_publisher('demo/w1/notice/ann')
+        proc = subprocess.Popen(
+            [sys.executable, '-m', 'parsed', *argv], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
+        )
+        try:
+            deadline = time.monotonic() + 20
+            while not publisher.matching_status.matching and time.monotonic() < deadline:  # subscribed: handlers set
+                time.sleep(0.05)
+            proc.send_signal(signal.SIGTERM)
+            out, err = proc.communicate(timeout=20)
+        finally:
+            proc.kill()
+            publisher.undeclare()
+        assert (proc.returncode, out) == (7, b''), err
+        error = json.loads(err.splitlines()[-1])
+        assert (error['message'], error['last']) == ('stopped before any Notice value met text=never: 0 seen', None)
+
+
 class TestOutput:
     def test_select_keeps_parts_of_each_reply(self, reads, capsys):
         code, out, _ = run(capsys, 'fetch', 'Station', '--select', 'station', '--policy', reads)
@@ -665,7 +760,7 @@ def test_the_help_names_every_exit_code(capsys):
     from parsed.errors import ParsedError
 
     codes = {cls.exit_code for cls in ParsedError.__subclasses__()}
-    assert codes == {2, 3, 4, 5, 6}
+    assert codes == {2, 3, 4, 5, 6, 7}
     for code in (0, *codes):
         assert f'\n  {code}  ' in EPILOG
 

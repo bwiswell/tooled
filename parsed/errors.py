@@ -11,6 +11,7 @@ and exits with the error's code. stdout carries results only.
 | 4 | ``validation``: the request doesn't load as its class: seared's error, with its path |
 | 5 | ``mesh``: the session wouldn't open, the link failed, or a write got no reply (with its generated values) |
 | 6 | ``too_large``: the result is over the size cap; the error says its size and each part's |
+| 7 | ``timeout``: ``wait`` ended before any value met its conditions; the error holds the last value seen |
 """
 
 from __future__ import annotations
@@ -127,3 +128,25 @@ class TooLargeError(ParsedError):
     def to_json(self) -> dict[str, Any]:
         """The error, with the result's size, the cap, and each part's size."""
         return {**super().to_json(), 'size': self.size, 'cap': self.cap, 'parts': self.parts}
+
+
+class TimedOutError(ParsedError):
+    """``wait`` ended before any value met its conditions.
+
+    The error carries the last value seen, so the agent sees how far it got.
+
+    Args:
+        message: What was waited for, how long, and how many values were seen.
+        last: The last value seen on a selected key, as ``wait`` prints one; ``None`` when there was none.
+    """
+
+    kind = 'timeout'
+    exit_code = 7
+
+    def __init__(self, message: str, *, last: Any) -> None:  # a JSON-ready value, or None
+        super().__init__(message)
+        self.last = last
+
+    def to_json(self) -> dict[str, Any]:
+        """The error, with the last value seen (``null`` for none)."""
+        return {**super().to_json(), 'last': self.last}

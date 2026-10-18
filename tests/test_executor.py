@@ -9,7 +9,7 @@ from zeared import Mode, SessionConfig
 
 from parsed import executor
 from parsed.catalog import Catalog
-from parsed.errors import InvalidRequestError, LostWriteError, MeshError, RefusedError, UsageError
+from parsed.errors import InvalidRequestError, LostWriteError, MeshError, RefusedError, TimedOutError, UsageError
 from parsed.executor import open_session
 from parsed.policy import Rules, load
 
@@ -430,4 +430,125 @@ class TestListen:
 
         task = asyncio.create_task(executor.listen(client, catalog.get('Station'), rules, {'world': 'w1'}, each=boom))
         with pytest.raises(RuntimeError, match='consumer failed'):
+            await asyncio.wait_for(task, 5)
+
+
+# ---- wait -----------------------------------------------------------------------------------
+
+
+class TestCondition:
+    @pytest.mark.parametrize(
+        ('text', 'path', 'value'),
+        [
+            ('stock=5', ('stock',), 5),
+            ('up=true', ('up',), True),
+            ('logo=null', ('logo',), None),
+            ('fuel=40.5', ('fuel',), 40.5),
+            ('activity=idle', ('activity',), 'idle'),
+            ('mark="30%"', ('mark',), '30%'),
+            ('key=-4,-1.0', ('key',), '-4,-1.0'),  # not JSON: a string
+            ('code=007', ('code',), '007'),  # nor this
+            ('note=a=b', ('note',), 'a=b'),  # the first = splits
+            ('numbers.fuel=3', ('numbers', 'fuel'), 3),
+        ],
+    )
+    def test_parse(self, text, path, value):
+        condition = executor.Condition.parse(text)
+        assert (condition.path, condition.value, condition.text) == (path, value, text)
+
+    @pytest.mark.parametrize('text', ['stock', '=5', 'a..b=1', 'a.=1'])
+    def test_a_malformed_condition(self, text):
+        with pytest.raises(UsageError, match='--until is path=value'):
+            executor.Condition.parse(text)
+
+    def test_met(self):
+        value = {'numbers': {'fuel': 40.0, 'up': True}, 'ships': [{'name': 'a'}, {'name': 'b'}], 'tags': ['x']}
+        met = [
+            'numbers.fuel=40',  # a whole number equals its float
+            'numbers.up=true',
+            'ships.1.name=b',  # a whole number indexes a list
+            'tags=["x"]',
+            'numbers={"fuel": 40, "up": true}',
+        ]
+        unmet = [
+            'numbers.up=1',  # a number is no boolean
+            'numbers.fuel="40"',
+            'ships.2.name=b',
+            'ships.x.name=b',
+            'nope=1',
+            'numbers.fuel.deeper=1',
+        ]
+        assert [executor.Condition.parse(text).met(value) for text in met] == [True] * len(met)
+        assert [executor.Condition.parse(text).met(value) for text in unmet] == [False] * len(unmet)
+
+
+class TestWait:
+    def until(self, *texts):
+        return [executor.Condition.parse(text) for text in texts]
+
+    async def test_a_retained_value_already_so_answers_from_the_replay(self, client, rules, catalog, world):
+        result = await executor.wait(
+            client, catalog.get('Station'), rules, {'world': 'w1'}, until=self.until('stock=5'), within=5
+        )
+        assert (result.items, result.notes) == ([{'world': 'w1', 'station': 's2', 'stock': 5}], [])
+
+    async def test_every_condition_must_hold(self, client, rules, catalog, world):
+        station, values = catalog.get('Station'), {'world': 'w1'}
+        met = await executor.wait(client, station, rules, values, until=self.until('station=s1', 'stock=3'), within=5)
+        assert met.items == [{'world': 'w1', 'station': 's1', 'stock': 3}]
+        with pytest.raises(TimedOutError):
+            await executor.wait(client, station, rules, values, until=self.until('station=s1', 'stock=5'), within=0.3)
+
+    async def test_a_live_value(self, client, rules, catalog, world):
+        notice = catalog.get('Notice')
+        values = executor.slot_values(notice, rules, {'player': 'ann'})
+        task = asyncio.create_task(
+            executor.wait(client, notice, rules, values, until=self.until('text=hello'), meta=True, within=5)
+        )
+        await asyncio.sleep(0.2)
+        await publish_until(
+            task,
+            demo.Notice(world='w1', player='ann', text='not yet'),
+            demo.Notice(world='w1', player='bo', text='hello'),  # another player: not asked for
+            demo.Notice(world='w1', player='ann', text='hello'),
+            session=world.session,
+        )
+        (got,) = (await task).items
+        assert (got['key'], got['origin'], got['value']['text']) == ('demo/w1/notice/ann', 'live', 'hello')
+
+    async def test_the_timeout_carries_the_last_value_seen(self, client, rules, catalog, world):
+        with pytest.raises(TimedOutError) as exc:
+            await executor.wait(
+                client, catalog.get('Station'), rules, {'world': 'w1'}, until=self.until('stock=99'), within=0.3
+            )
+        assert exc.value.message == 'no Station value met stock=99 within 0.3s: 2 seen'
+        assert exc.value.last in (
+            {'world': 'w1', 'station': 's1', 'stock': 3},
+            {'world': 'w1', 'station': 's2', 'stock': 5},
+        )
+        assert (exc.value.kind, exc.value.exit_code) == ('timeout', 7)
+
+    async def test_a_path_no_value_had_is_named(self, client, rules, catalog, world):
+        with pytest.raises(TimedOutError, match=r'2 seen, none with stok$'):
+            await executor.wait(
+                client, catalog.get('Station'), rules, {'world': 'w1'}, until=self.until('stok=5'), within=0.3
+            )
+
+    async def test_nothing_seen(self, client, rules, catalog, world):
+        with pytest.raises(TimedOutError) as exc:
+            await executor.wait(
+                client, catalog.get('Notice'), rules, {'world': 'w1'}, until=self.until('text=hi'), within=0.2
+            )
+        assert (exc.value.message, exc.value.last) == ('no Notice value met text=hi within 0.2s: 0 seen', None)
+
+    async def test_stopped(self, client, rules, catalog, world):
+        stop = asyncio.Event()
+        task = asyncio.create_task(
+            executor.wait(
+                client, catalog.get('Notice'), rules, {'world': 'w1'}, until=self.until('text=hi'), within=30, stop=stop
+            )
+        )
+        await asyncio.sleep(0.1)
+        stop.set()
+        with pytest.raises(TimedOutError, match=r'^stopped before any Notice value met text=hi: 0 seen$'):
             await asyncio.wait_for(task, 5)

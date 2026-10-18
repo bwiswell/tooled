@@ -19,6 +19,9 @@ zeared does the asking, and each reply is dumped as seared's JSON form.
   contract's current values first (``origin`` ``replay``), then live ones. Each sample's key is checked against the
   slots asked for and against the policy, so a sample on a denied key is left out rather than the whole stream
   refused. It stops after a count, after a duration, or when told to.
+- **wait** subscribes the same way, until a value meets every one of its conditions (a path into the value, and the
+  value it must equal), and gives that value. A retained contract already in that state answers from its replay.
+  Past the timeout, the error carries the last value seen.
 
 A reply that won't decode is left out, and noted. So is an error reply, an empty answer to a query, a queryable
 that didn't answer in time, a sample on a denied key, and a sample the stream dropped because the reader fell
@@ -40,12 +43,12 @@ from seared.doc import introspect, is_seared_class
 from zeared import KeyExprError, keyexpr
 
 from .catalog import render
-from .errors import InvalidRequestError, LostWriteError, MeshError, RefusedError, UsageError
+from .errors import InvalidRequestError, LostWriteError, MeshError, RefusedError, TimedOutError, UsageError
 from .output import dump
 from .policy import Op, op_of
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Collection, Mapping
+    from collections.abc import Callable, Collection, Mapping, Sequence
 
     from seared import Seared
     from zeared import SessionConfig
@@ -375,12 +378,154 @@ async def listen(  # noqa: PLR0913 - one subscription: the contract, its slots, 
 
     async with stream:
         await _until(pump(), stop=stop, duration=duration)
-        result = Result()
-        if tally.denied:
-            result.notes.append(f'{tally.denied} samples on keys the policy denies were left out')
-        if stream.dropped:
-            result.notes.append(f'{stream.dropped} samples were dropped: the reader fell behind')
-    return result
+        return Result(notes=_left_out(tally, stream))
+
+
+@dataclass(frozen=True)
+class Condition:
+    """One of ``wait``'s conditions: a path into a value, and the value it must equal.
+
+    Args:
+        path: The path's parts: a field's name, or a whole number for a list's element.
+        value: The value it must equal, JSON-ready.
+        text: The condition as given, ``path=value``.
+    """
+
+    path: tuple[str, ...]
+    value: Any
+    text: str
+
+    @classmethod
+    def parse(cls, text: str) -> Condition:
+        """A condition from ``path=value``: a dotted path (``activity``, ``numbers.fuel``), and its value.
+
+        The value is read as JSON if it reads as JSON (``40``, ``true``, ``null``, ``"30%"``), else as a string
+        (``idle``, ``-4,-1.0``).
+
+        Raises:
+            UsageError: No ``=``, or a path with an empty part.
+        """
+        path, sep, raw = text.partition('=')
+        parts = tuple(path.split('.'))
+        if not sep or not all(parts):
+            msg = f'--until is path=value, the path dotted (activity, numbers.fuel), not {text!r}'
+            raise UsageError(msg)
+        try:
+            value = json.loads(raw)
+        except ValueError:
+            value = raw
+        return cls(parts, value, text)
+
+    @property
+    def path_text(self) -> str:
+        """The path, as given."""
+        return '.'.join(self.path)
+
+    def find(self, value: Any) -> tuple[bool, Any]:  # a JSON-ready value
+        """Whether ``value`` has the path, and what it holds there."""
+        for part in self.path:
+            if isinstance(value, dict) and part in value:
+                value = value[part]
+            elif isinstance(value, list) and part.isdigit() and int(part) < len(value):
+                value = value[int(part)]
+            else:
+                return False, None
+        return True, value
+
+    def met(self, value: Any) -> bool:  # a JSON-ready value
+        """Whether ``value`` holds the condition's value at its path."""
+        found, held = self.find(value)
+        return found and _equal(held, self.value)
+
+
+async def wait(  # noqa: PLR0913 - one subscription: the contract, its slots, and what to wait for
+    session: Any,  # a zenoh.Session, or a ManagedSession
+    contract: Contract,
+    rules: Rules,
+    values: Mapping[str, str],
+    *,
+    until: Sequence[Condition],
+    meta: bool = False,
+    within: float,
+    stop: asyncio.Event | None = None,
+) -> Result:
+    """Subscribe to ``contract`` until a value the slots and the policy allow meets every condition.
+
+    A retained contract's current values come first, so one already in that state is found at once; then live ones.
+
+    Args:
+        session: The session to subscribe on.
+        contract: A retained contract, or a stream.
+        rules: The policy's rules: each sample's key must be one they allow.
+        values: The slots asked for, the bound ones included.
+        until: The conditions, all of which the value must meet.
+        meta: Whether to give the value with its key, origin and time.
+        within: Seconds to wait.
+        stop: Stop waiting when this is set: on a signal, say.
+
+    Returns:
+        The value that met them, as the one item, and notes on what was left out.
+
+    Raises:
+        TimedOutError: No value met them in time, or it was stopped first. It carries the last value seen.
+    """
+    selectors = [selector(template, values) for template in contract.templates]
+    tally = _Tally()
+    had = [False] * len(until)  # whether any value had each condition's path
+    last: Any = None  # a value as wait gives one: never None itself
+    met: Any = None
+    stream = contract.cls.alisten(session=session, meta=True)
+
+    async def pump() -> None:
+        nonlocal last, met
+        async for message, sample in stream:
+            if not _admit(contract, rules, selectors, sample.key_expr, tally):
+                continue
+            last = _shape(contract, message, sample, meta=meta)
+            value = last['value'] if meta else last
+            tally.handed += 1
+            had[:] = [seen or condition.find(value)[0] for seen, condition in zip(had, until, strict=True)]
+            if all(condition.met(value) for condition in until):
+                met = last
+                return
+
+    async with stream:
+        await _until(pump(), stop=stop, duration=within)
+        notes = _left_out(tally, stream)
+    if met is None:
+        label, wanted = rules.catalog.label(contract), ' and '.join(condition.text for condition in until)
+        if stop is not None and stop.is_set():
+            msg = f'stopped before any {label} value met {wanted}: {tally.handed} seen'
+        else:
+            msg = f'no {label} value met {wanted} within {within:g}s: {tally.handed} seen'
+        missing = [condition.path_text for seen, condition in zip(had, until, strict=True) if not seen]
+        if tally.handed and missing:
+            msg += f', none with {", ".join(missing)}'
+        raise TimedOutError('; '.join([msg, *notes]), last=last)
+    return Result(items=[met], notes=notes)
+
+
+def _equal(a: Any, b: Any) -> bool:  # JSON-ready values
+    """JSON's equality: a number is no boolean, though Python's ``True == 1``; ``40`` equals ``40.0``."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return isinstance(a, bool) and isinstance(b, bool) and a == b
+    if isinstance(a, int | float) and isinstance(b, int | float):
+        return a == b
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_equal(a[key], b[key]) for key in a)
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(_equal(x, y) for x, y in zip(a, b, strict=True))
+    return type(a) is type(b) and a == b
+
+
+def _left_out(tally: _Tally, stream: Any) -> list[str]:  # a zeared Stream
+    """Notes on what a subscription left out: samples on denied keys, and samples the stream dropped."""
+    notes = []
+    if tally.denied:
+        notes.append(f'{tally.denied} samples on keys the policy denies were left out')
+    if stream.dropped:
+        notes.append(f'{stream.dropped} samples were dropped: the reader fell behind')
+    return notes
 
 
 @dataclass

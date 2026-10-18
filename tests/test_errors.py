@@ -50,3 +50,12 @@ def test_a_lost_write_carries_its_generated_values():
     assert isinstance(error, MeshError)
     assert error.to_json() == {'error': 'mesh', 'message': 'no reply', 'generated': {'move_id': 'abc'}}
     assert LostWriteError('no reply', generated={}).to_json() == {'error': 'mesh', 'message': 'no reply'}
+
+
+def test_a_timeout_carries_the_last_value_seen():
+    from parsed.errors import TimedOutError
+
+    error = TimedOutError('not met', last={'stock': 3})
+    assert (error.kind, error.exit_code) == ('timeout', 7)
+    assert error.to_json() == {'error': 'timeout', 'message': 'not met', 'last': {'stock': 3}}
+    assert TimedOutError('not met', last=None).to_json()['last'] is None

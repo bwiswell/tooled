@@ -124,8 +124,8 @@ operation and one of its globs matches the contract's name. Then its keys decide
   rule's keys intersect it. Replies carry no keys to filter by afterwards, so a selector that could reach a denied
   key is refused outright, with a hint to narrow the slots. A write (`invoke`) is never widened: every slot must be
   given or bound, so it reaches one key.
-- **What a stream hands on.** `listen` checks each sample's key, which it does carry: a sample on a denied key is
-  left out and counted, rather than the whole stream refused.
+- **What a stream hands on.** `listen` and `wait` check each sample's key, which it does carry: a sample on a
+  denied key is left out and counted, rather than the whole stream refused.
 
 **Variants.** A rule with `variants` covers only the request-union tags its globs match. A deny rule with variants
 refuses those tags, not the contract, and `describe` leaves them out of the request's schema. An allow rule with
