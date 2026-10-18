@@ -1,13 +1,17 @@
 import copy
 
 import pytest
+import seared
 from _support_policy import write
 from jsonschema import Draft202012Validator
+from seared.doc import json_schema
 
 from parsed.catalog import Catalog
 from parsed.errors import RefusedError, UsageError
 from parsed.policy import Rules, load
 from parsed.schemas import (
+    ITEMS,
+    Walk,
     describe,
     describe_variant,
     drop_fields,
@@ -23,6 +27,7 @@ from parsed.schemas import (
     topic,
     variant_classes,
     verbs,
+    walk,
 )
 
 POLICY = """
@@ -183,7 +188,7 @@ class TestDescribe:
         assert 'request' not in doc
         assert 'variants' not in doc
         assert doc['effect'] is None
-        assert [field['name'] for field in doc['reply']] == ['world', 'station', 'stock']
+        assert [field['name'] for field in doc['reply']] == ['world', 'station', 'stock', 'closed']
         assert doc['more'] == {'reply': "parsed describe Station --reply: the reply's whole schema"}
 
     def test_reply_prints_the_whole_reply_schema(self, rules, catalog):
@@ -254,3 +259,110 @@ class TestLayers:
         assert schema == before
         assert folded['allOf'][0]['properties']['kind']['enum'] == ['ping', 'pong']
         assert 'allOf' not in folded['allOf'][0]
+
+
+# ---- paths into a reply ------------------------------------------------------------------------------
+
+
+@seared.seared
+class Rate(seared.Seared):
+    value: float = seared.Float(required=True)
+    rate: float = seared.Float(default=0.0)
+
+
+@seared.seared
+class Start(seared.Seared):
+    speed: int = seared.Int(default=1)
+
+
+@seared.seared
+class Stop(seared.Seared):
+    why: str = seared.Str(default='')
+
+
+@seared.seared
+class Ship(seared.Seared):
+    """Every shape the walker reads: nested, a list, maps, bytes, an optional, a nested union and a flat one."""
+
+    name: str = seared.Str(required=True)
+    fuel: Rate | None = seared.T(Rate, default=None)
+    cargo: list[Rate] = seared.T(Rate, many=True, default_factory=list)
+    numbers: dict[str, float] = seared.Float(keyed=True, default_factory=dict)
+    byname: dict[str, Rate] = seared.T(Rate, keyed=True, default_factory=dict)
+    logo: bytes | None = seared.Bytes(default=None)
+    act: object = seared.Union(variants={'start': Start, 'stop': Stop}, tag_key='action', payload_key='args')
+    mode: object = seared.Union(variants={'calm': Rate, 'drift': Stop}, tag_key='kind')
+
+
+SHIP = json_schema(Ship, mode='dump')
+
+
+class TestWalk:
+    @pytest.mark.parametrize(
+        'parts',
+        [
+            ['name'],
+            ['fuel', 'rate'],
+            ['cargo', ITEMS, 'value'],
+            ['numbers', 'any-key'],  # a map takes any key
+            ['byname', 'any-key', 'value'],
+            ['logo', 'bytes'],  # the summary parsed prints for bytes
+            ['logo', 'sha256'],
+            ['action'],  # a union's tag
+            ['args', 'speed'],  # a nested envelope: each variant's payload under the same key
+            ['args', 'why'],
+            ['kind'],
+            ['value'],  # a flat envelope: a variant's fields at the root
+            ['why'],
+        ],
+    )
+    def test_declared(self, parts):
+        assert walk(SHIP, parts).declared is True
+
+    @pytest.mark.parametrize(
+        ('parts', 'at', 'names'),
+        [
+            (['nmae'], 0, {'name', 'fuel', 'cargo', 'numbers', 'byname', 'logo', 'action', 'args', 'kind'}),
+            (['fuel', 'rat'], 1, {'value', 'rate'}),
+            (['byname', 'x', 'vlue'], 2, {'value', 'rate'}),
+            (['args', 'nope'], 1, {'speed', 'why'}),
+            (['name', 'deeper'], 1, set()),  # a scalar has nothing further
+            (['name', ITEMS], 1, set()),  # nor is it a list
+            (['logo', 'size'], 1, {'bytes', 'sha256'}),
+        ],
+    )
+    def test_undeclared(self, parts, at, names):
+        found = walk(SHIP, parts)
+        assert (found.declared, found.at) == (False, at)
+        assert names <= set(found.names)
+
+    def test_a_list_without_its_step_says_it_is_one(self):
+        found = walk(SHIP, ['cargo', 'value'])
+        assert (found.declared, found.at, found.listed) == (False, 1, True)
+
+    def test_a_whole_number_steps_into_a_list_where_indexes_are_paths(self):
+        assert walk(SHIP, ['cargo', '0', 'value'], indexes=True).declared is True
+        assert walk(SHIP, ['cargo', '0', 'value']).declared is False
+
+    @pytest.mark.parametrize(
+        'schema',
+        [
+            {'properties': {'x': {}}},  # Any: anything at all
+            {'properties': {'x': {'type': 'array', 'prefixItems': [{'type': 'string'}]}}},  # a tuple
+        ],
+    )
+    def test_a_shape_it_cannot_read_is_let_through(self, schema):
+        assert walk(schema, ['x', 'y']) == Walk(declared=None, at=1)
+
+    def test_an_optional_written_as_any_of_null(self):
+        schema = {
+            'properties': {'x': {'anyOf': [{'$ref': '#/$defs/R'}, {'type': 'null'}]}},
+            '$defs': {'R': {'properties': {'v': {'type': 'number'}}}},
+        }
+        assert walk(schema, ['x', 'v']).declared is True
+        assert walk(schema, ['x', 'w']).names == ('v',)
+
+    def test_a_real_reply(self, catalog):
+        schema = json_schema(catalog.get('Status').cls, mode='dump')
+        assert walk(schema, ['logo', 'sha256']).declared is True
+        assert walk(schema, ['up']).declared is True

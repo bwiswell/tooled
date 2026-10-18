@@ -51,7 +51,7 @@ import json
 import logging
 import sys
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from .errors import ParsedError
 
@@ -63,6 +63,9 @@ if TYPE_CHECKING:
     from .catalog import Catalog, Contract
     from .policy import Policy, Rules
 
+
+#: How many of a level's names a refused path's hint lists, when none is close.
+_HINT_NAMES = 12
 
 #: The end of ``parsed --help``: where output goes, and what each exit code means.
 EPILOG = """\
@@ -272,7 +275,7 @@ def emit(result: Any, args: argparse.Namespace) -> None:  # any JSON-ready value
     from .output import as_json, check_size, max_bytes, select, write_out
 
     if args.select:
-        result = select(result, args.select)
+        result = select(result, args.select, held=getattr(args, 'unsure', None))
     text = as_json(result, indent=2 if args.pretty or sys.stdout.isatty() else None)
     out = getattr(args, 'out', None)
     if out:
@@ -359,6 +362,7 @@ def _fetch(args: argparse.Namespace) -> int:
 
     _, loaded, catalog, rules = load(args.policy)
     contract = _readable(catalog, rules, args.contract, 'fetch')
+    _judge(contract, catalog, args)
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
     session = executor.open_session(loaded.mesh)
     try:
@@ -374,6 +378,7 @@ def _query(args: argparse.Namespace) -> int:
 
     path, loaded, catalog, rules = load(args.policy)
     contract = _readable(catalog, rules, args.contract, 'query')
+    _judge(contract, catalog, args)
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
     request = _request(args.request) if args.request is not None else None
     injected = _injected(path, loaded, contract, rules)
@@ -400,6 +405,7 @@ def _invoke(args: argparse.Namespace) -> int:
 
     path, loaded, catalog, rules = load(args.policy)
     contract = _readable(catalog, rules, args.contract, 'invoke')
+    _judge(contract, catalog, args)  # the reply's paths, a dry run's too: it checks the command that will be sent
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
     request = _request(args.request) if args.request is not None else None
     injected = _injected(path, loaded, contract, rules)
@@ -407,7 +413,7 @@ def _invoke(args: argparse.Namespace) -> int:
     if args.dry_run:
         call = executor.prepare(contract, rules, values, request=request, injected=injected)
         secrets = [name for name in injected if name not in generated]
-        emit(executor.preview(contract, call, hidden=secrets), args)
+        emit(executor.preview(contract, call, hidden=secrets), argparse.Namespace(**{**vars(args), 'select': None}))
         _notes(['a dry run: checked, and not sent'])
         return 0
     session = executor.open_session(loaded.mesh)
@@ -435,6 +441,64 @@ def _injected(path: Path, loaded: Policy, contract: Contract, rules: Rules) -> d
 
     names = schemas.injected(contract, rules)
     return {name: policy.resolve(name, loaded.inject[name], base=path.parent).value for name in names}
+
+
+def _judge(contract: Contract, catalog: Catalog, args: argparse.Namespace, *, until: Sequence[Any] = ()) -> None:
+    """Walk ``--select``'s paths (and ``wait``'s ``--until`` paths) against the reply's schema, before the call.
+
+    A path the schema doesn't have is refused here, before anything reaches the mesh. A field it declares may be
+    absent from a value, so such a path is never held to matching; one it can't judge (``args.unsure``) still is.
+
+    Raises:
+        UsageError: A path names no field of the reply.
+    """
+    from seared.doc import json_schema
+
+    from .schemas import ITEMS, walk
+
+    schema = json_schema(contract.cls, mode='dump')
+    label = catalog.label(contract)
+    args.unsure = []
+    for path in args.select or []:
+        parts = [part for name, each in path for part in (name, ITEMS)[: 2 if each else 1]]
+        found = walk(schema, parts)
+        if found.declared is False:
+            _refuse('--select', parts, label, found)
+        args.unsure.append(found.declared is None)
+    for condition in until:  # executor.Conditions
+        found = walk(schema, condition.path, indexes=True)
+        if found.declared is False:
+            _refuse('--until', list(condition.path), label, found)
+
+
+def _refuse(flag: str, parts: Sequence[str], label: str, found: Any) -> NoReturn:  # a schemas.Walk
+    """Refuse a path that names no field: what it names, and what's near where it left the schema."""
+    import difflib
+
+    from .errors import UsageError
+    from .schemas import ITEMS
+
+    def text(chunk: Sequence[str]) -> str:
+        out = ''
+        for part in chunk:
+            out += '[]' if part == ITEMS else ('.' if out else '') + part
+        return out
+
+    where, missing = text(parts[: found.at]), parts[found.at]
+    if missing == ITEMS:
+        hint = f'{where!r} is no list'
+    elif found.listed:
+        step = f'{where}[].{missing}' if flag == '--select' else f'{where}.0.{missing}'
+        hint = f'{where!r} is a list: {step}'
+    elif found.names:
+        close = difflib.get_close_matches(missing, found.names, n=3, cutoff=0.6)
+        names = ', '.join(found.names[:_HINT_NAMES]) + (', …' if len(found.names) > _HINT_NAMES else '')
+        at = f'of {where!r}' if where else 'there'
+        hint = f'did you mean {" or ".join(map(repr, close))}?' if close else f'the fields {at}: {names}'
+    else:
+        hint = f'{where!r} has no fields'
+    msg = f'{flag} {text(parts)!r} names no field of {label}; {hint}'
+    raise UsageError(msg, path=[part for part in parts[: found.at + 1] if part != ITEMS])
 
 
 def _readable(catalog: Catalog, rules: Rules, name: str, verb: str) -> Contract:
@@ -509,7 +573,8 @@ def _finish(result: Any, args: argparse.Namespace, *, sent: bool = False) -> Non
     """Print a call's replies, and its notes on stderr.
 
     Once a write is ``sent``, nothing about the output may read as the write not having happened: a ``--select``
-    path that matches nothing is a note, and a result over the cap says the write was answered.
+    path the schema couldn't judge, matching nothing, is a note rather than an error, and a result over the cap
+    says the write was answered.
     """
     from .errors import TooLargeError
 
@@ -536,13 +601,17 @@ def _notes(notes: Sequence[str]) -> None:
 
 
 def _lenient(value: Any, args: argparse.Namespace, *, meta: bool = False) -> tuple[Any, list[str]]:  # JSON-ready
-    """``--select``'s parts of a result there's no taking back (a write sent, a wait over); a miss is a note."""
+    """``--select``'s parts of a result there's no taking back (a write sent, a wait over).
+
+    A path the schema couldn't judge (``args.unsure``) that matches nothing is a note; the rest were judged before.
+    """
     from .output import path_text
 
     if not args.select or value == []:
         return value, []
     value, found = _picked(value, args.select, meta=meta)
-    missed = [path for path, hit in zip(args.select, found, strict=True) if not hit]
+    held = getattr(args, 'unsure', None) or [True] * len(args.select)
+    missed = [path for path, hit, hold in zip(args.select, found, held, strict=True) if hold and not hit]
     return value, [f'--select {path_text(path)!r} matched nothing' for path in missed]
 
 
@@ -553,6 +622,7 @@ def _listen(args: argparse.Namespace) -> int:
 
     _, loaded, catalog, rules = load(args.policy)
     contract = _readable(catalog, rules, args.contract, 'listen')
+    _judge(contract, catalog, args)
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
 
     line = _Lines(args)
@@ -588,6 +658,7 @@ def _wait(args: argparse.Namespace) -> int:
 
     _, loaded, catalog, rules = load(args.policy)
     contract = _readable(catalog, rules, args.contract, 'wait')
+    _judge(contract, catalog, args, until=args.until)
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
 
     async def run(session: Any) -> executor.Result:  # a zenoh.Session
@@ -672,7 +743,8 @@ def _condition(text: str) -> Any:  # an executor.Condition
 class _Lines:
     """``listen``'s writer: each value, after ``--select``, as one flushed JSON line; one over the cap is left out.
 
-    A path that matches nothing in one value doesn't end the stream; :meth:`notes` says which never matched.
+    A path the schema couldn't judge that matches nothing in one value doesn't end the stream; :meth:`notes` says
+    which never matched.
     """
 
     def __init__(self, args: argparse.Namespace) -> None:
@@ -680,6 +752,7 @@ class _Lines:
 
         self.paths, self.meta = args.select or [], args.meta
         self.cap = max_bytes(args.max_bytes)
+        self.held = getattr(args, 'unsure', None) or [True] * len(self.paths)  # a path a schema couldn't judge
         self.matched = [False] * len(self.paths)
         self.over = 0
 
@@ -707,8 +780,8 @@ class _Lines:
         )
         out += [
             f'--select {path_text(path)!r} matched nothing in the stream'
-            for path, found in zip(self.paths, self.matched, strict=True)
-            if not found
+            for path, found, held in zip(self.paths, self.matched, self.held, strict=True)
+            if held and not found
         ]
         return out
 

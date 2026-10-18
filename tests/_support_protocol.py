@@ -63,6 +63,7 @@ class Station(zeared.Message):
     world: str = zeared.Str(required=True, doc="the world's name")
     station: str = zeared.Str(required=True, doc="the station's key")
     stock: int = zeared.Int(default=0, doc='units in stock')
+    closed: str | None = zeared.Str(default=None, doc='why it is closed, when it is')
 
 
 @zeared.zeared
@@ -130,6 +131,7 @@ class MoveResult(zeared.Message):
     world: str = zeared.Str(required=True, doc="the world's name")
     player: str = zeared.Str(required=True, doc="the player's key")
     ok: bool = zeared.Bool(required=True, doc='whether it moved')
+    reason: str | None = zeared.Str(default=None, doc="why not, when it didn't")
 
 
 @zeared.zeared

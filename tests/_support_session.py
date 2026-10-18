@@ -59,7 +59,8 @@ def world(mesh):
     - Retained: stations ``s1`` and ``s2`` of ``w1`` (stock 3 and 5), ``s1`` of ``w2``, and ``w1``'s status, with
       a logo (bytes).
     - ``LookReply`` answers what it was asked: the variant's kind and fields, the slot captures, and the params.
-    - ``MoveResult`` answers a move, and refuses one to ``nowhere`` (``ok`` false). Some places answer otherwise,
+    - ``MoveResult`` answers a move, and refuses one to ``nowhere`` (``ok`` false, with a ``reason``). Some places
+      answer otherwise,
       as a server might:
       - ``lossy``: the first ask of a ``move_id`` is dropped, unanswered; a repeat is answered;
       - ``slow``: the first ask of a ``move_id`` is held past the timeout, so Zenoh answers ``Timeout``; a repeat
@@ -100,7 +101,9 @@ def world(mesh):
         if to == 'broken':
             ctx.reply_err('the dock is closed')
             return None
-        return demo.MoveResult(world=ctx.captures['world'], player=ctx.captures['player'], ok=to != 'nowhere')
+        ok = to != 'nowhere'
+        reason = None if ok else 'there is nowhere to go'
+        return demo.MoveResult(world=ctx.captures['world'], player=ctx.captures['player'], ok=ok, reason=reason)
 
     demo.MoveResult.on_query(move, session=mesh.session)
     demo.EchoReply.on_query(
