@@ -238,7 +238,8 @@ class TestInvoke:
 
     def test_a_refusal_by_the_server_is_a_reply(self, client, writes, catalog):
         result = self.move(client, writes, catalog, to='nowhere')
-        assert (result.items, result.notes) == ([{'world': 'w1', 'player': 'ann', 'ok': False}], [])
+        refused = {'world': 'w1', 'player': 'ann', 'ok': False, 'reason': 'there is nowhere to go'}
+        assert (result.items, result.notes) == ([refused], [])
 
     def test_a_queryable_that_declares_no_effect(self, client, writes, catalog):
         echo = catalog.get('EchoReply')

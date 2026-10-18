@@ -4,7 +4,8 @@
   its base64 (``{"bytes": n, "sha256": …}``). Fields nested in other classes are reached too; a union's are not.
 - **``--select PATHS``** keeps parts of a result, with its structure: comma-separated paths, dotted
   (``commander.name``), with ``[]`` mapping over a list (``systems[].key``). Applied to each item of a list result,
-  or to the whole of any other. A path that matches nothing in a non-empty result is refused, so a typo shows.
+  or to the whole of any other. A path that matches nothing in a non-empty result is refused, so a typo shows,
+  unless the reply's schema has judged it already (``held``): a field it declares may be absent.
 - **The cap.** A result over ``--max-bytes`` (else ``$PARSED_MAX_BYTES``, else 28,000 bytes) isn't printed: the
   error says its size, the size of each part, and how to get it. 28,000 is just under the 30,000 characters
   Claude Code shows of a command's output inline; past those, it keeps the output in a file and shows only its
@@ -108,16 +109,22 @@ def parse_paths(text: str) -> list[Path_]:
     return paths
 
 
-def select(value: Any, paths: Sequence[Path_]) -> Any:  # a JSON-ready result
+def select(value: Any, paths: Sequence[Path_], *, held: Sequence[bool] | None = None) -> Any:  # JSON-ready
     """The parts of ``value`` the paths name, structure kept: of each item, when ``value`` is a list.
 
+    Args:
+        value: The result.
+        paths: ``--select``'s paths.
+        held: Which paths must match something, when a schema has judged the rest already (a field it declares may
+            be absent); every one, when ``None``.
+
     Raises:
-        UsageError: A path matches nothing, though there was something to match.
+        UsageError: A path held to matching matches nothing, though there was something to match.
     """
     picked, matched = pick(value, paths)
     if value != []:
-        for path, found in zip(paths, matched, strict=True):
-            if not found:
+        for index, (path, found) in enumerate(zip(paths, matched, strict=True)):
+            if not found and (held is None or held[index]):
                 msg = f'--select {path_text(path)!r} matches nothing in the result'
                 raise UsageError(msg)
     return picked
