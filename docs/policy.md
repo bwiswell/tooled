@@ -89,11 +89,20 @@ Request fields every request that declares them carries, each from a source:
 | An environment variable | `env = "NAME"` |
 | A file's whole content, stripped | `file = "path"` |
 | A value in a TOML file | `toml = "path"`, `key = "…"`; and, to pick one table of an array of tables, `table = "…"` with `match = { … }`, which must match exactly one |
+| A value made fresh for each call | `generate = "uuid"`: a uuid4, as 32 lowercase hex digits |
 
 - A relative path is read from the policy file's own directory.
 - An injected field is taken out of the schema `describe` shows, and a request that gives a value for it is refused.
-- A value is never printed: not in a result, an error, or `check`'s summary, which shows only its source and length.
+- A value read from a source is never printed: not in a result, an error, or `check`'s summary, which shows only
+  its source and length.
 - There is no literal source, so a secret can't end up in the policy file.
+- **A generated value** is an id a server can tell a repeat by, such as an order's. It is no secret: a reply may
+  echo it. `check` names its source and makes none.
+
+```toml
+[inject.order_id]               # every request that declares `order_id` carries a fresh one
+generate = "uuid"
+```
 
 ## Rules: `[[allow]]` and `[[deny]]`
 

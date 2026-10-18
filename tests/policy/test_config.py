@@ -151,7 +151,9 @@ class TestChecks:
     @pytest.mark.parametrize(
         ('source', 'match'),
         [
-            ('', 'exactly one of env, file or toml'),
+            ('', 'exactly one of env, file, toml or generate'),
+            ('env = "A"\ngenerate = "uuid"\n', 'exactly one'),
+            ('generate = "uuid"\nkey = "token"\n', 'go with toml, not generate'),
             ('env = "A"\nfile = "b"\n', 'exactly one'),
             ('env = "A"\nkey = "token"\n', 'go with toml'),
             ('file = "a"\nmatch = { x = "y" }\n', 'go with toml'),
@@ -173,3 +175,16 @@ class TestChecks:
             {'world': 'w1'},
             'token',
         )
+
+
+class TestGenerate:
+    def test_a_generated_source_loads(self, tmp_path):
+        from parsed.policy.config import Generator
+
+        source = load(write(tmp_path, '[inject.order_id]\ngenerate = "uuid"\n')).inject['order_id']
+        assert source.generate is Generator.UUID
+
+    def test_an_unknown_generator_is_refused_with_its_path(self, tmp_path):
+        with pytest.raises(PolicyFileError, match='not a valid Generator') as exc:
+            load(write(tmp_path, '[inject.order_id]\ngenerate = "uid"\n'))
+        assert exc.value.path == ('inject', 'order_id', 'generate')

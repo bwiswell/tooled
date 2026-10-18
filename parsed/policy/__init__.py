@@ -2,8 +2,20 @@
 
 from __future__ import annotations
 
-from .config import Op, Policy, find, load
+from .config import Generator, Op, Policy, find, load
 from .rules import Rules, op_of
-from .sources import Injected, describe, resolve
+from .sources import Injected, describe, generated, resolve
 
-__all__ = ['Injected', 'Op', 'Policy', 'Rules', 'describe', 'find', 'load', 'op_of', 'resolve']
+__all__ = [
+    'Generator',
+    'Injected',
+    'Op',
+    'Policy',
+    'Rules',
+    'describe',
+    'find',
+    'generated',
+    'load',
+    'op_of',
+    'resolve',
+]

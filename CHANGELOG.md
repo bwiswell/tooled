@@ -8,6 +8,17 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
+## 0.2.0 — unreleased
+
+**Writes: a contract the policy allows, invoked, and read back.**
+
+### Added
+
+- **Generated request fields.** `[inject.<field>] generate = "uuid"` fills a field with a fresh uuid4, 32 lowercase
+  hex digits, on every call: an id a server can tell a repeat by, such as an order's. Like any injected field it
+  reaches every request that declares it, is left out of `describe`, and is refused if given. Unlike a secret, it
+  may show in a reply. `check` names its source and makes none.
+
 ## 0.1.1 — 2026-10-18
 
 **A policy checked in CI, without its secrets.**

@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import re
 import select
 import signal
 import subprocess
@@ -562,3 +563,45 @@ class TestCheckWithoutResolving:
         code, out, _ = run(capsys, 'check', '--no-resolve', '--connect', '--policy', policy)
         assert code == 0
         assert out['connect']['ok'] is True
+
+
+class TestGenerated:
+    GENERATE = READS + '\n[inject.ask_id]\ngenerate = "uuid"\n'
+
+    @pytest.fixture
+    def policy(self, tmp_path, world, monkeypatch):
+        monkeypatch.setenv('DEMO_TOKEN', 'tok-ann')
+        return str(write(tmp_path, self.GENERATE, head=HEAD.replace('tcp/127.0.0.1:7447', world.endpoint)))
+
+    def test_each_call_sends_a_fresh_value(self, policy, world, capsys):
+        argv = [
+            'query',
+            'LookReply',
+            'player=ann',
+            '--request',
+            '{"kind": "ping", "station": "s1"}',
+            '--policy',
+            policy,
+        ]
+        assert run(capsys, *argv)[0] == 0
+        assert run(capsys, *argv)[0] == 0
+        first, second = (request.ask_id for request in world.asked)
+        assert re.fullmatch('[0-9a-f]{32}', first)
+        assert first != second
+        assert {request.token for request in world.asked} == {'tok-ann'}
+
+    def test_a_given_value_is_refused(self, policy, world, capsys):
+        request = '{"kind": "ping", "station": "s1", "ask_id": "mine"}'
+        code, _, err = run(capsys, 'query', 'LookReply', 'player=ann', '--request', request, '--policy', policy)
+        assert (code, err['error']) == (3, 'refused')
+        assert world.asked == []
+
+    def test_describe_leaves_it_out(self, policy, capsys):
+        _, out, _ = run(capsys, 'describe', 'LookReply', '--policy', policy)
+        assert out['injected'] == ['token', 'ask_id']
+        assert out['request']['properties'] == {}
+
+    def test_check_shows_its_source_and_makes_none(self, policy, capsys):
+        for extra in ([], ['--no-resolve']):
+            _, out, _ = run(capsys, 'check', *extra, '--policy', policy)
+            assert out['inject']['ask_id'] == {'source': 'generate uuid'}

@@ -229,7 +229,9 @@ def _check(args: argparse.Namespace) -> int:
         shown.setdefault(policy.op_of(contract).value, []).append(catalog.label(contract))
     inject: dict[str, Any] = {}
     for name, source in sorted(loaded.inject.items()):
-        if args.no_resolve:
+        if policy.generated(source):
+            inject[name] = {'source': policy.describe(source)}  # made for each call: nothing to read, or show
+        elif args.no_resolve:
             inject[name] = {'source': policy.describe(source), 'resolved': False}
         else:
             found = policy.resolve(name, source, base=path.parent)
