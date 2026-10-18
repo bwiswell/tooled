@@ -17,6 +17,9 @@ world = "w1"
 [inject.token]          # every request that declares `token` carries it
 env = "DEMO_TOKEN"
 
+[inject.order_id]       # made fresh for each call
+generate = "uuid"
+
 [[allow]]
 ops = ["read", "query"]
 keys = ["demo/w1/**"]
@@ -50,6 +53,12 @@ POLICY_ENV = 'PARSED_POLICY'
 DEFAULT_NAME = 'parsed.toml'
 
 
+class Generator(enum.StrEnum):
+    """What a generated value is made as."""
+
+    UUID = 'uuid'  # a fresh uuid4, as 32 lowercase hex digits
+
+
 class Op(enum.StrEnum):
     """What a rule allows or denies: one operation per kind of contract."""
 
@@ -62,7 +71,7 @@ class Op(enum.StrEnum):
 
 @s.seared(unknown='raise')
 class Source(s.Seared):
-    """Where an injected value comes from: exactly one of ``env``, ``file`` or ``toml``."""
+    """Where an injected value comes from: exactly one of ``env``, ``file``, ``toml`` or ``generate``."""
 
     env: str | None = s.Str(default=None, doc='an environment variable holding the value')
     file: str | None = s.Str(default=None, doc='a file whose whole content, stripped, is the value')
@@ -74,6 +83,9 @@ class Source(s.Seared):
         keyed=True, default_factory=dict, doc="with `table`: the values the one table's keys must hold"
     )
     key: str | None = s.Str(default=None, doc='with `toml`: the key whose value is injected')
+    generate: Generator | None = s.Enum(
+        enum=Generator, default=None, doc='a value made fresh for each call: `uuid`, a uuid4 as 32 hex digits'
+    )
 
 
 @s.seared(unknown='raise')
@@ -194,9 +206,9 @@ def _check(policy: Policy) -> None:
 
 
 def _check_source(source: Source, where: tuple[str, ...]) -> None:
-    given = [kind for kind in ('env', 'file', 'toml') if getattr(source, kind) is not None]
+    given = [kind for kind in ('env', 'file', 'toml', 'generate') if getattr(source, kind) is not None]
     if len(given) != 1:
-        msg = f'an inject source is exactly one of env, file or toml, not {given or "none"}'
+        msg = f'an inject source is exactly one of env, file, toml or generate, not {given or "none"}'
         raise PolicyFileError(msg, path=where)
     if source.toml is None:
         extra = [kind for kind in ('table', 'key') if getattr(source, kind) is not None]

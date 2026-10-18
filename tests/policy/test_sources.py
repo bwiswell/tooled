@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from parsed.errors import PolicyFileError
@@ -127,3 +129,19 @@ class TestSecrecy:
     )
     def test_describe_says_where_never_what(self, kwargs, words):
         assert describe(source(**kwargs)) == words
+
+
+class TestGenerate:
+    def test_a_fresh_uuid_each_call(self, tmp_path):
+        source = Source(generate='uuid')
+        first, second = (resolve('order_id', source, base=tmp_path) for _ in range(2))
+        assert first.source == 'generate uuid'
+        assert re.fullmatch('[0-9a-f]{32}', first.value)
+        assert first.value != second.value
+
+    def test_it_is_generated_and_described(self):
+        from parsed.policy.sources import generated
+
+        assert generated(Source(generate='uuid'))
+        assert not generated(Source(env='A'))
+        assert describe(Source(generate='uuid')) == 'generate uuid'

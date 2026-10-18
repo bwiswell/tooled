@@ -9,8 +9,9 @@ and exits with the error's code. stdout carries results only.
 | 2 | ``usage``, ``policy``, ``catalog``: the command, its policy file or its protocol can't be used as given |
 | 3 | ``refused``: the policy refuses the call |
 | 4 | ``validation``: the request doesn't load as its class: seared's error, with its path |
-| 5 | ``mesh``: the session wouldn't open, or the link failed |
+| 5 | ``mesh``: the session wouldn't open, the link failed, or a write got no reply (with its generated values) |
 | 6 | ``too_large``: the result is over the size cap; the error says its size and each part's |
+| 7 | ``timeout``: ``wait`` ended before any value met its conditions; the error holds the last value seen |
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
 
 class ParsedError(Exception):
@@ -87,6 +88,26 @@ class MeshError(ParsedError):
     exit_code = 5
 
 
+class LostWriteError(MeshError):
+    """A write that got no reply, after its retry if it had one: it may or may not have been carried out.
+
+    Args:
+        message: What was asked, and how long parsed waited.
+        generated: The values generated for the request (an order's id, say), so the effect can be looked for.
+    """
+
+    def __init__(self, message: str, *, generated: Mapping[str, str]) -> None:
+        super().__init__(message)
+        self.generated = dict(generated)
+
+    def to_json(self) -> dict[str, Any]:
+        """The error, with the generated values when there are any."""
+        out = super().to_json()
+        if self.generated:
+            out['generated'] = self.generated
+        return out
+
+
 class TooLargeError(ParsedError):
     """The result is over the size cap, so it isn't printed. The error carries what to narrow it by.
 
@@ -107,3 +128,25 @@ class TooLargeError(ParsedError):
     def to_json(self) -> dict[str, Any]:
         """The error, with the result's size, the cap, and each part's size."""
         return {**super().to_json(), 'size': self.size, 'cap': self.cap, 'parts': self.parts}
+
+
+class TimedOutError(ParsedError):
+    """``wait`` ended before any value met its conditions.
+
+    The error carries the last value seen, so the agent sees how far it got.
+
+    Args:
+        message: What was waited for, how long, and how many values were seen.
+        last: The last value seen on a selected key, as ``wait`` prints one; ``None`` when there was none.
+    """
+
+    kind = 'timeout'
+    exit_code = 7
+
+    def __init__(self, message: str, *, last: Any) -> None:  # a JSON-ready value, or None
+        super().__init__(message)
+        self.last = last
+
+    def to_json(self) -> dict[str, Any]:
+        """The error, with the last value seen (``null`` for none)."""
+        return {**super().to_json(), 'last': self.last}

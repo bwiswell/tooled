@@ -20,9 +20,20 @@ and zeared parsed runs on, since a protocol package parsed reads must pin the sa
   each: a retained contract's current values first, then live ones. ``--meta`` adds each one's key, origin and
   time. It stops after ``--count N``, after ``--for DURATION`` (``30``, ``30s``, ``5m``, ``1h``), or on SIGINT or
   SIGTERM, with exit 0: run under a tool that streams lines (Claude Code's Monitor), it reads like a feed.
+- ``invoke CONTRACT [slot=value …] [--request JSON]``: ask a queryable that writes, its request given as
+  ``query``'s is, at one key: every slot given or bound. A refusal the server sends back is a reply, and exits 0.
+  A write nothing answered is asked once more, with the same request, when it carries a generated id, unless
+  ``--no-retry``; still nothing, and it exits 5 with the generated values. ``--dry-run`` builds the request and
+  checks it and the policy, then prints the selector and the request, injected secrets as ``"<injected>"``,
+  without sending anything.
 
-A slot left out widens to every value; a bound one is filled by the policy. ``--timeout`` bounds a query (5 s by
-default).
+- ``wait CONTRACT [slot=value …] --until PATH=VALUE [--until …]``: subscribe as ``listen`` does, until a value
+  meets every condition, and print it: a retained contract already in that state answers at once. A path is dotted
+  (``numbers.fuel``); a value reads as JSON if it can (``40``, ``true``, ``"30%"``), else as a string (``idle``).
+  Past ``--timeout`` (30 s by default), or on SIGINT or SIGTERM, it exits 7 with the last value seen.
+
+A slot left out widens to every value; a bound one is filled by the policy. ``--timeout`` bounds a fetch, a query
+or an invoke (5 s by default), and a wait (30 s).
 
 **Output.** Results go to stdout as JSON, indented on a terminal or with ``--pretty``. ``--select`` keeps parts of
 a result; a result over the cap (``--max-bytes``, else ``$PARSED_MAX_BYTES``, else 28,000 bytes) is refused with
@@ -35,6 +46,7 @@ level, …}``).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import sys
@@ -44,7 +56,8 @@ from typing import TYPE_CHECKING, Any
 from .errors import ParsedError
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    import asyncio
+    from collections.abc import Generator, Sequence
     from pathlib import Path
 
     from .catalog import Catalog, Contract
@@ -63,8 +76,10 @@ exit codes:
   2  usage, the policy file, or the protocol
   3  refused by the policy
   4  a request that does not load: the field at fault is in "path"
-  5  the mesh: the session would not open, or the read failed
+  5  the mesh: the session would not open, a read or a write failed, or a
+     write got no reply: "generated" holds its generated values
   6  a result over the size cap
+  7  wait: no value met the conditions in time; "last" holds the last one seen
 
 The policy is --policy PATH, else $PARSED_POLICY, else ./parsed.toml.
 """
@@ -158,7 +173,67 @@ def build_parser() -> argparse.ArgumentParser:
     listen.add_argument('--for', dest='duration', type=_duration, metavar='DURATION', help='stop after 30, 30s, 5m, 1h')
     listen.add_argument('--meta', action='store_true', help="add each value's key, origin and time")
     listen.set_defaults(run=_listen)
+    _add_invoke(verbs, [common, saving])
+    _add_wait(verbs, [common, saving])
     return parser
+
+
+def _add_invoke(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # argparse's subparsers
+    """``invoke``'s parser."""
+    invoke = verbs.add_parser(
+        'invoke',
+        parents=parents,
+        help='ask a queryable that writes',
+        description=(
+            'Ask a queryable that writes (EFFECT = WRITE or ACTION, or none declared), and print its replies. A '
+            'refusal the server sends back is a reply.'
+        ),
+    )
+    invoke.add_argument('contract', help='a contract: its class name, or module:Class')
+    invoke.add_argument(
+        'slots', nargs='*', metavar='slot=value', help='a slot: a write reaches one key, so each is given or bound'
+    )
+    invoke.add_argument('--timeout', type=_seconds, default=5.0, metavar='S', help='seconds to wait (default 5)')
+    invoke.add_argument('--request', metavar='JSON', help='the request, in its wire form: JSON, - for stdin, @path')
+    invoke.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='build the request and check it, and print it without sending; injected secrets show as <injected>',
+    )
+    invoke.add_argument(
+        '--no-retry',
+        action='store_true',
+        help='after no reply, do not ask once more (a request with a generated id is asked twice by default)',
+    )
+    invoke.set_defaults(run=_invoke)
+
+
+def _add_wait(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # argparse's subparsers
+    """``wait``'s parser."""
+    wait = verbs.add_parser(
+        'wait',
+        parents=parents,
+        help='wait for a retained contract or a stream to hold a value, and print it',
+        description=(
+            'Subscribe to a retained contract or a stream until a value meets every --until, and print it: a '
+            'retained contract already in that state answers at once. Past --timeout, exit 7 with the last value '
+            'seen.'
+        ),
+    )
+    wait.add_argument('contract', help='a contract: its class name, or module:Class')
+    wait.add_argument('slots', nargs='*', metavar='slot=value', help='a slot to narrow by; left out, it widens')
+    wait.add_argument(
+        '--until',
+        action='append',
+        required=True,
+        type=_condition,
+        metavar='PATH=VALUE',
+        help='a dotted path and the value it must equal, read as JSON if it can be (40, true), else as a string; '
+        'repeat for several, all required',
+    )
+    wait.add_argument('--timeout', type=_seconds, default=30.0, metavar='S', help='seconds to wait (default 30)')
+    wait.add_argument('--meta', action='store_true', help="add the value's key, origin and time")
+    wait.set_defaults(run=_wait)
 
 
 def version() -> str:
@@ -229,7 +304,9 @@ def _check(args: argparse.Namespace) -> int:
         shown.setdefault(policy.op_of(contract).value, []).append(catalog.label(contract))
     inject: dict[str, Any] = {}
     for name, source in sorted(loaded.inject.items()):
-        if args.no_resolve:
+        if policy.generated(source):
+            inject[name] = {'source': policy.describe(source)}  # made for each call: nothing to read, or show
+        elif args.no_resolve:
             inject[name] = {'source': policy.describe(source), 'resolved': False}
         else:
             found = policy.resolve(name, source, base=path.parent)
@@ -293,14 +370,13 @@ def _fetch(args: argparse.Namespace) -> int:
 
 
 def _query(args: argparse.Namespace) -> int:
-    from . import executor, policy, schemas
+    from . import executor
 
     path, loaded, catalog, rules = load(args.policy)
     contract = _readable(catalog, rules, args.contract, 'query')
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
     request = _request(args.request) if args.request is not None else None
-    names = schemas.injected(contract, rules)
-    injected = {name: policy.resolve(name, loaded.inject[name], base=path.parent).value for name in names}
+    injected = _injected(path, loaded, contract, rules)
     session = executor.open_session(loaded.mesh)
     try:
         result = executor.query(
@@ -317,6 +393,48 @@ def _query(args: argparse.Namespace) -> int:
         session.close()
     _finish(result, args)
     return 0
+
+
+def _invoke(args: argparse.Namespace) -> int:
+    from . import executor, policy
+
+    path, loaded, catalog, rules = load(args.policy)
+    contract = _readable(catalog, rules, args.contract, 'invoke')
+    values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
+    request = _request(args.request) if args.request is not None else None
+    injected = _injected(path, loaded, contract, rules)
+    generated = [name for name in injected if policy.generated(loaded.inject[name])]
+    if args.dry_run:
+        call = executor.prepare(contract, rules, values, request=request, injected=injected)
+        secrets = [name for name in injected if name not in generated]
+        emit(executor.preview(contract, call, hidden=secrets), args)
+        _notes(['a dry run: checked, and not sent'])
+        return 0
+    session = executor.open_session(loaded.mesh)
+    try:
+        result = executor.invoke(
+            session,
+            contract,
+            rules,
+            values,
+            request=request,
+            injected=injected,
+            generated=generated,
+            retry=not args.no_retry,
+            timeout=args.timeout,
+        )
+    finally:
+        session.close()
+    _finish(result, args, sent=True)
+    return 0
+
+
+def _injected(path: Path, loaded: Policy, contract: Contract, rules: Rules) -> dict[str, str]:
+    """The values the policy injects into ``contract``'s request: each source read, each generated value made."""
+    from . import policy, schemas
+
+    names = schemas.injected(contract, rules)
+    return {name: policy.resolve(name, loaded.inject[name], base=path.parent).value for name in names}
 
 
 def _readable(catalog: Catalog, rules: Rules, name: str, verb: str) -> Contract:
@@ -387,17 +505,49 @@ def _seconds(text: str) -> float:
     return value
 
 
-def _finish(result: Any, args: argparse.Namespace) -> None:  # an executor.Result
-    """Print a read's replies, and its notes on stderr."""
-    emit(result.items, args)
-    for note in result.notes:
+def _finish(result: Any, args: argparse.Namespace, *, sent: bool = False) -> None:  # an executor.Result
+    """Print a call's replies, and its notes on stderr.
+
+    Once a write is ``sent``, nothing about the output may read as the write not having happened: a ``--select``
+    path that matches nothing is a note, and a result over the cap says the write was answered.
+    """
+    from .errors import TooLargeError
+
+    items, notes = result.items, list(result.notes)
+    if sent:
+        items, missed = _lenient(items, args)
+        notes += missed
+        args = argparse.Namespace(**{**vars(args), 'select': None})
+    try:
+        emit(items, args)
+    except TooLargeError as exc:
+        if not sent:
+            raise
+        exc.message = f'the write was sent and answered, but {exc.message}'
+        _notes(notes)
+        raise
+    _notes(notes)
+
+
+def _notes(notes: Sequence[str]) -> None:
+    """Write each note to stderr, as one JSON line."""
+    for note in notes:
         sys.stderr.write(json.dumps({'note': note}) + '\n')
+
+
+def _lenient(value: Any, args: argparse.Namespace, *, meta: bool = False) -> tuple[Any, list[str]]:  # JSON-ready
+    """``--select``'s parts of a result there's no taking back (a write sent, a wait over); a miss is a note."""
+    from .output import path_text
+
+    if not args.select or value == []:
+        return value, []
+    value, found = _picked(value, args.select, meta=meta)
+    missed = [path for path, hit in zip(args.select, found, strict=True) if not hit]
+    return value, [f'--select {path_text(path)!r} matched nothing' for path in missed]
 
 
 def _listen(args: argparse.Namespace) -> int:
     import asyncio
-    import signal
-    import threading
 
     from . import executor
 
@@ -408,14 +558,7 @@ def _listen(args: argparse.Namespace) -> int:
     line = _Lines(args)
 
     async def run(session: Any) -> executor.Result:  # a zenoh.Session
-        stop = asyncio.Event()
-        loop = asyncio.get_running_loop()
-        # A loop takes signal handlers only on the main thread; elsewhere (parsed run inside another program) the
-        # program's own handling stands, and --count or --for ends the stream.
-        signals = (signal.SIGINT, signal.SIGTERM) if threading.current_thread() is threading.main_thread() else ()
-        for signum in signals:
-            loop.add_signal_handler(signum, stop.set)
-        try:
+        with _stopped_by_signals() as stop:
             return await executor.listen(
                 session,
                 contract,
@@ -427,18 +570,103 @@ def _listen(args: argparse.Namespace) -> int:
                 duration=args.duration,
                 stop=stop,
             )
-        finally:
-            for signum in signals:
-                loop.remove_signal_handler(signum)
 
     session = executor.open_session(loaded.mesh)
     try:
         result = asyncio.run(run(session))
     finally:
         session.close()
-    for note in [*result.notes, *line.notes()]:
-        sys.stderr.write(json.dumps({'note': note}) + '\n')
+    _notes([*result.notes, *line.notes()])
     return 0
+
+
+def _wait(args: argparse.Namespace) -> int:
+    import asyncio
+
+    from . import executor
+    from .errors import TimedOutError
+
+    _, loaded, catalog, rules = load(args.policy)
+    contract = _readable(catalog, rules, args.contract, 'wait')
+    values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
+
+    async def run(session: Any) -> executor.Result:  # a zenoh.Session
+        with _stopped_by_signals() as stop:
+            return await executor.wait(
+                session, contract, rules, values, until=args.until, meta=args.meta, within=args.timeout, stop=stop
+            )
+
+    session = executor.open_session(loaded.mesh)
+    try:
+        result = asyncio.run(run(session))
+    except TimedOutError as exc:
+        exc.message, exc.last = _last_shown(exc.message, exc.last, args)
+        raise
+    finally:
+        session.close()
+    value, missed = _lenient(result.items[0], args, meta=args.meta)
+    emit(value, argparse.Namespace(**{**vars(args), 'select': None}))
+    _notes([*result.notes, *missed])
+    return 0
+
+
+def _last_shown(message: str, last: Any, args: argparse.Namespace) -> tuple[str, Any]:  # a JSON-ready value
+    """A timed-out wait's last value, after ``--select``, and left out (the message says so) when over the cap."""
+    from .output import as_json, max_bytes
+
+    if last is None:
+        return message, None
+    if args.select:
+        last, _found = _picked(last, args.select, meta=args.meta)
+    cap, size = max_bytes(args.max_bytes), len(as_json(last, indent=None).encode())
+    if cap and size > cap:
+        note = f'the last value seen is {size:,} bytes, over the {cap:,}-byte cap, so it is left out'
+        note += ': --select keeps parts of it'
+        return f'{message}; {note}', None
+    return message, last
+
+
+def _picked(value: Any, paths: Any, *, meta: bool) -> tuple[Any, list[bool]]:  # a JSON-ready value; parsed paths
+    """``--select``'s parts of one value, or of the value inside its ``--meta`` wrapper; and which paths matched."""
+    from .output import pick
+
+    if not meta:
+        return pick(value, paths)
+    picked, found = pick(value['value'], paths)
+    return {**value, 'value': picked}, found
+
+
+@contextlib.contextmanager
+def _stopped_by_signals() -> Generator[asyncio.Event]:
+    """An event SIGINT or SIGTERM sets, while the block runs on the running loop.
+
+    A loop takes signal handlers only on the main thread; elsewhere (parsed run inside another program) the
+    program's own handling stands, and the verb's own bound ends it.
+    """
+    import asyncio
+    import signal
+    import threading
+
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    signals = (signal.SIGINT, signal.SIGTERM) if threading.current_thread() is threading.main_thread() else ()
+    for signum in signals:
+        loop.add_signal_handler(signum, stop.set)
+    try:
+        yield stop
+    finally:
+        for signum in signals:
+            loop.remove_signal_handler(signum)
+
+
+def _condition(text: str) -> Any:  # an executor.Condition
+    from .errors import UsageError
+    from .executor import Condition
+
+    try:
+        return Condition.parse(text)
+    except UsageError as exc:
+        raise argparse.ArgumentTypeError(exc.message) from exc
 
 
 class _Lines:
@@ -456,12 +684,11 @@ class _Lines:
         self.over = 0
 
     def __call__(self, value: Any) -> None:  # a JSON-ready value
-        from .output import as_json, pick
+        from .output import as_json
 
         if self.paths:
-            picked, found = pick(value['value'] if self.meta else value, self.paths)
+            value, found = _picked(value, self.paths, meta=self.meta)
             self.matched = [a or b for a, b in zip(self.matched, found, strict=True)]
-            value = {**value, 'value': picked} if self.meta else picked
         text = as_json(value, indent=None)
         if self.cap and len(text.encode()) > self.cap:
             self.over += 1

@@ -1,15 +1,18 @@
 import asyncio
+import dataclasses
 import hashlib
+from typing import ClassVar
 
 import _support_protocol as demo
 import pytest
+import zeared
 from _support_policy import write
 from _support_session import free_port
 from zeared import Mode, SessionConfig
 
 from parsed import executor
 from parsed.catalog import Catalog
-from parsed.errors import InvalidRequestError, MeshError, RefusedError, UsageError
+from parsed.errors import InvalidRequestError, LostWriteError, MeshError, RefusedError, TimedOutError, UsageError
 from parsed.executor import open_session
 from parsed.policy import Rules, load
 
@@ -188,6 +191,205 @@ class TestQuery:
             )
 
 
+# ---- writes ---------------------------------------------------------------------------------
+
+WRITES = (
+    POLICY
+    + """
+[[allow]]
+ops = ["invoke"]
+keys = ["demo/w1/**"]
+
+[[deny]]
+ops = ["invoke"]
+keys = ["demo/w1/move/bo"]
+"""
+)
+
+
+@pytest.fixture
+def writes(tmp_path, catalog):
+    return Rules(load(write(tmp_path, WRITES)), catalog)
+
+
+class TestInvoke:
+    def move(self, client, writes, catalog, *, player='ann', to='dock', move_id=None, retry=True, timeout=5):  # noqa: PLR0913
+        """A move by ``player`` to ``to``; with ``move_id``, a generated id the request carries."""
+        contract = catalog.get('MoveResult')
+        given = {} if player is None else {'player': player}
+        injected = {'token': 'tok-ann'} | ({} if move_id is None else {'move_id': move_id})
+        return executor.invoke(
+            client,
+            contract,
+            writes,
+            executor.slot_values(contract, writes, given),
+            request={'to': to},
+            injected=injected,
+            generated=[] if move_id is None else ['move_id'],
+            retry=retry,
+            timeout=timeout,
+        )
+
+    def test_the_request_is_built_with_the_injected_fields_and_sent(self, client, writes, catalog, world):
+        result = self.move(client, writes, catalog)
+        assert (result.items, result.notes) == ([{'world': 'w1', 'player': 'ann', 'ok': True}], [])
+        (sent,) = world.asked
+        assert (sent.token, sent.to) == ('tok-ann', 'dock')
+
+    def test_a_refusal_by_the_server_is_a_reply(self, client, writes, catalog):
+        result = self.move(client, writes, catalog, to='nowhere')
+        assert (result.items, result.notes) == ([{'world': 'w1', 'player': 'ann', 'ok': False}], [])
+
+    def test_a_queryable_that_declares_no_effect(self, client, writes, catalog):
+        echo = catalog.get('EchoReply')
+        result = executor.invoke(client, echo, writes, {'world': 'w1'}, request={'text': 'hi'}, injected={}, timeout=5)
+        assert result.items == [{'world': 'w1', 'text': 'hi'}]
+
+    @pytest.mark.parametrize(
+        ('player', 'message'),
+        [
+            (None, 'a write reaches one key, and demo/w1/move/* could reach more: give player'),
+            ('a$*', 'a write reaches one key, and demo/w1/move/a$* could reach more: give each slot a value'),
+        ],
+    )
+    def test_a_write_reaches_one_key(self, writes, catalog, world, player, message):
+        with pytest.raises(UsageError) as exc:
+            self.move(object(), writes, catalog, player=player)  # refused before a session is used
+        assert exc.value.message.startswith(message)
+        assert world.asked == []
+
+    def test_a_denied_key_is_refused_before_sending(self, client, writes, catalog, world):
+        with pytest.raises(RefusedError, match='invoke on MoveResult at demo/w1/move/bo is denied by deny'):
+            self.move(client, writes, catalog, player='bo')
+        assert world.asked == []
+
+    def test_a_failure_names_the_write(self, writes, catalog, monkeypatch):
+        def refuse(**_kwargs):
+            msg = 'no route'
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(demo.MoveResult, 'query', refuse)
+        with pytest.raises(MeshError, match=r'^the write failed: no route$'):
+            self.move(object(), writes, catalog)
+
+
+class TestRetry:
+    """A write nothing answered, asked once more with the same generated id."""
+
+    move = TestInvoke.move
+    ID = 'a' * 32
+
+    @pytest.mark.parametrize('case', [('lossy', 5), ('slow', 0.3)], ids=['dropped', 'timed-out'])
+    def test_a_lost_reply_is_asked_once_more_with_the_same_id(self, client, writes, catalog, world, case):
+        to, timeout = case
+        result = self.move(client, writes, catalog, to=to, move_id=self.ID, timeout=timeout)
+        assert result.items == [{'world': 'w1', 'player': 'ann', 'ok': True}]
+        assert result.notes == [f'no reply within {timeout:g}s; asked once more with the same move_id']
+        assert [sent.move_id for sent in world.asked] == [self.ID, self.ID]
+
+    def test_still_no_reply_is_a_lost_write_with_its_id(self, client, writes, catalog, world):
+        with pytest.raises(LostWriteError) as exc:
+            self.move(client, writes, catalog, to='void', move_id=self.ID, timeout=0.3)
+        assert exc.value.message == (
+            'no reply to MoveResult within 0.3s, after one retry: it may or may not have been carried out'
+        )
+        assert exc.value.to_json()['generated'] == {'move_id': self.ID}
+        assert len(world.asked) == 2
+
+    def test_no_retry(self, client, writes, catalog, world):
+        with pytest.raises(LostWriteError) as exc:
+            self.move(client, writes, catalog, to='void', move_id=self.ID, retry=False)
+        assert exc.value.message == 'no reply to MoveResult within 5s: it may or may not have been carried out'
+        assert exc.value.generated == {'move_id': self.ID}
+        assert len(world.asked) == 1
+
+    def test_no_generated_id_no_retry(self, client, writes, catalog, world):
+        with pytest.raises(LostWriteError) as exc:
+            self.move(client, writes, catalog, to='void')
+        assert 'generated' not in exc.value.to_json()
+        assert len(world.asked) == 1  # a repeat with nothing to tell it by could do the work twice
+
+    def test_an_error_reply_is_an_answer(self, client, writes, catalog, world):
+        result = self.move(client, writes, catalog, to='broken', move_id=self.ID)
+        assert (result.items, result.notes) == ([], ['MoveResult answered with an error: the dock is closed'])
+        assert len(world.asked) == 1
+
+
+class TestPrepare:
+    def test_a_read_may_still_widen(self, writes, catalog):
+        look = catalog.get('LookReply')
+        call = executor.prepare(look, writes, {'world': 'w1'}, request={'kind': 'pong'}, injected={'token': 't'})
+        assert (call.selector, call.variant) == ('demo/w1/look/*', 'pong')
+
+    def test_the_preview_masks_what_it_is_told_to(self, writes, catalog):
+        move = catalog.get('MoveResult')
+        injected = {'token': 'tok-ann', 'move_id': 'f' * 32}
+        call = executor.prepare(
+            move, writes, {'world': 'w1', 'player': 'ann'}, request={'to': 'dock'}, injected=injected
+        )
+        assert executor.preview(move, call, hidden=['token']) == {
+            'selector': 'demo/w1/move/ann',
+            'variant': None,
+            'request': {'token': '<injected>', 'to': 'dock', 'move_id': 'f' * 32},
+        }
+
+    def test_the_preview_names_the_variant(self, writes, catalog):
+        look = catalog.get('LookReply')
+        values = {'world': 'w1', 'player': 'ann'}
+        call = executor.prepare(
+            look, writes, values, request={'kind': 'ping', 'station': 's1'}, injected={'token': 't'}
+        )
+        preview = executor.preview(look, call, hidden=['token'])
+        assert preview['variant'] == 'ping'
+        assert preview['request'] == {'token': '<injected>', 'kind': 'ping', 'station': 's1'}  # a flat union
+
+
+@zeared.zeared
+class FallbackLook(zeared.Zeared):
+    """A look whose union takes an unknown tag as its developer's variant."""
+
+    token: str = zeared.Str(required=True, doc="the player's token")
+    probe: object = zeared.Union(
+        variants={'ping': demo.Ping, 'pong': demo.Pong, 'dev-peek': demo.Peek}, tag_key='kind', fallback=demo.Peek
+    )
+
+
+class TestVariantFirst:
+    """The policy reads a request's root tag before the request loads, so a denied variant never reaches seared."""
+
+    VALUES: ClassVar[dict[str, str]] = {'world': 'w1', 'player': 'ann'}
+
+    def prepare(self, contract, rules, request):
+        return executor.prepare(contract, rules, self.VALUES, request=request, injected={'token': 't'})
+
+    def test_a_denied_tag_is_refused_whatever_its_fields(self, rules, catalog):
+        with pytest.raises(RefusedError, match="variant 'dev-peek' is denied"):
+            self.prepare(catalog.get('LookReply'), rules, {'kind': 'dev-peek', 'depth': 'deep'})  # loading names depth
+
+    @pytest.mark.parametrize('tag', ['poke', 5, ['ping']])  # a list fails seared outright
+    def test_an_unknown_tag_names_only_the_shown_tags(self, rules, catalog, tag):
+        with pytest.raises(InvalidRequestError) as exc:
+            self.prepare(catalog.get('LookReply'), rules, {'kind': tag, 'station': 's1'})
+        assert exc.value.message == f"LookRequest.kind: Union: unknown tag {tag!r}; expected one of ['ping', 'pong']"
+        assert exc.value.path == ('kind',)
+
+    def test_a_missing_tag_is_for_loading_to_report(self, rules, catalog):
+        with pytest.raises(InvalidRequestError, match="missing tag 'kind'"):
+            self.prepare(catalog.get('LookReply'), rules, {'station': 's1'})
+
+    def test_the_policy_comes_before_the_request(self, writes, catalog):
+        move, values = catalog.get('MoveResult'), {'world': 'w1', 'player': 'bo'}
+        with pytest.raises(RefusedError, match='at demo/w1/move/bo is denied'):  # though the request lacks `to`
+            executor.prepare(move, writes, values, request={}, injected={'token': 't'})
+
+    def test_a_fallback_variant_is_checked_once_loaded(self, rules, catalog):
+        look = dataclasses.replace(catalog.get('LookReply'), request=FallbackLook)
+        with pytest.raises(RefusedError, match="variant 'dev-peek' is denied"):  # poke falls back to dev-peek
+            self.prepare(look, rules, {'kind': 'poke'})
+        with pytest.raises(InvalidRequestError, match='unknown tag 5'):  # a tag is a string, fallback or none
+            self.prepare(look, rules, {'kind': 5})
+
+
 class TestHelpers:
     def test_variant_of(self, catalog):
         look = catalog.get('LookReply')
@@ -277,4 +479,125 @@ class TestListen:
 
         task = asyncio.create_task(executor.listen(client, catalog.get('Station'), rules, {'world': 'w1'}, each=boom))
         with pytest.raises(RuntimeError, match='consumer failed'):
+            await asyncio.wait_for(task, 5)
+
+
+# ---- wait -----------------------------------------------------------------------------------
+
+
+class TestCondition:
+    @pytest.mark.parametrize(
+        ('text', 'path', 'value'),
+        [
+            ('stock=5', ('stock',), 5),
+            ('up=true', ('up',), True),
+            ('logo=null', ('logo',), None),
+            ('fuel=40.5', ('fuel',), 40.5),
+            ('activity=idle', ('activity',), 'idle'),
+            ('mark="30%"', ('mark',), '30%'),
+            ('key=-4,-1.0', ('key',), '-4,-1.0'),  # not JSON: a string
+            ('code=007', ('code',), '007'),  # nor this
+            ('note=a=b', ('note',), 'a=b'),  # the first = splits
+            ('numbers.fuel=3', ('numbers', 'fuel'), 3),
+        ],
+    )
+    def test_parse(self, text, path, value):
+        condition = executor.Condition.parse(text)
+        assert (condition.path, condition.value, condition.text) == (path, value, text)
+
+    @pytest.mark.parametrize('text', ['stock', '=5', 'a..b=1', 'a.=1'])
+    def test_a_malformed_condition(self, text):
+        with pytest.raises(UsageError, match='--until is path=value'):
+            executor.Condition.parse(text)
+
+    def test_met(self):
+        value = {'numbers': {'fuel': 40.0, 'up': True}, 'ships': [{'name': 'a'}, {'name': 'b'}], 'tags': ['x']}
+        met = [
+            'numbers.fuel=40',  # a whole number equals its float
+            'numbers.up=true',
+            'ships.1.name=b',  # a whole number indexes a list
+            'tags=["x"]',
+            'numbers={"fuel": 40, "up": true}',
+        ]
+        unmet = [
+            'numbers.up=1',  # a number is no boolean
+            'numbers.fuel="40"',
+            'ships.2.name=b',
+            'ships.x.name=b',
+            'nope=1',
+            'numbers.fuel.deeper=1',
+        ]
+        assert [executor.Condition.parse(text).met(value) for text in met] == [True] * len(met)
+        assert [executor.Condition.parse(text).met(value) for text in unmet] == [False] * len(unmet)
+
+
+class TestWait:
+    def until(self, *texts):
+        return [executor.Condition.parse(text) for text in texts]
+
+    async def test_a_retained_value_already_so_answers_from_the_replay(self, client, rules, catalog, world):
+        result = await executor.wait(
+            client, catalog.get('Station'), rules, {'world': 'w1'}, until=self.until('stock=5'), within=5
+        )
+        assert (result.items, result.notes) == ([{'world': 'w1', 'station': 's2', 'stock': 5}], [])
+
+    async def test_every_condition_must_hold(self, client, rules, catalog, world):
+        station, values = catalog.get('Station'), {'world': 'w1'}
+        met = await executor.wait(client, station, rules, values, until=self.until('station=s1', 'stock=3'), within=5)
+        assert met.items == [{'world': 'w1', 'station': 's1', 'stock': 3}]
+        with pytest.raises(TimedOutError):
+            await executor.wait(client, station, rules, values, until=self.until('station=s1', 'stock=5'), within=0.3)
+
+    async def test_a_live_value(self, client, rules, catalog, world):
+        notice = catalog.get('Notice')
+        values = executor.slot_values(notice, rules, {'player': 'ann'})
+        task = asyncio.create_task(
+            executor.wait(client, notice, rules, values, until=self.until('text=hello'), meta=True, within=5)
+        )
+        await asyncio.sleep(0.2)
+        await publish_until(
+            task,
+            demo.Notice(world='w1', player='ann', text='not yet'),
+            demo.Notice(world='w1', player='bo', text='hello'),  # another player: not asked for
+            demo.Notice(world='w1', player='ann', text='hello'),
+            session=world.session,
+        )
+        (got,) = (await task).items
+        assert (got['key'], got['origin'], got['value']['text']) == ('demo/w1/notice/ann', 'live', 'hello')
+
+    async def test_the_timeout_carries_the_last_value_seen(self, client, rules, catalog, world):
+        with pytest.raises(TimedOutError) as exc:
+            await executor.wait(
+                client, catalog.get('Station'), rules, {'world': 'w1'}, until=self.until('stock=99'), within=0.3
+            )
+        assert exc.value.message == 'no Station value met stock=99 within 0.3s: 2 seen'
+        assert exc.value.last in (
+            {'world': 'w1', 'station': 's1', 'stock': 3},
+            {'world': 'w1', 'station': 's2', 'stock': 5},
+        )
+        assert (exc.value.kind, exc.value.exit_code) == ('timeout', 7)
+
+    async def test_a_path_no_value_had_is_named(self, client, rules, catalog, world):
+        with pytest.raises(TimedOutError, match=r'2 seen, none with stok$'):
+            await executor.wait(
+                client, catalog.get('Station'), rules, {'world': 'w1'}, until=self.until('stok=5'), within=0.3
+            )
+
+    async def test_nothing_seen(self, client, rules, catalog, world):
+        with pytest.raises(TimedOutError) as exc:
+            await executor.wait(
+                client, catalog.get('Notice'), rules, {'world': 'w1'}, until=self.until('text=hi'), within=0.2
+            )
+        assert (exc.value.message, exc.value.last) == ('no Notice value met text=hi within 0.2s: 0 seen', None)
+
+    async def test_stopped(self, client, rules, catalog, world):
+        stop = asyncio.Event()
+        task = asyncio.create_task(
+            executor.wait(
+                client, catalog.get('Notice'), rules, {'world': 'w1'}, until=self.until('text=hi'), within=30, stop=stop
+            )
+        )
+        await asyncio.sleep(0.1)
+        stop.set()
+        with pytest.raises(TimedOutError, match=r'^stopped before any Notice value met text=hi: 0 seen$'):
             await asyncio.wait_for(task, 5)

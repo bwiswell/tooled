@@ -15,7 +15,7 @@ The examples here read a small protocol, `demo.protocol`, on keys under `demo/{w
 | `Status` | retained, and a presence feed | `demo/{world}/status` |
 | `Notice` | stream | `demo/{world}/notice/{player}` |
 | `LookReply` | queryable, `EFFECT = READ`; its request takes a `token` and a union of `ping`, `pong` and `dev-peek` | `demo/{world}/look/{player}` |
-| `MoveResult` | queryable, `EFFECT = WRITE` | `demo/{world}/move/{player}` |
+| `MoveResult` | queryable, `EFFECT = WRITE`; its request takes a `token`, a `move_id` and where to (`to`) | `demo/{world}/move/{player}` |
 
 ## A whole policy
 
@@ -36,9 +36,17 @@ table = "players"
 match = { world = "w1", player = "ann" }
 key = "token"
 
+[inject.move_id]                # made fresh for each call: an id the server tells a repeat by
+generate = "uuid"
+
 [[allow]]
 ops = ["read", "query"]
 keys = ["demo/w1/**"]
+
+[[allow]]                       # one write, for one player
+ops = ["invoke"]
+contracts = ["MoveResult"]
+keys = ["demo/w1/move/ann"]
 
 [[deny]]                        # deny wins
 ops = ["query"]
@@ -89,17 +97,27 @@ Request fields every request that declares them carries, each from a source:
 | An environment variable | `env = "NAME"` |
 | A file's whole content, stripped | `file = "path"` |
 | A value in a TOML file | `toml = "path"`, `key = "…"`; and, to pick one table of an array of tables, `table = "…"` with `match = { … }`, which must match exactly one |
+| A value made fresh for each call | `generate = "uuid"`: a uuid4, as 32 lowercase hex digits |
 
 - A relative path is read from the policy file's own directory.
 - An injected field is taken out of the schema `describe` shows, and a request that gives a value for it is refused.
-- A value is never printed: not in a result, an error, or `check`'s summary, which shows only its source and length.
+- A value read from a source is never printed: not in a result, an error, or `check`'s summary, which shows only
+  its source and length.
 - There is no literal source, so a secret can't end up in the policy file.
+- **A generated value** is an id a server can tell a repeat by, such as an order's. It is no secret: a reply may
+  echo it. `check` names its source and makes none. A write that carries one is asked once more, with the same
+  value, when nothing answers (see [cli.md](cli.md)).
+
+```toml
+[inject.order_id]               # every request that declares `order_id` carries a fresh one
+generate = "uuid"
+```
 
 ## Rules: `[[allow]]` and `[[deny]]`
 
 | Key | Default | Meaning |
 |---|---|---|
-| `ops` | required | `read`, `query`, `invoke`, `publish`, `unretain`. This version acts on `read` and `query`; the others load, so a policy written now carries forward |
+| `ops` | required | `read`, `query`, `invoke`, `publish`, `unretain`. This version acts on `read`, `query` and `invoke`; `publish` and `unretain` load, so a policy written now carries forward |
 | `contracts` | `["*"]` | globs over contract names, or `module:Class` |
 | `keys` | `["**"]` | Zenoh key expressions (`*` one chunk, `**` any number, `$*` within a chunk) |
 | `variants` | none | globs over the tags of a request's root union; none covers the whole contract |
@@ -108,17 +126,26 @@ Request fields every request that declares them carries, each from a source:
 operation and one of its globs matches the contract's name. Then its keys decide, with Zenoh's own matching:
 
 - **What's shown.** A contract is shown when an allow rule's keys intersect one of its topics (as `[bind]` renders
-  it) and no deny rule covers all of them. `contracts`, `describe` and every read see only what's shown.
-- **What a fetch or a query may reach.** A call renders one selector: the topic with its given and bound slots
-  filled, the rest widened. It is allowed when an allow rule's keys include the whole selector, and no deny rule's
-  keys intersect it. Replies carry no keys to filter by afterwards, so a selector that could reach a denied key is
-  refused outright, with a hint to narrow the slots.
-- **What a stream hands on.** `listen` checks each sample's key, which it does carry: a sample on a denied key is
-  left out and counted, rather than the whole stream refused.
+  it) and no deny rule covers all of them. `contracts`, `describe` and every call see only what's shown.
+- **What a fetch, a query or a write may reach.** A call renders one selector: the topic with its given and bound
+  slots filled, the rest widened. It is allowed when an allow rule's keys include the whole selector, and no deny
+  rule's keys intersect it. Replies carry no keys to filter by afterwards, so a selector that could reach a denied
+  key is refused outright, with a hint to narrow the slots. A write (`invoke`) is never widened: every slot must be
+  given or bound, so it reaches one key.
+- **What a stream hands on.** `listen` and `wait` check each sample's key, which it does carry: a sample on a
+  denied key is left out and counted, rather than the whole stream refused.
 
 **Variants.** A rule with `variants` covers only the request-union tags its globs match. A deny rule with variants
 refuses those tags, not the contract, and `describe` leaves them out of the request's schema. An allow rule with
 variants allows only those tags.
+
+The tag is read from the request as given, before it loads, so a denied variant is refused (exit 3) whatever its
+fields hold, and no error describes them. An error about a tag the union doesn't have names only the tags the
+policy shows.
+
+**Only a union at the request's root is checked.** A union nested deeper, such as one inside a list of follow-on
+steps, carries tags no rule sees. Where those tags matter, the server's own checks are what stop them, or the
+policy denies the contract.
 
 **Names must name something.** A contract name, a variant tag, a bound slot or an injected field written without a
 glob must exist in the protocol, so a typo is refused at load. A glob may match nothing.

@@ -3,8 +3,8 @@
 Typed, policy-guarded access to a [zeared](https://github.com/bwiswell/zeared) mesh, for agents and people.
 
 parsed reads a zeared protocol package and a policy file. Each contract the policy allows becomes something to
-fetch, query or listen to, with a JSON Schema, and every call is checked against the policy, and against the
-contract's own types, before anything reaches the mesh.
+fetch, query, listen to, invoke or wait on, with a JSON Schema, and every call is checked against the policy, and
+against the contract's own types, before anything reaches the mesh.
 
 ## Why `parsed`
 
@@ -28,8 +28,8 @@ parsed runs in the same environment as the protocol packages it reads, and they 
 refuses two sources for one package). Install it as a uv tool, with the protocol beside it:
 
 ```sh
-uv tool install "git+https://github.com/bwiswell/parsed@v0.1.1" --with <protocol-package>
-parsed --version            # parsed 0.1.1 (seared 0.4.3, zeared 0.4.3)
+uv tool install "git+https://github.com/bwiswell/parsed@v0.2.0" --with <protocol-package>
+parsed --version            # parsed 0.2.0 (seared 0.4.3, zeared 0.4.3)
 ```
 
 `--with` takes whatever names the protocol: a path to its checkout, a git URL, or a package name. From a checkout of
@@ -71,6 +71,32 @@ parsed listen Station --meta --count 5      # the current set, then live changes
 parsed fetch Station --select station,stock
 ```
 
+### A write
+
+Say the protocol also has a write queryable `MoveResult` on `demo/{world}/move/{player}`, whose request takes a
+`token`, a `move_id` the server tells a repeat by, and where to (`to`); and a retained `Player` on
+`demo/{world}/player/{player}`. The policy grows a fresh id for each call, and one write it allows:
+
+```toml
+[inject.move_id]                # a fresh uuid for each call, never the agent's
+generate = "uuid"
+
+[[allow]]
+ops = ["invoke"]
+contracts = ["MoveResult"]
+keys = ["demo/w1/move/ann"]
+```
+
+```sh
+parsed describe MoveResult                  # the request left to give: `to` (token and move_id are injected)
+parsed invoke MoveResult player=ann --request '{"to": "s2"}' --dry-run    # what would be sent; nothing is
+parsed invoke MoveResult player=ann --request '{"to": "s2"}'              # the replies; a refusal is one too
+parsed wait Player player=ann --until at=s2                               # until the move shows, 30 s at most
+```
+
+A write reaches one key, so every slot is given or bound. One that gets no reply is asked once more with the same
+`move_id`; still none, and it exits 5 with the id, since it may or may not have been carried out.
+
 ## Documentation
 
 - **[docs/cli.md](docs/cli.md)**: the verbs and their options, the output, the size cap, and the exit codes.
@@ -106,7 +132,8 @@ nothing outside the repo is needed.
 
 ## Status
 
-0.1.1 reads a mesh: `check`, `contracts`, `describe`, `fetch`, `query` and `listen`, under a strict policy file
-with bound slots, injected fields, and allow and deny rules over operations, contracts, keys and union variants.
-Not yet: writes (invoking a write or action queryable, publishing), a long-lived `parsed serve` with an MCP face,
-and per-protocol extensions.
+0.2.0 reads and writes a mesh: `check`, `contracts`, `describe`, `fetch`, `query`, `listen`, `invoke` (with
+`--dry-run`, generated ids, and one retry after a lost reply) and `wait`, under a strict policy file with bound
+slots, injected and generated fields, and allow and deny rules over operations, contracts, keys and union
+variants. Not yet: publishing and unretaining, a long-lived `parsed serve` with an MCP face, and per-protocol
+extensions.
