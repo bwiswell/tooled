@@ -16,6 +16,7 @@ from _support_session import free_port
 
 import parsed
 from parsed.cli import main, version
+from parsed.errors import ParsedError
 
 POLICY = """
 [bind]
@@ -383,7 +384,8 @@ class TestInvoke:
 
     def test_a_refusal_by_the_server_exits_zero(self, writes, capsys):
         argv = ['invoke', 'MoveResult', 'player=ann', '--request', '{"to": "nowhere"}', '--policy', writes]
-        assert run(capsys, *argv)[:2] == (0, [{'world': 'w1', 'player': 'ann', 'ok': False}])
+        refused = {'world': 'w1', 'player': 'ann', 'ok': False, 'reason': 'there is nowhere to go'}
+        assert run(capsys, *argv)[:2] == (0, [refused])
 
     def test_a_queryable_that_declares_no_effect(self, writes, capsys):
         code, out, _ = run(capsys, 'invoke', 'EchoReply', '--request', '{"text": "hi"}', '--policy', writes)
@@ -450,24 +452,80 @@ class TestInvoke:
         assert out['visible']['invoke'] == ['EchoReply', 'MoveResult']
 
 
+class TestRefusedPaths:
+    """A path that names no field is refused before the call, with what's near where it left the schema."""
+
+    @pytest.mark.parametrize(
+        ('given', 'hint'),
+        [
+            ('stok', "did you mean 'stock'?"),
+            ('zzzz', 'the fields there: world, station, stock, closed'),
+            ('station.x', "'station' has no fields"),
+            ('stock[]', "'stock' is no list"),
+        ],
+    )
+    def test_the_hint(self, reads, capsys, given, hint):
+        code, _, err = run(capsys, 'fetch', 'Station', '--select', given, '--policy', reads)
+        assert (code, err['message']) == (2, f'--select {given!r} names no field of Station; {hint}')
+
+    def test_a_path_the_schema_cannot_judge_is_held_to_matching(self, reads, capsys, monkeypatch):
+        import seared.doc
+
+        monkeypatch.setattr(seared.doc, 'json_schema', lambda _cls, mode: {'properties': {'station': {}}})  # Any
+        code, _, err = run(capsys, 'fetch', 'Station', '--select', 'station.zzz', '--policy', reads)
+        assert (code, err['message']) == (2, "--select 'station.zzz' matches nothing in the result")
+
+    @pytest.mark.parametrize(
+        ('flag', 'parts', 'found', 'hint'),
+        [
+            ('--select', ['cargo', 'value'], {'at': 1, 'listed': True}, "'cargo' is a list: cargo[].value"),
+            ('--until', ['cargo', 'value'], {'at': 1, 'listed': True}, "'cargo' is a list: cargo.0.value"),
+            ('--select', ['fuel', 'zzz'], {'at': 1, 'names': ('value', 'rate')}, "the fields of 'fuel': value, rate"),
+            (
+                '--select',
+                ['zzz'],
+                {'at': 0, 'names': tuple('abcdefghijklm')},
+                'the fields there: a, b, c, d, e, f, g, h, i, j, k, l, …',
+            ),
+        ],
+    )
+    def test_hints_on_other_shapes(self, flag, parts, found, hint):
+        from parsed.cli import _refuse
+        from parsed.schemas import Walk
+
+        with pytest.raises(ParsedError) as exc:
+            _refuse(flag, parts, 'Ship', Walk(declared=False, **found))
+        assert exc.value.message.endswith(f'; {hint}')
+        assert exc.value.path == tuple(parts[: found['at'] + 1])
+
+
 class TestWriteOutput:
     """Once a write is sent, nothing about the output may read as the write not having happened."""
 
     ARGV = ('invoke', 'MoveResult', 'player=ann', '--request', '{"to": "dock"}')
 
-    def test_a_select_that_misses_is_a_note(self, writes, world, capsys):
+    def test_a_declared_field_absent_is_quiet(self, writes, world, capsys):
         code, out, err = run(capsys, *self.ARGV, '--select', 'ok,reason', '--policy', writes)
-        assert (code, out, err) == (0, [{'ok': True}], {'note': "--select 'reason' matched nothing"})
+        assert (code, out, err) == (0, [{'ok': True}], None)  # an accepted move has no reason
         assert len(world.asked) == 1
+
+    def test_a_path_that_names_no_field_is_refused_before_sending(self, writes, world, capsys):
+        code, _, err = run(capsys, *self.ARGV, '--select', 'ok,reasn', '--policy', writes)
+        assert (code, err['message']) == (2, "--select 'reasn' names no field of MoveResult; did you mean 'reason'?")
+        assert world.asked == []
 
     def test_a_reply_over_the_cap_says_the_write_was_sent(self, writes, capsys):
         code, out, err = run(capsys, *self.ARGV, '--max-bytes', '10', '--policy', writes)
         assert (code, out, err['error']) == (6, None, 'too_large')
         assert err['message'].startswith('the write was sent and answered, but the result is')
 
-    def test_a_dry_run_still_refuses_a_select_that_misses(self, writes, capsys):
+    def test_a_dry_run_checks_select_against_the_reply_and_prints_the_preview_whole(self, writes, capsys):
         code, _, err = run(capsys, *self.ARGV, '--dry-run', '--select', 'nope', '--policy', writes)
-        assert (code, err['message']) == (2, "--select 'nope' matches nothing in the result")
+        assert code == 2
+        assert err['message'].startswith("--select 'nope' names no field of MoveResult")
+        code, out, _ = run(capsys, *self.ARGV, '--dry-run', '--select', 'ok,reason', '--policy', writes)
+        assert code == 0
+        assert set(out) == {'selector', 'variant', 'request'}
 
 
 class TestRetry:
@@ -605,10 +663,24 @@ class TestWait:
         assert code == 0
         assert (out['key'], out['origin'], out['value']['stock']) == ('demo/w1/station/s1', 'replay', 3)
 
-    def test_select_keeps_parts_and_notes_a_miss(self, reads, capsys):
-        argv = ['wait', 'Station', 'station=s2', '--until', 'stock=5', '--select', 'stock,stok', '--policy', reads]
+    def test_select_keeps_parts_and_an_absent_field_is_quiet(self, reads, capsys):
+        argv = ['wait', 'Station', 'station=s2', '--until', 'stock=5', '--select', 'stock,closed', '--policy', reads]
         code, out, err = run(capsys, *argv)
-        assert (code, out, err) == (0, {'stock': 5}, {'note': "--select 'stok' matched nothing"})
+        assert (code, out, err) == (0, {'stock': 5}, None)
+
+    @pytest.mark.parametrize(
+        ('flag', 'given', 'message'),
+        [
+            ('--select', 'stok', "--select 'stok' names no field of Station; did you mean 'stock'?"),
+            ('--until', 'stok=5', "--until 'stok' names no field of Station; did you mean 'stock'?"),
+        ],
+    )
+    def test_a_path_that_names_no_field_is_refused_at_once(self, reads, capsys, flag, given, message):
+        argv = ['wait', 'Station', '--until', 'stock=5', flag, given, '--timeout', '30', '--policy', reads]
+        started = time.monotonic()
+        code, _, err = run(capsys, *argv)
+        assert (code, err['message']) == (2, message)
+        assert time.monotonic() - started < 5  # not after the timeout
 
     def test_the_timeout_exits_seven_with_the_last_value(self, reads, capsys):
         argv = ['wait', 'Station', '--until', 'stock=99', '--timeout', '0.3', '--select', 'station']
@@ -680,10 +752,15 @@ class TestOutput:
         assert code == 0
         assert out == {'visible': {'read': ['Notice', 'Seen', 'Station', 'Status', 'Trace']}, 'hidden': 2}
 
-    def test_a_select_that_matches_nothing(self, reads, capsys):
+    def test_a_select_that_names_no_field(self, reads, capsys):
         code, _, err = run(capsys, 'fetch', 'Station', '--select', 'stok', '--policy', reads)
         assert code == 2
-        assert err['message'] == "--select 'stok' matches nothing in the result"
+        assert err['message'] == "--select 'stok' names no field of Station; did you mean 'stock'?"
+        assert err['path'] == ['stok']
+
+    def test_a_declared_field_absent_everywhere_is_quiet(self, reads, capsys):
+        code, out, err = run(capsys, 'fetch', 'Station', '--select', 'station,closed', '--policy', reads)
+        assert (code, out, err) == (0, [{'station': 's1'}, {'station': 's2'}], None)
 
     def test_a_malformed_select_is_a_usage_error(self, reads, capsys):
         with pytest.raises(SystemExit) as exc:
@@ -751,11 +828,22 @@ class TestListenOutput:
         assert out == ''
         assert lines(err) == [{'note': '2 values over the 20-byte cap were left out; --select narrows them'}]
 
-    def test_a_path_that_never_matched_is_noted(self, reads, capsys):
-        assert main(['listen', 'Station', '--count', '2', '--select', 'station,stok', '--policy', reads]) == 0
+    def test_a_path_that_names_no_field_is_refused_before_subscribing(self, reads, capsys):
+        code, out, err = run(capsys, 'listen', 'Station', '--count', '2', '--select', 'station,stok', '--policy', reads)
+        assert (code, out, err['message']) == (
+            2,
+            None,
+            "--select 'stok' names no field of Station; did you mean 'stock'?",
+        )
+
+    def test_a_declared_path_that_never_matched_is_quiet(self, reads, capsys):
+        assert main(['listen', 'Station', '--count', '2', '--select', 'station,closed', '--policy', reads]) == 0
         out, err = capsys.readouterr()
-        assert len(out.splitlines()) == 2
-        assert lines(err) == [{'note': "--select 'stok' matched nothing in the stream"}]
+        assert [json.loads(line) for line in out.splitlines()] in (
+            [{'station': 's1'}, {'station': 's2'}],
+            [{'station': 's2'}, {'station': 's1'}],
+        )
+        assert err == ''
 
 
 def test_the_help_names_every_exit_code(capsys):
@@ -799,6 +887,40 @@ class TestCheckWithoutResolving:
         code, out, _ = run(capsys, 'check', '--no-resolve', '--connect', '--policy', policy)
         assert code == 0
         assert out['connect']['ok'] is True
+
+
+class TestPathVariables:
+    BODY = """
+[inject.token]
+toml = "${DEMO_CONFIG:-~/.config}/demo/ids.toml"
+key = "token"
+
+[[allow]]
+ops = ["read"]
+keys = ["demo/w1/**"]
+"""
+
+    def test_check_shows_the_path_it_read(self, tmp_path, capsys, monkeypatch):
+        (tmp_path / 'cfg' / 'demo').mkdir(parents=True)
+        (tmp_path / 'cfg' / 'demo' / 'ids.toml').write_text('token = "tok-from-cfg"\n')
+        monkeypatch.setenv('DEMO_CONFIG', str(tmp_path / 'cfg'))
+        code, out, _ = run(capsys, 'check', '--policy', str(write(tmp_path, self.BODY)))
+        assert code == 0
+        assert out['inject']['token'] == {
+            'source': 'toml ${DEMO_CONFIG:-~/.config}/demo/ids.toml, key token',
+            'length': len('tok-from-cfg'),
+            'path': str(tmp_path / 'cfg' / 'demo' / 'ids.toml'),
+        }
+
+    def test_no_resolve_expands_nothing(self, tmp_path, capsys, monkeypatch):
+        monkeypatch.delenv('DEMO_CONFIG', raising=False)
+        body = self.BODY.replace('${DEMO_CONFIG:-~/.config}', '${DEMO_CONFIG}')  # no default: unset is an error
+        policy = str(write(tmp_path, body))
+        code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', policy)
+        assert (code, out['inject']['token']['resolved']) == (0, False)
+        code, _, err = run(capsys, 'check', '--policy', policy)
+        assert (code, err['error']) == (2, 'policy')
+        assert '${DEMO_CONFIG}' in err['message']
 
 
 class TestGenerated:

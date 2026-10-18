@@ -71,8 +71,9 @@ and shows the first 2 KB. parsed's cap sits just under that, at 28,000 bytes, an
 size of each part instead:
 
 - the parts say where the size is; `--select` keeps what's wanted (`--select systems[].key,systems[].name`).
-  After a write is sent, or a wait is over, a path that matches nothing is a note rather than an error, so the
-  result isn't lost to a guess at a field;
+  Its paths are checked against the contract's schema before the call: a guess at a field that doesn't exist is
+  refused at once, nothing sent, with the nearest names (`did you mean 'stock'?`); a field that's declared but
+  absent from a value is just left out;
 - `--out FILE` writes the whole result for reading in pieces;
 - `describe` is layered for the same reason: a large reply schema shows as a field list, and a large request union
   as its list of tags.

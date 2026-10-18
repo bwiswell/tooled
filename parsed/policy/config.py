@@ -206,10 +206,17 @@ def _check(policy: Policy) -> None:
 
 
 def _check_source(source: Source, where: tuple[str, ...]) -> None:
+    from .sources import path_problem
+
     given = [kind for kind in ('env', 'file', 'toml', 'generate') if getattr(source, kind) is not None]
     if len(given) != 1:
         msg = f'an inject source is exactly one of env, file, toml or generate, not {given or "none"}'
         raise PolicyFileError(msg, path=where)
+    for kind in ('file', 'toml'):  # a path's variables are checked as written: no environment is read at load
+        text = getattr(source, kind)
+        problem = path_problem(text) if text is not None else None
+        if problem is not None:
+            raise PolicyFileError(problem, path=(*where, kind))
     if source.toml is None:
         extra = [kind for kind in ('table', 'key') if getattr(source, kind) is not None]
         if source.match:

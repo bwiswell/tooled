@@ -8,6 +8,30 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
+## 0.2.1 — 2026-10-18
+
+**Paths that know their schema, and variables in inject paths.**
+
+### Added
+
+- **Variables in an inject source's path.** A `file` or `toml` path may hold `${NAME}`, or `${NAME:-default}`, the
+  default when `NAME` is unset or empty: `toml = "${XDG_CONFIG_HOME:-~/.config}/demo/identity.toml"` reads where a
+  client keeps its identity, wherever that is. They expand as the source is read, before `~`. An unset `${NAME}`
+  with no default is refused, never read as empty, and a malformed one, or a bare `$NAME`, is refused at load with
+  its path. `check` shows the path each source read; `--no-resolve` expands nothing.
+
+### Changed
+
+- **`--select` paths are checked against the contract's schema, before the call.** On `fetch`, `query`, `invoke`,
+  `listen` and `wait`, a path that names no field of the reply is refused (exit 2) before anything reaches the
+  mesh, so a typo on a write is caught before it's sent, with the names nearest it (`did you mean 'stock'?`). A
+  field the schema declares but a value leaves out, such as an optional one, is quiet: no error, and no note. On
+  `check`, `contracts` and `describe`, a path must still match something, as before.
+- **`wait --until` paths take the same check,** so `--until activty=idle` is refused at once rather than after the
+  timeout.
+- **`invoke --dry-run` checks `--select` against the reply's schema,** as the real call would, and prints its
+  preview whole.
+
 ## 0.2.0 — 2026-10-18
 
 **Writes: a contract the policy allows, invoked, and read back.**

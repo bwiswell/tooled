@@ -14,11 +14,15 @@ Every schema is seared's own (``seared.doc.json_schema`` and ``field_schema``), 
 field list (each top-level field's name, type and doc), and a request's root union folds to its tag list, its
 branches left out. ``--reply`` prints the reply's whole schema, and ``--variant TAG`` one variant's; the document's
 ``more`` names those commands.
+
+**A path into a reply** (``--select``, ``wait --until``) is judged against the reply's dump schema by :func:`walk`,
+before the call: the schema declares it, has no such field, or takes a shape the walker can't read.
 """
 
 from __future__ import annotations
 
 import copy
+import dataclasses
 from typing import TYPE_CHECKING, Any
 
 from seared.doc import field_schema, introspect, is_seared_class, json_schema
@@ -28,6 +32,8 @@ from .errors import RefusedError, UsageError
 from .policy import Op, op_of
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from .catalog import Contract
     from .policy import Rules
 
@@ -321,3 +327,135 @@ def _refs(node: Any) -> set[str]:  # a JSON Schema node
         for value in node:
             found |= _refs(value)
     return found
+
+
+# ---- paths into a reply ------------------------------------------------------------------------------
+
+#: A step into a list's items, in a path :func:`walk` takes: ``--select``'s ``[]``.
+ITEMS = '[]'
+
+#: A scalar's JSON Schema types: a path that goes on past one names nothing.
+_SCALARS = frozenset({'string', 'number', 'integer', 'boolean', 'null'})
+
+
+@dataclasses.dataclass(frozen=True)
+class Walk:
+    """What :func:`walk` made of a path.
+
+    Args:
+        declared: Whether the schema has the path; ``None`` when it takes a shape the walker can't read.
+        at: The index of the first part the schema doesn't have (or can't tell), else the path's length.
+        names: The names the schema offers where the path left it, for a hint.
+        listed: Whether the path left it at a list, which only a step into its items enters.
+    """
+
+    declared: bool | None
+    at: int
+    names: tuple[str, ...] = ()
+    listed: bool = False  # the path left the schema at a list, which a step into its items would have entered
+
+
+@dataclasses.dataclass
+class _Offer:
+    """What a schema node lets a path name next."""
+
+    names: dict[str, Any] = dataclasses.field(default_factory=dict)  # a field's name, and its schema
+    items: Any = None  # a list's item schema
+    keys: Any = None  # a map's value schema: any key leads to it
+    known: bool = True  # False: a shape the walker doesn't read
+
+    def add(self, names: dict[str, Any]) -> None:
+        """Offer ``names``; a name offered already (a nested envelope's payload key, in each variant) is either."""
+        for name, node in names.items():
+            self.names[name] = node if name not in self.names else {'anyOf': [self.names[name], node]}
+
+    def merge(self, other: _Offer) -> None:
+        """Offer what ``other`` offers too: a union's variants, or the branches of an ``anyOf``."""
+        self.add(other.names)
+        self.keys = self.keys if other.keys is None else other.keys
+        self.items = self.items if other.items is None else other.items
+
+
+def walk(schema: dict[str, Any], parts: Sequence[str], *, indexes: bool = False) -> Walk:
+    """Judge a path against a dump schema (seared's, from ``json_schema(cls, mode='dump')``).
+
+    Each part is a field's name, or :data:`ITEMS` to step into a list. A map takes any key. A ``Bytes`` field takes
+    ``bytes`` and ``sha256``, the summary parsed prints in its place. A union offers the fields of every variant.
+
+    Args:
+        schema: The whole schema, its ``$defs`` included.
+        parts: The path.
+        indexes: Whether a whole number steps into a list, as in ``wait --until`` (``ships.0.name``).
+    """
+    node: Any = schema
+    for at, part in enumerate(parts):
+        offer = _offer(schema, node)
+        if not offer.known:
+            return Walk(declared=None, at=at)
+        if part == ITEMS or (indexes and part.isdigit() and offer.items is not None):
+            if offer.items is None:
+                return Walk(declared=False, at=at, names=tuple(offer.names))
+            node = offer.items
+        elif part in offer.names:
+            node = offer.names[part]
+        elif offer.keys is not None:
+            node = offer.keys
+        else:
+            return Walk(declared=False, at=at, names=tuple(offer.names), listed=offer.items is not None)
+    return Walk(declared=True, at=len(parts))
+
+
+def _offer(schema: dict[str, Any], node: Any) -> _Offer:  # a JSON Schema node
+    """What ``node`` lets a path name next: its properties, and its unions' variants' and branches'."""
+    node = _deref(schema, node)
+    if not isinstance(node, dict):
+        return _Offer(known=False)
+    if node.get('contentEncoding') == 'base64':
+        return _Offer(names={'bytes': {'type': 'integer'}, 'sha256': {'type': 'string'}})
+    offer = _Offer()
+    found = False
+    if isinstance(node.get('properties'), dict):
+        offer.add(node['properties'])
+        found = True
+    if isinstance(node.get('additionalProperties'), dict):
+        offer.keys, found = node['additionalProperties'], True
+    if node.get('type') == 'array' and isinstance(node.get('items'), dict):
+        offer.items, found = node['items'], True
+    for part in [*_union_parts(node), *_alternatives(node)]:
+        inner = _offer(schema, part)
+        if not inner.known:
+            return inner
+        offer.merge(inner)
+        found = True
+    if found or _is_scalar(node):
+        return offer  # a scalar offers nothing further to name
+    return _Offer(known=False)
+
+
+def _alternatives(node: dict[str, Any]) -> list[Any]:  # JSON Schema nodes
+    """A node's ``anyOf`` or ``oneOf`` branches, but ``null``'s: any of them may hold the path."""
+    branches = [*node.get('anyOf', ()), *node.get('oneOf', ())]
+    return [branch for branch in branches if isinstance(branch, dict) and branch.get('type') != 'null']
+
+
+def _union_parts(node: dict[str, Any]) -> list[Any]:  # JSON Schema nodes
+    """A node's ``allOf`` entries, and each ``if``/``then`` branch's ``then``: a union's envelope and variants."""
+    entries = [entry for entry in node.get('allOf', ()) if isinstance(entry, dict)]
+    return [entry for entry in entries if 'if' not in entry] + [entry['then'] for entry in entries if 'then' in entry]
+
+
+def _is_scalar(node: dict[str, Any]) -> bool:  # a JSON Schema node
+    kind = node.get('type')
+    if isinstance(kind, list):
+        return bool(kind) and set(kind) <= _SCALARS
+    return kind in _SCALARS or 'enum' in node or 'const' in node
+
+
+def _deref(schema: dict[str, Any], node: Any) -> Any:  # a JSON Schema node
+    """``node``, its ``$ref`` (to the schema's own ``$defs``) followed."""
+    seen = set()
+    while isinstance(node, dict) and isinstance(node.get('$ref'), str) and node['$ref'] not in seen:
+        seen.add(node['$ref'])
+        name = node['$ref'].removeprefix('#/$defs/')
+        node = schema.get('$defs', {}).get(name, {})
+    return node

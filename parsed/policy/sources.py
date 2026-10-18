@@ -6,11 +6,17 @@ end up there.
 
 A **generated** value is made fresh for each call (``generate = "uuid"``): an id a server can tell a repeat by,
 say. It is no secret: a reply may echo it, and a lost write's error names it.
+
+A ``file`` or ``toml`` **path** may hold variables: ``${NAME}``, or ``${NAME:-default}``, the default when ``NAME``
+is unset or empty, as in a shell (``${XDG_CONFIG_HOME:-~/.config}/farlandia/identity.toml``). They're expanded as
+the source is read, then a leading ``~``; a relative result is read from the policy file's directory. An unset
+variable with no default is refused, never read as empty. A path is no secret: ``check`` shows the one it read.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 import uuid
 from dataclasses import dataclass, field
@@ -23,13 +29,34 @@ if TYPE_CHECKING:
     from .config import Source
 
 
+#: A variable in a source's path: ``${NAME}``, or ``${NAME:-default}``.
+VARIABLE = re.compile(r'\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}')
+
+#: A ``$`` that starts no variable this syntax reads: a bare ``$NAME``, or a ``${`` that isn't one.
+_STRAY = re.compile(r'\$(\{|[A-Za-z_][A-Za-z0-9_]*)')
+
+
 @dataclass(frozen=True, slots=True)
 class Injected:
-    """A resolved value, and where it came from. Its ``repr`` leaves the value out."""
+    """A resolved value, where it came from, and the path it read, if any. Its ``repr`` leaves the value out."""
 
     name: str
     source: str
     value: str = field(repr=False)
+    path: str | None = None
+
+
+def path_problem(text: str) -> str | None:
+    """What's wrong with the variables in a source's path, if anything, read without expanding them."""
+    for match in VARIABLE.finditer(text):
+        if match.group(2) is not None and '$' in match.group(2):
+            return f'{text!r}: a default holds no variable ({match.group(0)})'
+    stray = _STRAY.search(VARIABLE.sub('', text))
+    if stray is None:
+        return None
+    if stray.group(1) == '{':
+        return f'{text!r}: a variable is ${{NAME}} or ${{NAME:-default}}, NAME a letter or _, then letters or digits'
+    return f'{text!r}: write a variable as ${{{stray.group(1)}}}'
 
 
 def generated(source: Source) -> bool:
@@ -75,17 +102,32 @@ def resolve(name: str, source: Source, *, base: Path) -> Injected:
             raise PolicyFileError(msg, path=where)
         return Injected(name, describe(source), value)
     if source.file is not None:
-        text = _read(_path(source.file, base), name, where)
-        value = text.strip()
+        path = _path(source.file, base, name, where)
+        value = _read(path, name, where).strip()
         if not value:
-            msg = f'inject {name!r}: {source.file} is empty'
+            msg = f'inject {name!r}: {path} is empty'
             raise PolicyFileError(msg, path=where)
-        return Injected(name, describe(source), value)
-    return Injected(name, describe(source), _from_toml(name, source, base, where))
+        return Injected(name, describe(source), value, str(path))
+    if source.toml is None:  # the policy's checks make a source with no env or file a whole toml one
+        msg = f'inject {name!r}: a source is env, file, or toml with its key'
+        raise PolicyFileError(msg, path=where)
+    path = _path(source.toml, base, name, where)
+    return Injected(name, describe(source), _from_toml(name, source, path, where), str(path))
 
 
-def _path(text: str, base: Path) -> Path:
-    path = Path(text).expanduser()
+def _path(text: str, base: Path, name: str, where: tuple[str, ...]) -> Path:
+    """A source's path: its variables expanded, then ``~``; relative to ``base`` (the policy's directory)."""
+
+    def value(match: re.Match[str]) -> str:
+        variable, default = match.group(1), match.group(2)
+        if os.environ.get(variable):
+            return os.environ[variable]
+        if default is not None:
+            return default
+        msg = f'inject {name!r}: ${{{variable}}} in {text!r} is not set, and has no default (${{{variable}:-…}})'
+        raise PolicyFileError(msg, path=where)
+
+    path = Path(VARIABLE.sub(value, text)).expanduser()
     return path if path.is_absolute() else base / path
 
 
@@ -97,12 +139,11 @@ def _read(path: Path, name: str, where: tuple[str, ...]) -> str:
         raise PolicyFileError(msg, path=where) from exc
 
 
-def _from_toml(name: str, source: Source, base: Path, where: tuple[str, ...]) -> str:
-    toml, key = source.toml, source.key
-    if toml is None or key is None:  # the policy's checks make a source with no env or file a whole toml one
-        msg = f'inject {name!r}: a source is env, file, or toml with its key'
+def _from_toml(name: str, source: Source, path: Path, where: tuple[str, ...]) -> str:
+    key = source.key
+    if key is None:  # the policy's checks give every toml source its key
+        msg = f'inject {name!r}: a toml source names its key'
         raise PolicyFileError(msg, path=where)
-    path = _path(toml, base)
     try:
         data = tomllib.loads(_read(path, name, where))
     except tomllib.TOMLDecodeError as exc:

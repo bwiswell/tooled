@@ -110,6 +110,12 @@ class TestSelect:
     def test_pick_refuses_nothing_and_says_what_matched(self):
         assert pick(DOC, parse_paths('name,nope')) == ({'name': 'm'}, [True, False])
 
+    def test_only_the_paths_held_must_match(self):
+        paths = parse_paths('name,nope,gone')
+        assert select(DOC, paths, held=[True, False, False]) == {'name': 'm'}  # nope and gone: judged already
+        with pytest.raises(UsageError, match="--select 'gone' matches nothing"):
+            select(DOC, paths, held=[False, False, True])
+
 
 class TestCap:
     def test_the_cap_comes_from_the_flag_the_environment_or_the_default(self, monkeypatch):
