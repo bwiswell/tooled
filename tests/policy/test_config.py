@@ -188,3 +188,29 @@ class TestGenerate:
         with pytest.raises(PolicyFileError, match='not a valid Generator') as exc:
             load(write(tmp_path, '[inject.order_id]\ngenerate = "uid"\n'))
         assert exc.value.path == ('inject', 'order_id', 'generate')
+
+
+class TestPathVariables:
+    @pytest.mark.parametrize(
+        'path',
+        ['${XDG_CONFIG_HOME:-~/.config}/demo/identity.toml', '${HOME}/ids.toml', 'plain.toml', '~/ids.toml'],
+    )
+    def test_a_path_s_variables_load_as_written(self, tmp_path, monkeypatch, path):
+        monkeypatch.delenv('XDG_CONFIG_HOME', raising=False)  # nothing is expanded at load
+        body = f'[inject.token]\ntoml = "{path}"\nkey = "token"\n'
+        assert load(write(tmp_path, body)).inject['token'].toml == path
+
+    @pytest.mark.parametrize(
+        ('kind', 'path', 'match'),
+        [
+            ('toml', '$HOME/ids.toml', r'write a variable as \$\{HOME\}'),
+            ('file', '${1X}/token', r'a variable is \$\{NAME\}'),
+            ('file', '${A/token', r'a variable is \$\{NAME\}'),
+            ('toml', '${A:-${B}}/ids.toml', 'a default holds no variable'),
+        ],
+    )
+    def test_a_malformed_variable_is_refused_with_its_path(self, tmp_path, kind, path, match):
+        key = '\nkey = "token"' if kind == 'toml' else ''
+        with pytest.raises(PolicyFileError, match=match) as exc:
+            load(write(tmp_path, f'[inject.token]\n{kind} = "{path}"{key}\n'))
+        assert exc.value.path == ('inject', 'token', kind)

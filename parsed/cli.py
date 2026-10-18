@@ -5,9 +5,10 @@ the verb, so a permission rule can match a verb by its prefix (``parsed fetch``)
 and zeared parsed runs on, since a protocol package parsed reads must pin the same zeared.
 
 **Verbs:**
-- ``check``: load the policy and its protocol, resolve what it injects, and summarize what it shows. With
-  ``--connect``, also open the session; with ``--no-resolve``, read no inject source, so a policy can be checked
-  against its protocol without its secrets (in CI, say).
+- ``check``: load the policy and its protocol, resolve what it injects, and summarize what it shows: each source's
+  length, and the path it read, variables expanded. With ``--connect``, also open the session; with
+  ``--no-resolve``, read no inject source and expand no variable, so a policy can be checked against its protocol
+  without its secrets (in CI, say).
 - ``contracts``: every contract the policy shows, one line of each: its kind, the verbs that act on it, its topic
   with the bound slots filled, the slots left to give, and its summary.
 - ``describe CONTRACT``: one contract, layered: its slots, its request's schema (a root union folded to its tags),
@@ -314,6 +315,8 @@ def _check(args: argparse.Namespace) -> int:
         else:
             found = policy.resolve(name, source, base=path.parent)
             inject[name] = {'source': found.source, 'length': len(found.value)}
+            if found.path is not None:  # a path is no secret, and its variables expanded are worth seeing
+                inject[name]['path'] = found.path
     mesh = loaded.mesh
     summary: dict[str, Any] = {
         'policy': str(path),

@@ -889,6 +889,40 @@ class TestCheckWithoutResolving:
         assert out['connect']['ok'] is True
 
 
+class TestPathVariables:
+    BODY = """
+[inject.token]
+toml = "${DEMO_CONFIG:-~/.config}/demo/ids.toml"
+key = "token"
+
+[[allow]]
+ops = ["read"]
+keys = ["demo/w1/**"]
+"""
+
+    def test_check_shows_the_path_it_read(self, tmp_path, capsys, monkeypatch):
+        (tmp_path / 'cfg' / 'demo').mkdir(parents=True)
+        (tmp_path / 'cfg' / 'demo' / 'ids.toml').write_text('token = "tok-from-cfg"\n')
+        monkeypatch.setenv('DEMO_CONFIG', str(tmp_path / 'cfg'))
+        code, out, _ = run(capsys, 'check', '--policy', str(write(tmp_path, self.BODY)))
+        assert code == 0
+        assert out['inject']['token'] == {
+            'source': 'toml ${DEMO_CONFIG:-~/.config}/demo/ids.toml, key token',
+            'length': len('tok-from-cfg'),
+            'path': str(tmp_path / 'cfg' / 'demo' / 'ids.toml'),
+        }
+
+    def test_no_resolve_expands_nothing(self, tmp_path, capsys, monkeypatch):
+        monkeypatch.delenv('DEMO_CONFIG', raising=False)
+        body = self.BODY.replace('${DEMO_CONFIG:-~/.config}', '${DEMO_CONFIG}')  # no default: unset is an error
+        policy = str(write(tmp_path, body))
+        code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', policy)
+        assert (code, out['inject']['token']['resolved']) == (0, False)
+        code, _, err = run(capsys, 'check', '--policy', policy)
+        assert (code, err['error']) == (2, 'policy')
+        assert '${DEMO_CONFIG}' in err['message']
+
+
 class TestGenerated:
     GENERATE = READS + '\n[inject.ask_id]\ngenerate = "uuid"\n'
 

@@ -100,9 +100,13 @@ Request fields every request that declares them carries, each from a source:
 | A value made fresh for each call | `generate = "uuid"`: a uuid4, as 32 lowercase hex digits |
 
 - A relative path is read from the policy file's own directory.
+- **A path may hold variables:** `${NAME}`, or `${NAME:-default}`, the default when `NAME` is unset or empty, as in
+  a shell. They're expanded as the source is read, then a leading `~`, so a default may start with one. An unset
+  `${NAME}` with no default is refused, never read as empty. Only `file` and `toml` paths take variables, and only
+  in that form: a bare `$NAME` is refused at load, with how to write it.
 - An injected field is taken out of the schema `describe` shows, and a request that gives a value for it is refused.
 - A value read from a source is never printed: not in a result, an error, or `check`'s summary, which shows only
-  its source and length.
+  its source and length, and the path it read.
 - There is no literal source, so a secret can't end up in the policy file.
 - **A generated value** is an id a server can tell a repeat by, such as an order's. It is no secret: a reply may
   echo it. `check` names its source and makes none. A write that carries one is asked once more, with the same
@@ -111,6 +115,12 @@ Request fields every request that declares them carries, each from a source:
 ```toml
 [inject.order_id]               # every request that declares `order_id` carries a fresh one
 generate = "uuid"
+
+[inject.token]                  # where a client keeps it: under $XDG_CONFIG_HOME when that's set
+toml = "${XDG_CONFIG_HOME:-~/.config}/demo/identity.toml"
+table = "players"
+match = { world = "w1", player = "ann" }
+key = "token"
 ```
 
 ## Rules: `[[allow]]` and `[[deny]]`

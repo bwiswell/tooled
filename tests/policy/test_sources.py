@@ -145,3 +145,55 @@ class TestGenerate:
         assert generated(Source(generate='uuid'))
         assert not generated(Source(env='A'))
         assert describe(Source(generate='uuid')) == 'generate uuid'
+
+
+class TestPathVariables:
+    def test_a_set_variable(self, tmp_path, monkeypatch):
+        (tmp_path / 'cfg').mkdir()
+        (tmp_path / 'cfg' / 'token.txt').write_text('tok-var\n')
+        monkeypatch.setenv('DEMO_DIR', str(tmp_path / 'cfg'))
+        found = resolve('token', source(file='${DEMO_DIR}/token.txt'), base=tmp_path / 'elsewhere')
+        assert (found.value, found.path) == ('tok-var', str(tmp_path / 'cfg' / 'token.txt'))
+
+    @pytest.mark.parametrize('value', [None, ''])  # unset or empty: the default, as in a shell
+    def test_the_default(self, tmp_path, monkeypatch, value):
+        (tmp_path / 'fallback.txt').write_text('tok-default')
+        if value is None:
+            monkeypatch.delenv('DEMO_DIR', raising=False)
+        else:
+            monkeypatch.setenv('DEMO_DIR', value)
+        found = resolve('token', source(file='${DEMO_DIR:-.}/fallback.txt'), base=tmp_path)  # relative: the policy's
+        assert (found.value, found.path) == ('tok-default', str(tmp_path / 'fallback.txt'))
+
+    def test_a_default_with_a_tilde(self, tmp_path, monkeypatch):
+        (tmp_path / '.config' / 'demo').mkdir(parents=True)
+        (tmp_path / '.config' / 'demo' / 'ids.toml').write_text(IDS)
+        monkeypatch.setenv('HOME', str(tmp_path))
+        monkeypatch.delenv('XDG_CONFIG_HOME', raising=False)
+        given = source(
+            toml='${XDG_CONFIG_HOME:-~/.config}/demo/ids.toml', table='players', match={'player': 'bo'}, key='token'
+        )
+        found = resolve('token', given, base=tmp_path / 'policy')
+        assert (found.value, found.path) == ('tok-bo', str(tmp_path / '.config' / 'demo' / 'ids.toml'))
+        assert describe(given).startswith('toml ${XDG_CONFIG_HOME:-~/.config}/demo/ids.toml')  # as written
+
+    def test_several_in_one_path(self, tmp_path, monkeypatch):
+        (tmp_path / 'a' / 'b').mkdir(parents=True)
+        (tmp_path / 'a' / 'b' / 't.txt').write_text('tok-ab')
+        monkeypatch.setenv('DEMO_A', 'a')
+        monkeypatch.setenv('DEMO_B', 'b')
+        assert resolve('token', source(file='${DEMO_A}/${DEMO_B}/t.txt'), base=tmp_path).value == 'tok-ab'
+
+    def test_an_unset_variable_with_no_default_is_refused(self, tmp_path, monkeypatch):
+        monkeypatch.delenv('DEMO_DIR', raising=False)
+        with pytest.raises(PolicyFileError) as exc:
+            resolve('token', source(file='${DEMO_DIR}/token.txt'), base=tmp_path)
+        assert exc.value.message == (
+            "inject 'token': ${DEMO_DIR} in '${DEMO_DIR}/token.txt' is not set, and has no default (${DEMO_DIR:-…})"
+        )
+        assert exc.value.path == ('inject', 'token')
+
+    def test_a_path_is_shown_only_for_a_file(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('DEMO_TOKEN', 'tok')
+        assert resolve('token', source(env='DEMO_TOKEN'), base=tmp_path).path is None
+        assert resolve('order_id', source(generate='uuid'), base=tmp_path).path is None
