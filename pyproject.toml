@@ -1,0 +1,126 @@
+[project]
+name = "parsed"
+version = "0.1.0"
+description = "Typed, policy-guarded access to a zeared mesh, for agents and people"
+authors = [
+    { name = "Benj Wiswell", email = "benjwiswell@gmail.com" },
+]
+requires-python = ">=3.14,<4.0"
+# The ranges are the seared and zeared this release is tested against. uv doesn't
+# check a range against a git source, so the tags below are what pin them.
+dependencies = [
+    "seared>=0.4.3,<0.5",
+    "zeared>=0.4.3,<0.5",
+]
+
+[project.scripts]
+# The `parsed` command; `python -m parsed` is the same CLI.
+parsed = "parsed.cli:main"
+
+[dependency-groups]
+dev = [
+    "deptry",
+    # Test-only: the schema tests validate against what `describe` prints. parsed
+    # itself never validates a schema; seared's load does the checking.
+    "jsonschema>=4.23",
+    "prek",
+    "pytest>=8.0,<10.0",
+    "pytest-asyncio>=0.24",
+    "ruff",
+    "ty",
+]
+
+[tool.uv.sources]
+# Cross-repo deps come from their GitHub remotes, each at a release tag (kept as
+# plain version specs above so hatchling sees no direct reference). uv doesn't
+# check the ranges above against a git source, so the tag is what pins it:
+# without one, a `uv lock --upgrade` would take whatever the sibling's `master`
+# holds. Moving to a new sibling release means moving its tag, then
+# `uv lock --upgrade-package <name>`. The two must also agree with each other:
+# zeared pins seared by tag, and uv refuses two different URLs for one package.
+# A protocol package parsed reads must pin the same zeared, for the same reason.
+# To test against an unpushed change, point a source at the sibling checkout:
+#   zeared = { path = "../zeared", editable = true }
+seared = { git = "https://github.com/bwiswell/seared", tag = "v0.4.3" }
+zeared = { git = "https://github.com/bwiswell/zeared", tag = "v0.4.3" }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["parsed"]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["/project-plans"]
+
+[tool.pytest.ini_options]
+pythonpath = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ty.src]
+# ty checks every source module; tests build instances via **kwargs / .load(dict)
+# that ty can't introspect, so they're excluded, as in the sister repos.
+exclude = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py314"
+indent-width = 4
+# Ruff formats Python code blocks inside Markdown. Off here, as in the sister repos:
+# several ```python blocks in the docs show JSON wire form, which the formatter
+# rewrites to single quotes.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "COM",     # comma rules (formatter owns these)
+    "CPY",     # copyright notice at top of file
+    "FLY",     # str.join -> f-string (we join to avoid the {{}} brace footgun)
+    "D100",    # missing docstring in public module
+    "D101",    # missing docstring in public class
+    "D104",    # missing docstring in public package
+    "D203",    # one-blank-line-before-class (conflicts with D211)
+    "D213",    # multi-line-summary-second-line (conflicts with D212)
+    "D107",    # __init__ docstring — google convention documents args on the class
+    "PLC0415", # allow intentional lazy imports
+    "TD",      # TODO formatting
+    "FIX002",  # disallow TODOs
+    "TRY003",  # long messages outside exception class
+    # --- parsed-specific deviations from the house list ---
+    # policy/ is a subpackage whose modules reach the package's own (errors,
+    # catalog) via `from ..x import`, the layout stored and zeared carry this for.
+    "TID252",  # parent-relative imports are the subpackage layout working
+    # `Any` is the boundary type here, as in the sisters: a zenoh session, a
+    # decoded payload, a JSON-ready result, a JSON Schema node. A comment beside
+    # each says which; twenty-eight `noqa`s would say less.
+    "ANN401",  # dynamically typed expressions at the boundary
+]
+fixable = ["ALL"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.flake8-quotes]
+inline-quotes = "single"
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert, build fixtures without annotations, reach into privates to prove
+# internals, and compare against magic numbers on purpose.
+"tests/**" = [
+    "ANN",     # fixtures and test functions carry no annotations
+    "ARG",     # unused arguments in stub callbacks
+    "D",       # docstrings are optional in tests
+    "INP001",  # test packages are namespace dirs by design
+    "PLR2004", # magic values are the assertions
+    "PT011",   # broad pytest.raises is fine against our own error types
+    "S101",    # assert is the point
+    "S603",    # subprocess in the entry-point probes
+    "SLF001",  # reaching into privates is how invariants get pinned
+]
+
+[tool.ruff.format]
+docstring-code-format = true
+line-ending = "lf"
+quote-style = "single"
