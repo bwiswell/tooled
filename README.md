@@ -28,8 +28,8 @@ parsed runs in the same environment as the protocol packages it reads, and they 
 refuses two sources for one package). Install it as a uv tool, with the protocol beside it:
 
 ```sh
-uv tool install "git+https://github.com/bwiswell/parsed@v0.1.1" --with <protocol-package>
-parsed --version            # parsed 0.1.1 (seared 0.4.3, zeared 0.4.3)
+uv tool install "git+https://github.com/bwiswell/parsed@v0.2.0" --with <protocol-package>
+parsed --version            # parsed 0.2.0 (seared 0.4.3, zeared 0.4.3)
 ```
 
 `--with` takes whatever names the protocol: a path to its checkout, a git URL, or a package name. From a checkout of
