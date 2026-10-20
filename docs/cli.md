@@ -24,9 +24,8 @@ A contract is its class's name, or `module:Class`. Presence feeds have no verb i
 them with none, and a verb that doesn't act on a contract says which ones do.
 
 `--timeout S` bounds how long a verb waits on the mesh: 5 seconds for `fetch`, `query` and `invoke`, 30 for
-`wait`. One case it doesn't reach: a `fetch` of a contract with several topics and no slot given reads through
-zeared's own retained fetch, which waits Zenoh's default query timeout (10 seconds, unless the session's config
-sets another).
+`wait`. It bounds the whole of a `fetch`, a contract with several topics too. A topic whose queryable didn't answer
+in time is noted (`a queryable did not answer in time`), and the values the others gave are kept.
 
 ### Slots
 
@@ -124,7 +123,10 @@ that meets every `--until`; a retained contract already in that state answers at
 ## Output
 
 - **Results** go to stdout as JSON, indented on a terminal or with `--pretty` (`listen`'s lines are always compact).
-- **Errors** go to stderr as one JSON object: `{"error": kind, "message": …, "path": […]}`.
+- **Errors** go to stderr as one JSON object: `{"error": kind, "message": …, "path": […]}`. That includes a
+  malformed argument, an unknown flag or a missing one, as `usage` naming the verb
+  (`parsed fetch: argument --select: …`), never argparse's usage text. `--help` and `--version` print to stdout and
+  exit 0.
 - **Notes** go to stderr as `{"note": …}` lines: an error reply, a reply that would not decode, no reply, a retry,
   samples left out of a stream, a dry run. A library's warning goes there as `{"log": level, "logger": …,
   "message": …}`.

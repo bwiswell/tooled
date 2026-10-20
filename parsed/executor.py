@@ -6,7 +6,8 @@ zeared does the asking, and each reply is dumped as seared's JSON form.
 
 - **fetch** reads a retained contract. With slots to narrow by, it's a query on the retention queryables, which
   answer whatever intersects the selector; with none, and several topics, it's ``fetch_retained`` across them all.
-  The set comes back sorted, since retained values have no order of their own.
+  Either way the timeout bounds the whole read, and a topic whose queryable didn't answer in time is noted. The set
+  comes back sorted, since retained values have no order of their own.
 - **query** asks a queryable that declares ``EFFECT = READ``. The request is the given JSON, with the policy's
   injected fields added, loaded strict by its own class, so seared's checks (and any ``__post_init__``) run before
   the query is sent. Replies come back in the order they arrived.
@@ -22,6 +23,10 @@ zeared does the asking, and each reply is dumped as seared's JSON form.
 - **wait** subscribes the same way, until a value meets every one of its conditions (a path into the value, and the
   value it must equal), and gives that value. A retained contract already in that state answers from its replay.
   Past the timeout, the error carries the last value seen.
+
+Every check that needs no mesh (the policy, the slots, the request's load) can run before the session opens:
+``check_fetch`` for a fetch, ``prepare`` for a query or a write. The command runs them first, so a refusal or an
+invalid request is told as such, whatever the mesh's state.
 
 A reply that won't decode is left out, and noted. So is an error reply, an empty answer to a query, a queryable
 that didn't answer in time, a sample on a denied key, and a sample the stream dropped because the reader fell
@@ -142,22 +147,33 @@ def fetch(session: Any, contract: Contract, rules: Rules, values: Mapping[str, s
         RefusedError: The policy refuses a selector the read would reach.
         MeshError: The read failed.
     """
+    check_fetch(contract, rules, values)
     result = Result()
     answers = _Answers(result, contract)
     cls = contract.cls
     if values or len(contract.templates) == 1:
-        rules.check(contract, selector(contract.templates[0], values))
         slots: dict[str, Any] = dict(values)
         items = _read(lambda: cls.query(session=session, timeout=timeout, on_error=answers, **slots))
     else:
-        for template in contract.templates:
-            rules.check(contract, selector(template, {}))
-        items = _read(lambda: cls.fetch_retained(session=session, on_error=answers))
+        items = _read(lambda: cls.fetch_retained(session=session, timeout=timeout, on_error=answers))
     if answers.timed_out:
         result.notes.append('a queryable did not answer in time')
     dumps = [dump(cls, item) for item in items]
     result.items = sorted(dumps, key=lambda item: json.dumps(item, sort_keys=True, default=str))
     return result
+
+
+def check_fetch(contract: Contract, rules: Rules, values: Mapping[str, str]) -> None:
+    """Check the selectors a fetch would reach against the policy. It needs no session, so it can run before one.
+
+    Raises:
+        RefusedError: The policy refuses one of them.
+    """
+    if values or len(contract.templates) == 1:
+        rules.check(contract, selector(contract.templates[0], values))
+        return
+    for template in contract.templates:
+        rules.check(contract, selector(template, {}))
 
 
 @dataclass
@@ -179,6 +195,9 @@ def prepare(
     injected: Mapping[str, str],
 ) -> Call:
     """A call on a queryable, built from ``request`` and the policy's injected fields, and checked against the policy.
+
+    It needs no session, so a caller can run it before opening one: a refusal or an invalid request then never waits
+    on the mesh. ``query`` and ``invoke`` prepare their call themselves too.
 
     The policy comes before the request's own checks: the selector, and the tag of the request's root union, read
     from the request as given, are checked before it loads. So a denied variant is refused whatever its fields,
@@ -221,8 +240,8 @@ def given_tag(contract: Contract, rules: Rules, given: Mapping[str, Any]) -> str
 
     Raises:
         InvalidRequestError: A tag the union doesn't have, and no ``fallback`` to take it; or a tag that isn't a
-            string, which seared can't always tell apart (a list fails it outright). The error names only the tags
-            the policy shows, where seared's would name them all.
+            string, which seared refuses too, fallback or not. The error names only the tags the policy shows,
+            where seared's would name them all.
     """
     from .schemas import tag_keys
 

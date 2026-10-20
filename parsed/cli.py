@@ -50,11 +50,12 @@ import argparse
 import contextlib
 import json
 import logging
+import math
 import sys
 import time
 from typing import TYPE_CHECKING, Any, NoReturn
 
-from .errors import ParsedError
+from .errors import ParsedError, UsageError
 
 if TYPE_CHECKING:
     import asyncio
@@ -89,16 +90,28 @@ The policy is --policy PATH, else $PARSED_POLICY, else ./parsed.toml.
 """
 
 
+class _Parser(argparse.ArgumentParser):
+    """argparse's parser, its errors parsed's own: one JSON line on stderr, exit 2, not argparse's usage text.
+
+    ``add_subparsers`` makes each verb's parser of the same class, so a verb's errors go the same way, named by its
+    ``prog`` (``parsed query``). ``--help`` and ``--version`` print and exit 0 through their own actions, not here.
+    """
+
+    def error(self, message: str) -> NoReturn:
+        msg = f'{self.prog}: {message}'
+        raise UsageError(msg)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The ``parsed`` argument parser."""
-    parser = argparse.ArgumentParser(
+    parser = _Parser(
         prog='parsed',
         description='Typed, policy-guarded access to a zeared mesh, for agents and people.',
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument('--version', action='version', version=version())
-    common = argparse.ArgumentParser(add_help=False)
+    common = _Parser(add_help=False)
     common.add_argument('--policy', metavar='PATH', help='the policy file (else $PARSED_POLICY, else ./parsed.toml)')
     common.add_argument('--pretty', action='store_true', help='indent the JSON (the default on a terminal)')
     common.add_argument('--select', type=_paths, metavar='PATHS', help='keep parts: a.b, list[].key; comma-separated')
@@ -108,7 +121,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar='N',
         help='refuse a result over N bytes (else $PARSED_MAX_BYTES, else 28000; 0: none)',
     )
-    saving = argparse.ArgumentParser(add_help=False)
+    saving = _Parser(add_help=False)
     saving.add_argument('--out', metavar='FILE', help='write the whole result to FILE, uncapped, and say where')
     verbs = parser.add_subparsers(dest='verb', metavar='verb', required=True)
     check = verbs.add_parser(
@@ -142,7 +155,7 @@ def build_parser() -> argparse.ArgumentParser:
     layers.add_argument('--variant', metavar='TAG', help="one variant of the request's union, by its tag")
     layers.add_argument('--reply', action='store_true', help="the reply's whole schema, not its field list")
     describe.set_defaults(run=_describe)
-    reads = argparse.ArgumentParser(add_help=False)
+    reads = _Parser(add_help=False)
     reads.add_argument('contract', help='a contract: its class name, or module:Class')
     reads.add_argument('slots', nargs='*', metavar='slot=value', help='a slot to narrow by; left out, it widens')
     reads.add_argument('--timeout', type=_seconds, default=5.0, metavar='S', help='seconds to wait (default 5)')
@@ -259,9 +272,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     Returns:
         The exit code.
     """
-    args = build_parser().parse_args(argv)
-    _log_as_json()
     try:
+        args = build_parser().parse_args(argv)
+        _log_as_json()
         return args.run(args)
     except ParsedError as exc:
         sys.stderr.write(json.dumps(exc.to_json()) + '\n')
@@ -367,6 +380,7 @@ def _fetch(args: argparse.Namespace) -> int:
     contract = _readable(catalog, rules, args.contract, 'fetch')
     _judge(contract, catalog, args)
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
+    executor.check_fetch(contract, rules, values)  # before the session: a refusal never waits on the mesh
     session = executor.open_session(loaded.mesh)
     try:
         result = executor.fetch(session, contract, rules, values, timeout=args.timeout)
@@ -383,8 +397,10 @@ def _query(args: argparse.Namespace) -> int:
     contract = _readable(catalog, rules, args.contract, 'query')
     _judge(contract, catalog, args)
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
+    params = _pairs(args.param, 'param')
     request = _request(args.request) if args.request is not None else None
     injected = _injected(path, loaded, contract, rules)
+    executor.prepare(contract, rules, values, request=request, injected=injected)  # before the session, as fetch's
     session = executor.open_session(loaded.mesh)
     try:
         result = executor.query(
@@ -394,7 +410,7 @@ def _query(args: argparse.Namespace) -> int:
             values,
             request=request,
             injected=injected,
-            params=_pairs(args.param, 'param'),
+            params=params,
             timeout=args.timeout,
         )
     finally:
@@ -413,8 +429,8 @@ def _invoke(args: argparse.Namespace) -> int:
     request = _request(args.request) if args.request is not None else None
     injected = _injected(path, loaded, contract, rules)
     generated = [name for name in injected if policy.generated(loaded.inject[name])]
+    call = executor.prepare(contract, rules, values, request=request, injected=injected)  # before any session
     if args.dry_run:
-        call = executor.prepare(contract, rules, values, request=request, injected=injected)
         secrets = [name for name in injected if name not in generated]
         emit(executor.preview(contract, call, hidden=secrets), argparse.Namespace(**{**vars(args), 'select': None}))
         _notes(['a dry run: checked, and not sent'])
@@ -565,8 +581,11 @@ def _request(text: str) -> dict[str, Any]:
 
 
 def _seconds(text: str) -> float:
-    value = float(text)
-    if value <= 0:
+    try:
+        value = float(text)
+    except ValueError:
+        value = 0.0
+    if not math.isfinite(value) or value <= 0:
         msg = f'a timeout is a number of seconds above zero, not {text}'
         raise argparse.ArgumentTypeError(msg)
     return value
@@ -800,7 +819,10 @@ def _paths(text: str) -> Any:  # output's parsed paths
 
 
 def _bytes(text: str) -> int:
-    value = int(text)
+    try:
+        value = int(text)
+    except ValueError:
+        value = -1
     if value < 0:
         msg = f'a cap is a whole number of bytes, zero or more, not {text}'
         raise argparse.ArgumentTypeError(msg)
@@ -808,7 +830,10 @@ def _bytes(text: str) -> int:
 
 
 def _count(text: str) -> int:
-    value = int(text)
+    try:
+        value = int(text)
+    except ValueError:
+        value = 0
     if value <= 0:
         msg = f'a count is a whole number above zero, not {text}'
         raise argparse.ArgumentTypeError(msg)
@@ -826,7 +851,7 @@ def _duration(text: str) -> float:
         value = float(number) * _UNITS[unit]
     except ValueError:
         value = 0.0
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0:
         msg = f'a duration is seconds above zero, or with s, m or h: 30, 30s, 5m, 1h; not {text}'
         raise argparse.ArgumentTypeError(msg)
     return value

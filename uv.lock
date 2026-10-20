@@ -169,7 +169,7 @@ wheels = [
 
 [[package]]
 name = "parsed"
-version = "0.2.1"
+version = "0.2.2"
 source = { editable = "." }
 dependencies = [
     { name = "seared" },
@@ -189,8 +189,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "seared", git = "https://github.com/bwiswell/seared?tag=v0.4.3" },
-    { name = "zeared", git = "https://github.com/bwiswell/zeared?tag=v0.4.3" },
+    { name = "seared", git = "https://github.com/bwiswell/seared?tag=v0.4.4" },
+    { name = "zeared", git = "https://github.com/bwiswell/zeared?tag=v0.4.4" },
 ]
 
 [package.metadata.requires-dev]
@@ -385,8 +385,8 @@ wheels = [
 
 [[package]]
 name = "seared"
-version = "0.4.3"
-source = { git = "https://github.com/bwiswell/seared?tag=v0.4.3#e698c1155086294dfc76db8c6cffd028641f8abe" }
+version = "0.4.4"
+source = { git = "https://github.com/bwiswell/seared?tag=v0.4.4#6b65f0cabfb17a61b8411006f23b500cbafab2f4" }
 
 [[package]]
 name = "tomli"
@@ -460,8 +460,8 @@ wheels = [
 
 [[package]]
 name = "zeared"
-version = "0.4.3"
-source = { git = "https://github.com/bwiswell/zeared?tag=v0.4.3#947597559171ff778fc627b6c60e057e04de8371" }
+version = "0.4.4"
+source = { git = "https://github.com/bwiswell/zeared?tag=v0.4.4#4271dc05cbee7b0532eed9b181b99e4eab4a2e7b" }
 dependencies = [
     { name = "eclipse-zenoh" },
     { name = "msgpack" },

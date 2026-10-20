@@ -1,6 +1,6 @@
 [project]
 name = "parsed"
-version = "0.2.1"
+version = "0.2.2"
 description = "Typed, policy-guarded access to a zeared mesh, for agents and people"
 authors = [
     { name = "Benj Wiswell", email = "benjwiswell@gmail.com" },
@@ -9,8 +9,8 @@ requires-python = ">=3.14,<4.0"
 # The ranges are the seared and zeared this release is tested against. uv doesn't
 # check a range against a git source, so the tags below are what pin them.
 dependencies = [
-    "seared>=0.4.3,<0.5",
-    "zeared>=0.4.3,<0.5",
+    "seared>=0.4.4,<0.5",
+    "zeared>=0.4.4,<0.5",
 ]
 
 [project.scripts]
@@ -41,8 +41,8 @@ dev = [
 # A protocol package parsed reads must pin the same zeared, for the same reason.
 # To test against an unpushed change, point a source at the sibling checkout:
 #   zeared = { path = "../zeared", editable = true }
-seared = { git = "https://github.com/bwiswell/seared", tag = "v0.4.3" }
-zeared = { git = "https://github.com/bwiswell/zeared", tag = "v0.4.3" }
+seared = { git = "https://github.com/bwiswell/seared", tag = "v0.4.4" }
+zeared = { git = "https://github.com/bwiswell/zeared", tag = "v0.4.4" }
 
 [build-system]
 requires = ["hatchling"]

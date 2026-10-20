@@ -8,6 +8,48 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
+## 0.2.2 — 2026-10-20
+
+**On seared and zeared 0.4.4, with errors that say what they are.** Every error is one JSON line, a malformed
+argument's included; a refusal names the slot to fill; and a refused or invalid call is told as such whatever the
+mesh's state.
+
+### Changed
+
+- **Dependencies:** seared `>=0.4.4,<0.5` and zeared `>=0.4.4,<0.5`, pinned to `tag = "v0.4.4"` each. **Breaking:**
+  a protocol package parsed reads must pin the same tags, or uv refuses to install the two together. seared 0.4.4
+  adds field constraints (bounds on `Int` and `Float`, lengths and a portable pattern on `Str`), which a request's
+  or a reply's fields may carry: `describe` shows them in the schemas, and a request that fails one is refused
+  before it's sent, as any invalid request is (exit 4). A `Union` tag that isn't a string is refused by seared too
+  now, fallback or not. zeared 0.4.4's `fetch_retained` takes a timeout and reports a queryable that didn't answer.
+  See their changelogs.
+
+### Fixed
+
+- **`--timeout` bounds every `fetch`.** A contract with several topics, fetched with no slot given, waited Zenoh's
+  default query timeout (10 s) whatever `--timeout` said, and a topic whose queryable didn't answer in time left no
+  note: the values the others gave came back as if they were all. Now the timeout bounds the whole fetch, and such a
+  topic is noted. Since 0.1.0.
+- **Every usage error is JSON.** An error argparse caught (a malformed `--select` or `--until`, a number that isn't
+  one, an unknown flag, a missing contract) printed argparse's usage text, not the one JSON line on stderr every
+  other error is; the exit code was already 2. Now it's `{"error": "usage", …}`, its message argparse's,
+  prefixed with the command (`parsed fetch: argument --select: …`). Since 0.1.0.
+- **`--max-bytes`, `--count` and `--timeout` say what they take** when given something that isn't a number, rather
+  than naming a private function (`invalid _bytes value`). `--timeout` and `--for` refuse `nan` and `inf`.
+- **A malformed `--param` is refused before the session opens.** `query --param noequals` was read only after
+  the session opened, so with the router unreachable it exited 5 (`mesh`) where it should exit 2 (`usage`), and
+  with one reachable it opened a session to refuse. Since 0.1.0.
+- **A refusal says which slot to fill.** A call that left a slot open where the policy allows only a value
+  (`fetch FleetState` under a policy that allows one commander's keys, with that slot unbound) was refused with
+  only its selector, which read as the contract being off limits. Now it names the slot:
+  `…: slot 'owner' is open; give owner=…, or bind it in [bind]`. A slot every allow rule leaves wild isn't named.
+  The kind and exit code are unchanged (`refused`, 3).
+- **What needs no mesh is checked before the session opens.** `fetch`, `query` and `invoke` opened their session,
+  then checked the policy and loaded the request, so with the router down a refused call exited 5 (`mesh`) where it
+  should exit 3, an invalid request 5 where it should exit 4, and a write that could reach more than one key 5
+  where it should exit 2. With the router up, a session was opened only to refuse. Nothing reached the mesh that
+  shouldn't have. Since 0.1.0.
+
 ## 0.2.1 — 2026-10-18
 
 **Paths that know their schema, and variables in inject paths.**

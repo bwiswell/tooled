@@ -174,3 +174,42 @@ class TestReferences:
         policy = load(write(tmp_path, body, head=head))
         r = Rules(policy, Catalog.load(policy.protocol.packages))
         assert [c.qualname for c in r.visible_contracts()] == ['_support_protocol_two:Station']
+
+
+class TestFillHint:
+    """A refusal over a slot left open names it, when an allow rule's keys fix that slot."""
+
+    def refusal(self, tmp_path, catalog, keys, name, selector):
+        r = rules(tmp_path, catalog, f'[[allow]]\nops = ["read"]\nkeys = {keys}\n')
+        with pytest.raises(RefusedError) as exc:
+            r.check(catalog.get(name), selector)
+        return exc.value.message
+
+    def test_names_the_slot_a_key_fixes(self, tmp_path, catalog):
+        message = self.refusal(tmp_path, catalog, '["demo/w1/**"]', 'Station', 'demo/*/station/*')
+        assert message == (
+            "no allow rule covers read on Station at demo/*/station/*: slot 'world' is open; give world=…, or bind it"
+            ' in [bind]'
+        )
+
+    def test_names_every_slot_the_keys_fix(self, tmp_path, catalog):
+        message = self.refusal(tmp_path, catalog, '["demo/w1/station/s1"]', 'Station', 'demo/*/station/*')
+        assert message.endswith(
+            ": slots 'world' and 'station' are open; give world=… station=…, or bind them in [bind]"
+        )
+
+    def test_a_trailing_multi_chunk_slot(self, tmp_path, catalog):
+        message = self.refusal(tmp_path, catalog, '["demo/w1/trace/a/b"]', 'Trace', 'demo/*/trace/*/**')
+        assert message.endswith(": slots 'world' and 'path' are open; give world=… path=…, or bind them in [bind]")
+
+    @pytest.mark.parametrize(
+        ('keys', 'selector'),
+        [
+            ('["other/**"]', 'demo/*/station/*'),  # no key reaches it: filling a slot wouldn't help
+            ('["demo/w1/**"]', 'demo/w2/station/*'),  # the open slot is wild in every key; the given one is wrong
+            ('["demo/*/station/s1"]', 'demo/*/station/s2'),  # nothing open
+        ],
+    )
+    def test_names_nothing_a_value_would_not_fix(self, tmp_path, catalog, keys, selector):
+        message = self.refusal(tmp_path, catalog, keys, 'Station', selector)
+        assert message == f'no allow rule covers read on Station at {selector}'
