@@ -407,6 +407,42 @@ def writes(tmp_path, world, monkeypatch):
     return str(write(tmp_path, WRITES, head=HEAD.replace('tcp/127.0.0.1:7447', world.endpoint)))
 
 
+class TestChecksBeforeTheSession:
+    """What needs no mesh is checked before the session opens: against a router nothing listens on, a refusal is
+    still a refusal (3), an invalid request still invalid (4), and a write that reaches more than one key still a
+    usage error (2), never the mesh's 5."""
+
+    @pytest.fixture
+    def dead(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('DEMO_TOKEN', 'tok-ann')
+        head = HEAD.replace('tcp/127.0.0.1:7447', f'tcp/127.0.0.1:{free_port()}')  # nothing listens: it can't open
+        return str(write(tmp_path, WRITES, head=head))
+
+    @pytest.mark.parametrize(
+        ('argv', 'code', 'kind'),
+        [
+            (['query', 'LookReply', 'player=ann', '--request', '{"kind": "dev-peek"}'], 3, 'refused'),
+            (['query', 'LookReply', 'player=ann', '--request', '{"kind": "ping"}'], 4, 'validation'),
+            (['invoke', 'MoveResult', 'player=bo', '--request', '{"to": "dock"}'], 3, 'refused'),
+            (['invoke', 'MoveResult', 'player=ann', '--request', '{}'], 4, 'validation'),
+            (['invoke', 'MoveResult', '--request', '{"to": "dock"}'], 2, 'usage'),
+        ],
+    )
+    def test_told_as_itself_with_the_mesh_down(self, dead, capsys, argv, code, kind):
+        got, out, err = run(capsys, *argv, '--policy', dead)
+        assert (got, out, err['error']) == (code, None, kind)
+
+    def test_a_fetch_refused(self, tmp_path, capsys):
+        head = HEAD.replace('tcp/127.0.0.1:7447', f'tcp/127.0.0.1:{free_port()}')
+        policy = str(write(tmp_path, '[[allow]]\nops = ["read"]\nkeys = ["demo/w1/**"]\n', head=head))
+        code, out, err = run(capsys, 'fetch', 'Station', '--policy', policy)  # no world bound: it reaches w2's too
+        assert (code, out, err['error']) == (3, None, 'refused')
+
+    def test_a_call_that_passes_them_still_needs_the_mesh(self, dead, capsys):
+        code, _, err = run(capsys, 'fetch', 'Station', '--policy', dead)
+        assert (code, err['error']) == (5, 'mesh')
+
+
 class TestInvoke:
     def test_a_write_and_its_reply(self, writes, world, capsys):
         code, out, err = run(

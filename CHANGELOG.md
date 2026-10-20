@@ -42,6 +42,11 @@ lines as it lands, and the entry is dated when that version is released.
   only its selector, which read as the contract being off limits. Now it names the slot:
   `…: slot 'owner' is open; give owner=…, or bind it in [bind]`. A slot every allow rule leaves wild isn't named.
   The kind and exit code are unchanged (`refused`, 3).
+- **What needs no mesh is checked before the session opens.** `fetch`, `query` and `invoke` opened their session,
+  then checked the policy and loaded the request, so with the router down a refused call exited 5 (`mesh`) where it
+  should exit 3, an invalid request 5 where it should exit 4, and a write that could reach more than one key 5
+  where it should exit 2. With the router up, a session was opened only to refuse. Nothing reached the mesh that
+  shouldn't have. Since 0.1.0.
 
 ## 0.2.1 — 2026-10-18
 

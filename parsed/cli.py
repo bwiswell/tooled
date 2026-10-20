@@ -380,6 +380,7 @@ def _fetch(args: argparse.Namespace) -> int:
     contract = _readable(catalog, rules, args.contract, 'fetch')
     _judge(contract, catalog, args)
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
+    executor.check_fetch(contract, rules, values)  # before the session: a refusal never waits on the mesh
     session = executor.open_session(loaded.mesh)
     try:
         result = executor.fetch(session, contract, rules, values, timeout=args.timeout)
@@ -399,6 +400,7 @@ def _query(args: argparse.Namespace) -> int:
     params = _pairs(args.param, 'param')
     request = _request(args.request) if args.request is not None else None
     injected = _injected(path, loaded, contract, rules)
+    executor.prepare(contract, rules, values, request=request, injected=injected)  # before the session, as fetch's
     session = executor.open_session(loaded.mesh)
     try:
         result = executor.query(
@@ -427,8 +429,8 @@ def _invoke(args: argparse.Namespace) -> int:
     request = _request(args.request) if args.request is not None else None
     injected = _injected(path, loaded, contract, rules)
     generated = [name for name in injected if policy.generated(loaded.inject[name])]
+    call = executor.prepare(contract, rules, values, request=request, injected=injected)  # before any session
     if args.dry_run:
-        call = executor.prepare(contract, rules, values, request=request, injected=injected)
         secrets = [name for name in injected if name not in generated]
         emit(executor.preview(contract, call, hidden=secrets), argparse.Namespace(**{**vars(args), 'select': None}))
         _notes(['a dry run: checked, and not sent'])
