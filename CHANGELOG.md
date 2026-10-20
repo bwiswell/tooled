@@ -22,6 +22,13 @@ lines as it lands, and the entry is dated when that version is released.
   not. zeared 0.4.4's `fetch_retained` takes a timeout and reports a queryable that didn't answer. See their
   changelogs.
 
+### Fixed
+
+- **`--timeout` bounds every `fetch`.** A contract with several topics, fetched with no slot given, waited Zenoh's
+  default query timeout (10 s) whatever `--timeout` said, and a topic whose queryable didn't answer in time left no
+  note: the values the others gave came back as if they were all. Now the timeout bounds the whole fetch, and such a
+  topic is noted. Since 0.1.0.
+
 ## 0.2.1 — 2026-10-18
 
 **Paths that know their schema, and variables in inject paths.**

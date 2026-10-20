@@ -6,7 +6,8 @@ zeared does the asking, and each reply is dumped as seared's JSON form.
 
 - **fetch** reads a retained contract. With slots to narrow by, it's a query on the retention queryables, which
   answer whatever intersects the selector; with none, and several topics, it's ``fetch_retained`` across them all.
-  The set comes back sorted, since retained values have no order of their own.
+  Either way the timeout bounds the whole read, and a topic whose queryable didn't answer in time is noted. The set
+  comes back sorted, since retained values have no order of their own.
 - **query** asks a queryable that declares ``EFFECT = READ``. The request is the given JSON, with the policy's
   injected fields added, loaded strict by its own class, so seared's checks (and any ``__post_init__``) run before
   the query is sent. Replies come back in the order they arrived.
@@ -152,7 +153,7 @@ def fetch(session: Any, contract: Contract, rules: Rules, values: Mapping[str, s
     else:
         for template in contract.templates:
             rules.check(contract, selector(template, {}))
-        items = _read(lambda: cls.fetch_retained(session=session, on_error=answers))
+        items = _read(lambda: cls.fetch_retained(session=session, timeout=timeout, on_error=answers))
     if answers.timed_out:
         result.notes.append('a queryable did not answer in time')
     dumps = [dump(cls, item) for item in items]

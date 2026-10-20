@@ -1,6 +1,7 @@
 import asyncio
 import dataclasses
 import hashlib
+import time
 from typing import ClassVar
 
 import _support_protocol as demo
@@ -99,6 +100,51 @@ class TestSlots:
     def test_a_value_that_makes_no_key_expression(self):
         with pytest.raises(UsageError, match='no key expression'):
             executor.selector('demo/{world}/station/{station}', {'world': 'w1', 'station': 'a**b'})
+
+
+@zeared.zeared
+class Berth(zeared.Message):
+    """A berth, retained under two topics: its own, and its dock's listing of it."""
+
+    TOPIC: ClassVar[str] = 'demo/{world}/berth/{berth}'
+    EXTRA_TOPICS: ClassVar[tuple[str, ...]] = ('demo/{world}/dock/{berth}',)
+    RETAINED: ClassVar[bool] = True
+
+    world: str = zeared.Str(required=True, doc="the world's name")
+    berth: str = zeared.Str(required=True, doc="the berth's key")
+
+
+class TestWideFetch:
+    """A fetch with no slots, of a contract with several topics: ``fetch_retained`` across them all."""
+
+    @pytest.fixture
+    def berths(self, tmp_path):
+        catalog = Catalog([Berth])
+        return catalog.get('Berth'), Rules(load(write(tmp_path, '[[allow]]\nops = ["read"]\n')), catalog)
+
+    def test_every_topic_s_values(self, client, world, berths):
+        contract, rules = berths
+        Berth(world='w1', berth='b1').send(session=world.session)
+        Berth(world='w1', berth='b2').send(session=world.session, topic=Berth.EXTRA_TOPICS[0])
+        result = executor.fetch(client, contract, rules, {}, timeout=5)
+        assert result.items == [{'world': 'w1', 'berth': 'b1'}, {'world': 'w1', 'berth': 'b2'}]
+        assert result.notes == []
+
+    def test_a_topic_unanswered_is_noted_within_the_timeout(self, client, world, berths):
+        contract, rules = berths
+        Berth(world='w1', berth='b1').send(session=world.session)
+        held: list = []  # each query kept open, so it's never answered and Zenoh replies Timeout
+        silent = world.session.declare_queryable('demo/*/dock/*', held.append)
+        try:
+            began = time.monotonic()
+            result = executor.fetch(client, contract, rules, {}, timeout=0.5)
+            took = time.monotonic() - began
+        finally:
+            held.clear()
+            silent.undeclare()
+        assert result.items == [{'world': 'w1', 'berth': 'b1'}]
+        assert result.notes == ['a queryable did not answer in time']
+        assert took < 5, f"took {took:.1f}s: the timeout given, not Zenoh's default 10 s, bounds it"
 
 
 class TestFetch:

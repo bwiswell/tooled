@@ -24,9 +24,8 @@ A contract is its class's name, or `module:Class`. Presence feeds have no verb i
 them with none, and a verb that doesn't act on a contract says which ones do.
 
 `--timeout S` bounds how long a verb waits on the mesh: 5 seconds for `fetch`, `query` and `invoke`, 30 for
-`wait`. One case it doesn't reach: a `fetch` of a contract with several topics and no slot given reads through
-zeared's own retained fetch, which waits Zenoh's default query timeout (10 seconds, unless the session's config
-sets another).
+`wait`. It bounds the whole of a `fetch`, a contract with several topics too. A topic whose queryable didn't answer in
+time is noted (`a queryable did not answer in time`), and the values the others gave are kept.
 
 ### Slots
 
