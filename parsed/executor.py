@@ -221,8 +221,8 @@ def given_tag(contract: Contract, rules: Rules, given: Mapping[str, Any]) -> str
 
     Raises:
         InvalidRequestError: A tag the union doesn't have, and no ``fallback`` to take it; or a tag that isn't a
-            string, which seared can't always tell apart (a list fails it outright). The error names only the tags
-            the policy shows, where seared's would name them all.
+            string, which seared refuses too, fallback or not. The error names only the tags the policy shows,
+            where seared's would name them all.
     """
     from .schemas import tag_keys
 
