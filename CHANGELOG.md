@@ -8,19 +8,21 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
-## 0.2.2 — unreleased
+## 0.2.2 — 2026-10-20
 
-**On seared and zeared 0.4.4.**
+**On seared and zeared 0.4.4, with errors that say what they are.** Every error is one JSON line, a malformed
+argument's included; a refusal names the slot to fill; and a refused or invalid call is told as such whatever the
+mesh's state.
 
 ### Changed
 
-- **Dependencies:** seared `>=0.4.4,<0.5` and zeared `>=0.4.4,<0.5`, pinned to `tag = "v0.4.4"` each. A protocol
-  package parsed reads must pin the same tags, or uv refuses to install the two together. seared 0.4.4 adds field
-  constraints (bounds on `Int` and `Float`, lengths and a portable pattern on `Str`), which a request's or a reply's
-  fields may carry: `describe` shows them in the schemas, and a request that fails one is refused before it's sent,
-  as any invalid request is (exit 4). A `Union` tag that isn't a string is refused by seared too now, fallback or
-  not. zeared 0.4.4's `fetch_retained` takes a timeout and reports a queryable that didn't answer. See their
-  changelogs.
+- **Dependencies:** seared `>=0.4.4,<0.5` and zeared `>=0.4.4,<0.5`, pinned to `tag = "v0.4.4"` each. **Breaking:**
+  a protocol package parsed reads must pin the same tags, or uv refuses to install the two together. seared 0.4.4
+  adds field constraints (bounds on `Int` and `Float`, lengths and a portable pattern on `Str`), which a request's
+  or a reply's fields may carry: `describe` shows them in the schemas, and a request that fails one is refused
+  before it's sent, as any invalid request is (exit 4). A `Union` tag that isn't a string is refused by seared too
+  now, fallback or not. zeared 0.4.4's `fetch_retained` takes a timeout and reports a queryable that didn't answer.
+  See their changelogs.
 
 ### Fixed
 
