@@ -326,6 +326,15 @@ class TestQuery:
         assert code == 0
         assert out[0]['seen'] == "ping {'station': 's2'} at [('player', 'bo'), ('world', 'w1')] {'since': '3'}"
 
+    @pytest.mark.parametrize(('params', 'message'), [(['noequals'], 'name=value'), (['a=1', 'a=2'], 'twice')])
+    def test_a_malformed_param_is_refused_before_the_session_opens(self, tmp_path, capsys, params, message):
+        head = HEAD.replace('tcp/127.0.0.1:7447', f'tcp/127.0.0.1:{free_port()}')  # nothing listens: it can't open
+        policy = str(write(tmp_path, READS, head=head))
+        flags = [arg for param in params for arg in ('--param', param)]
+        code, _, err = run(capsys, 'query', 'LookReply', 'player=ann', *flags, '--policy', policy)
+        assert (code, err['error']) == (2, 'usage')
+        assert message in err['message']
+
     @pytest.mark.parametrize(
         ('request_text', 'code', 'kind'),
         [

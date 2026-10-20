@@ -396,6 +396,7 @@ def _query(args: argparse.Namespace) -> int:
     contract = _readable(catalog, rules, args.contract, 'query')
     _judge(contract, catalog, args)
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
+    params = _pairs(args.param, 'param')
     request = _request(args.request) if args.request is not None else None
     injected = _injected(path, loaded, contract, rules)
     session = executor.open_session(loaded.mesh)
@@ -407,7 +408,7 @@ def _query(args: argparse.Namespace) -> int:
             values,
             request=request,
             injected=injected,
-            params=_pairs(args.param, 'param'),
+            params=params,
             timeout=args.timeout,
         )
     finally:
