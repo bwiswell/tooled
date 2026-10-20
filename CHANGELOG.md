@@ -28,6 +28,12 @@ lines as it lands, and the entry is dated when that version is released.
   default query timeout (10 s) whatever `--timeout` said, and a topic whose queryable didn't answer in time left no
   note: the values the others gave came back as if they were all. Now the timeout bounds the whole fetch, and such a
   topic is noted. Since 0.1.0.
+- **Every usage error is JSON.** An error argparse caught (a malformed `--select` or `--until`, a number that isn't
+  one, an unknown flag, a missing contract) printed argparse's usage text, not the one JSON line on stderr every
+  other error is; the exit code was already 2. Now it's `{"error": "usage", …}`, its message argparse's,
+  prefixed with the command (`parsed fetch: argument --select: …`). Since 0.1.0.
+- **`--max-bytes`, `--count` and `--timeout` say what they take** when given something that isn't a number, rather
+  than naming a private function (`invalid _bytes value`). `--timeout` and `--for` refuse `nan` and `inf`.
 
 ## 0.2.1 — 2026-10-18
 

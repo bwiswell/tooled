@@ -61,17 +61,38 @@ class TestVersion:
 
 
 class TestUsage:
-    def test_a_verb_is_required(self, capsys):
-        with pytest.raises(SystemExit) as exc:
-            main([])
-        assert exc.value.code == 2
-        assert 'the following arguments are required: verb' in capsys.readouterr().err
+    """What argparse refuses is parsed's usage error: one JSON line on stderr, exit 2, no usage text."""
 
-    def test_an_unknown_flag_is_a_usage_error(self, capsys):
+    @pytest.mark.parametrize(
+        ('argv', 'message'),
+        [
+            ([], 'parsed: the following arguments are required: verb'),
+            (['check', '--nope'], 'parsed: unrecognized arguments: --nope'),
+            (['fetch'], 'parsed fetch: the following arguments are required: contract'),
+            (['fetch', 'Station', '--select', 'a..b'], 'parsed fetch: argument --select: --select takes dotted paths'),
+            (['wait', 'Station', '--until', 'nonsense'], 'parsed wait: argument --until: --until is path=value'),
+            (['fetch', 'Station', '--max-bytes', 'x'], 'parsed fetch: argument --max-bytes: a cap is a whole number'),
+            (['listen', 'Notice', '--count', 'x'], 'parsed listen: argument --count: a count is a whole number'),
+            (['query', 'LookReply', '--timeout', 'x'], 'parsed query: argument --timeout: a timeout is a number'),
+            (['query', 'LookReply', '--timeout', 'nan'], 'parsed query: argument --timeout: a timeout is a number'),
+            (['listen', 'Notice', '--for', 'inf'], 'parsed listen: argument --for: a duration is seconds'),
+            (['nope'], "parsed: argument verb: invalid choice: 'nope'"),
+        ],
+    )
+    def test_is_one_json_line(self, capsys, argv, message):
+        code, out, err = run(capsys, *argv)
+        assert (code, out) == (2, None)
+        assert err['error'] == 'usage'
+        assert err['message'].startswith(message)
+        assert 'usage:' not in err['message']
+
+    def test_help_still_prints_and_exits_zero(self, capsys):
         with pytest.raises(SystemExit) as exc:
-            main(['check', '--nope'])
-        assert exc.value.code == 2
-        assert 'unrecognized arguments: --nope' in capsys.readouterr().err
+            main(['fetch', '--help'])
+        assert exc.value.code == 0
+        out, err = capsys.readouterr()
+        assert out.startswith('usage: parsed fetch')
+        assert err == ''
 
 
 class TestCheck:
@@ -341,10 +362,9 @@ class TestQuery:
         assert lines(err) == [{'note': 'no replies within 0.3s'}]
 
     def test_a_timeout_above_zero(self, reads, capsys):
-        with pytest.raises(SystemExit) as exc:
-            main(['query', 'LookReply', '--timeout', '0', '--policy', reads])
-        assert exc.value.code == 2
-        assert 'above zero' in capsys.readouterr().err
+        code, _, err = run(capsys, 'query', 'LookReply', '--timeout', '0', '--policy', reads)
+        assert code == 2
+        assert 'above zero' in err['message']
 
 
 WRITES = (
@@ -603,9 +623,8 @@ class TestListen:
 
     @pytest.mark.parametrize(('flag', 'value'), [('--for', '0'), ('--for', 'soon'), ('--for', '5d'), ('--count', '0')])
     def test_bad_limits_are_usage_errors(self, reads, capsys, flag, value):
-        with pytest.raises(SystemExit) as exc:
-            main(['listen', 'Notice', flag, value, '--policy', reads])
-        assert exc.value.code == 2
+        code, _, err = run(capsys, 'listen', 'Notice', flag, value, '--policy', reads)
+        assert (code, err['error']) == (2, 'usage')
 
     def test_runs_off_the_main_thread_without_signal_handlers(self, reads, capsys):
         import threading
@@ -710,10 +729,9 @@ class TestWait:
         ],
     )
     def test_usage(self, reads, capsys, argv, message):
-        with pytest.raises(SystemExit) as exc:
-            main(['wait', *argv, '--policy', reads])
-        assert exc.value.code == 2
-        assert message in capsys.readouterr().err
+        code, _, err = run(capsys, 'wait', *argv, '--policy', reads)
+        assert (code, err['error']) == (2, 'usage')
+        assert message in err['message']
 
     def test_the_default_timeout_is_thirty_seconds(self):
         from parsed.cli import build_parser
@@ -763,9 +781,8 @@ class TestOutput:
         assert (code, out, err) == (0, [{'station': 's1'}, {'station': 's2'}], None)
 
     def test_a_malformed_select_is_a_usage_error(self, reads, capsys):
-        with pytest.raises(SystemExit) as exc:
-            main(['fetch', 'Station', '--select', 'a..b', '--policy', reads])
-        assert exc.value.code == 2
+        code, _, err = run(capsys, 'fetch', 'Station', '--select', 'a..b', '--policy', reads)
+        assert (code, err['error']) == (2, 'usage')
 
     def test_over_the_cap_is_refused_with_its_parts(self, reads, capsys):
         code, out, err = run(capsys, 'fetch', 'Station', '--max-bytes', '50', '--policy', reads)
@@ -802,9 +819,9 @@ class TestDescribeLayers:
         assert out['reply']['title'] == 'Station'
 
     def test_variant_and_reply_are_one_or_the_other(self, tmp_path, capsys):
-        with pytest.raises(SystemExit) as exc:
-            main(['describe', 'LookReply', '--variant', 'ping', '--reply', '--policy', str(write(tmp_path, POLICY))])
-        assert exc.value.code == 2
+        policy = str(write(tmp_path, POLICY))
+        code, _, err = run(capsys, 'describe', 'LookReply', '--variant', 'ping', '--reply', '--policy', policy)
+        assert (code, err['message']) == (2, 'parsed describe: argument --reply: not allowed with argument --variant')
 
 
 class TestListenOutput:
