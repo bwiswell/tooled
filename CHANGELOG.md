@@ -8,6 +8,27 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
+## 0.2.2 — unreleased
+
+**On seared and zeared 0.4.4.**
+
+### Changed
+
+- **Dependencies:** seared `>=0.4.4,<0.5` and zeared `>=0.4.4,<0.5`, pinned to `tag = "v0.4.4"` each. A protocol
+  package parsed reads must pin the same tags, or uv refuses to install the two together. seared 0.4.4 adds field
+  constraints (bounds on `Int` and `Float`, lengths and a portable pattern on `Str`), which a request's or a reply's
+  fields may carry: `describe` shows them in the schemas, and a request that fails one is refused before it's sent,
+  as any invalid request is (exit 4). A `Union` tag that isn't a string is refused by seared too now, fallback or
+  not. zeared 0.4.4's `fetch_retained` takes a timeout and reports a queryable that didn't answer. See their
+  changelogs.
+
+### Fixed
+
+- **`--timeout` bounds every `fetch`.** A contract with several topics, fetched with no slot given, waited Zenoh's
+  default query timeout (10 s) whatever `--timeout` said, and a topic whose queryable didn't answer in time left no
+  note: the values the others gave came back as if they were all. Now the timeout bounds the whole fetch, and such a
+  topic is noted. Since 0.1.0.
+
 ## 0.2.1 — 2026-10-18
 
 **Paths that know their schema, and variables in inject paths.**
