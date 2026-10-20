@@ -24,6 +24,10 @@ zeared does the asking, and each reply is dumped as seared's JSON form.
   value it must equal), and gives that value. A retained contract already in that state answers from its replay.
   Past the timeout, the error carries the last value seen.
 
+Every check that needs no mesh (the policy, the slots, the request's load) can run before the session opens:
+``check_fetch`` for a fetch, ``prepare`` for a query or a write. The command runs them first, so a refusal or an
+invalid request is told as such, whatever the mesh's state.
+
 A reply that won't decode is left out, and noted. So is an error reply, an empty answer to a query, a queryable
 that didn't answer in time, a sample on a denied key, and a sample the stream dropped because the reader fell
 behind. Zenoh reports a queryable that outlives the timeout as an error reply of its own, ``Timeout``; that one is
@@ -143,22 +147,33 @@ def fetch(session: Any, contract: Contract, rules: Rules, values: Mapping[str, s
         RefusedError: The policy refuses a selector the read would reach.
         MeshError: The read failed.
     """
+    check_fetch(contract, rules, values)
     result = Result()
     answers = _Answers(result, contract)
     cls = contract.cls
     if values or len(contract.templates) == 1:
-        rules.check(contract, selector(contract.templates[0], values))
         slots: dict[str, Any] = dict(values)
         items = _read(lambda: cls.query(session=session, timeout=timeout, on_error=answers, **slots))
     else:
-        for template in contract.templates:
-            rules.check(contract, selector(template, {}))
         items = _read(lambda: cls.fetch_retained(session=session, timeout=timeout, on_error=answers))
     if answers.timed_out:
         result.notes.append('a queryable did not answer in time')
     dumps = [dump(cls, item) for item in items]
     result.items = sorted(dumps, key=lambda item: json.dumps(item, sort_keys=True, default=str))
     return result
+
+
+def check_fetch(contract: Contract, rules: Rules, values: Mapping[str, str]) -> None:
+    """Check the selectors a fetch would reach against the policy. It needs no session, so it can run before one.
+
+    Raises:
+        RefusedError: The policy refuses one of them.
+    """
+    if values or len(contract.templates) == 1:
+        rules.check(contract, selector(contract.templates[0], values))
+        return
+    for template in contract.templates:
+        rules.check(contract, selector(template, {}))
 
 
 @dataclass
@@ -180,6 +195,9 @@ def prepare(
     injected: Mapping[str, str],
 ) -> Call:
     """A call on a queryable, built from ``request`` and the policy's injected fields, and checked against the policy.
+
+    It needs no session, so a caller can run it before opening one: a refusal or an invalid request then never waits
+    on the mesh. ``query`` and ``invoke`` prepare their call themselves too.
 
     The policy comes before the request's own checks: the selector, and the tag of the request's root union, read
     from the request as given, are checked before it loads. So a denied variant is refused whatever its fields,
