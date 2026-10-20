@@ -37,6 +37,11 @@ lines as it lands, and the entry is dated when that version is released.
 - **A malformed `--param` is refused before the session opens.** `query --param noequals` was read only after
   the session opened, so with the router unreachable it exited 5 (`mesh`) where it should exit 2 (`usage`), and
   with one reachable it opened a session to refuse. Since 0.1.0.
+- **A refusal says which slot to fill.** A call that left a slot open where the policy allows only a value
+  (`fetch FleetState` under a policy that allows one commander's keys, with that slot unbound) was refused with
+  only its selector, which read as the contract being off limits. Now it names the slot:
+  `…: slot 'owner' is open; give owner=…, or bind it in [bind]`. A slot every allow rule leaves wild isn't named.
+  The kind and exit code are unchanged (`refused`, 3).
 
 ## 0.2.1 — 2026-10-18
 
