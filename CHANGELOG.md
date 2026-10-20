@@ -34,6 +34,9 @@ lines as it lands, and the entry is dated when that version is released.
   prefixed with the command (`parsed fetch: argument --select: …`). Since 0.1.0.
 - **`--max-bytes`, `--count` and `--timeout` say what they take** when given something that isn't a number, rather
   than naming a private function (`invalid _bytes value`). `--timeout` and `--for` refuse `nan` and `inf`.
+- **A malformed `--param` is refused before the session opens.** `query --param noequals` was read only after
+  the session opened, so with the router unreachable it exited 5 (`mesh`) where it should exit 2 (`usage`), and
+  with one reachable it opened a session to refuse. Since 0.1.0.
 
 ## 0.2.1 — 2026-10-18
 
