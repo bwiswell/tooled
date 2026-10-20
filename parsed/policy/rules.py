@@ -21,11 +21,13 @@ from typing import TYPE_CHECKING
 
 from zeared import Effect, keyexpr
 
-from ..catalog import Kind, render
+from ..catalog import SLOT, Kind, render
 from ..errors import PolicyFileError, RefusedError, UsageError
 from .config import Op
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from ..catalog import Catalog, Contract
     from .config import Policy, Rule
 
@@ -126,7 +128,8 @@ class Rules:
 
         Raises:
             RefusedError: A deny rule's keys intersect the selector (for its variant, if it names variants), or no
-                allow rule's keys include it.
+                allow rule's keys include it. Then, when a slot left open is one an allow rule's keys fix, the
+                message names it, since filling it is what the call needs.
         """
         op, label = op_of(contract), self.catalog.label(contract)
         for index, rule in enumerate(self.policy.deny):
@@ -138,14 +141,13 @@ class Rules:
             if variant is not None and _tag(rule, variant):
                 msg = f'{op} on {label} with variant {variant!r} is denied by deny[{index}]'
                 raise RefusedError(msg)
-        allowed = any(
-            _covers(rule, op, contract)
-            and (rule.variants is None or (variant is not None and _tag(rule, variant)))
-            and any(keyexpr.includes(key, selector) for key in rule.keys)
+        allows = [
+            rule
             for rule in self.policy.allow
-        )
-        if not allowed:
-            msg = f'no allow rule covers {op} on {label} at {selector}'
+            if _covers(rule, op, contract) and (rule.variants is None or (variant is not None and _tag(rule, variant)))
+        ]
+        if not any(keyexpr.includes(key, selector) for rule in allows for key in rule.keys):
+            msg = f'no allow rule covers {op} on {label} at {selector}{_fill_hint(contract, selector, allows)}'
             raise RefusedError(msg)
 
     # ---- references --------------------------------------------------------------------------
@@ -183,6 +185,57 @@ class Rules:
             if not (_GLOB & set(pattern)) and pattern not in tags:
                 msg = f'variant {pattern!r} is no tag of the contracts this rule names'
                 raise PolicyFileError(msg, path=(*where, 'variants', at))
+
+
+def _fill_hint(contract: Contract, selector: str, allows: Sequence[Rule]) -> str:
+    """What to say about the slots ``selector`` leaves open that an allow rule's keys fix, if any.
+
+    A slot the call left open renders as ``*`` (``*/**`` for a trailing ``{name**}``). One is named when an allow
+    rule's key intersects the selector and holds a literal chunk where the slot is, with no ``**`` before it: a
+    value there is what the rule wants. A slot every rule leaves wild already is no help, so it isn't named.
+    """
+    keys = [key.split('/') for rule in allows for key in rule.keys if keyexpr.intersects(key, selector)]
+    named = [
+        name
+        for name, at in _open_slots(contract, selector)
+        if any(at < len(key) and '**' not in key[: at + 1] and not _wild(key[at]) for key in keys)
+    ]
+    if not named:
+        return ''
+    give = ' '.join(f'{name}=…' for name in named)
+    if len(named) == 1:
+        return f': slot {named[0]!r} is open; give {give}, or bind it in [bind]'
+    listed = ', '.join(repr(name) for name in named[:-1]) + f' and {named[-1]!r}'
+    return f': slots {listed} are open; give {give}, or bind them in [bind]'
+
+
+def _open_slots(contract: Contract, selector: str) -> list[tuple[str, int]]:
+    """Each slot ``selector`` leaves open, with its chunk's index, read against the template it was rendered from.
+
+    A template fits when its literal chunks are the selector's own; a slot sharing a chunk with other text can't be
+    told apart, so a template with one is passed over, and nothing is named for it.
+    """
+    chunks = selector.split('/')
+    for template in contract.templates:
+        parts = template.split('/')
+        slots = [SLOT.fullmatch(part) for part in parts]
+        multi = slots[-1] is not None and slots[-1].group(2) is not None
+        if len(chunks) != len(parts) and not (multi and len(chunks) > len(parts)):
+            continue
+        if any(slot is None and part != chunk for slot, part, chunk in zip(slots, parts, chunks, strict=False)):
+            continue
+        tail = len(parts) - 1
+        return [
+            (slot.group(1), at)
+            for at, slot in enumerate(slots)
+            if slot is not None and (chunks[at:] == ['*', '**'] if multi and at == tail else chunks[at] == '*')
+        ]
+    return []
+
+
+def _wild(chunk: str) -> bool:
+    """Whether a key's chunk matches more than one value: ``*``, ``**``, or one holding ``$*``."""
+    return chunk in {'*', '**'} or '$*' in chunk
 
 
 def _covers(rule: Rule, op: Op, contract: Contract) -> bool:

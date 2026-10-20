@@ -280,6 +280,13 @@ class TestFetch:
         code, _, err = run(capsys, 'fetch', 'MoveResult', '--policy', reads)
         assert (code, err['error']) == (3, 'refused')
 
+    def test_a_refusal_names_the_open_slot_to_fill(self, tmp_path, world, capsys):
+        head = HEAD.replace('tcp/127.0.0.1:7447', world.endpoint)
+        policy = str(write(tmp_path, '[[allow]]\nops = ["read"]\nkeys = ["demo/w1/**"]\n', head=head))
+        code, _, err = run(capsys, 'fetch', 'Station', '--policy', policy)
+        assert (code, err['error']) == (3, 'refused')
+        assert err['message'].endswith(": slot 'world' is open; give world=…, or bind it in [bind]")
+
     @pytest.mark.parametrize(('slots', 'message'), [(['station'], 'name=value'), (['station=a', 'station=b'], 'twice')])
     def test_malformed_slot_arguments(self, reads, capsys, slots, message):
         code, _, err = run(capsys, 'fetch', 'Station', *slots, '--policy', reads)
