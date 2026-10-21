@@ -1,6 +1,6 @@
 import pytest
 
-from parsed.errors import CatalogError, MeshError, ParsedError, PolicyFileError, RefusedError, UsageError
+from tooled.errors import CatalogError, MeshError, PolicyFileError, RefusedError, TooledError, UsageError
 
 
 @pytest.mark.parametrize(
@@ -14,7 +14,7 @@ from parsed.errors import CatalogError, MeshError, ParsedError, PolicyFileError,
     ],
 )
 def test_each_kind_has_its_exit_code(cls, kind, code):
-    assert issubclass(cls, ParsedError)
+    assert issubclass(cls, TooledError)
     assert (cls.kind, cls.exit_code) == (kind, code)
 
 
@@ -29,7 +29,7 @@ def test_the_json_carries_a_path():
 
 
 def test_too_large_carries_its_sizes():
-    from parsed.errors import TooLargeError
+    from tooled.errors import TooLargeError
 
     error = TooLargeError('over', size=500, cap=100, parts={'bytes': {'a': 400}})
     assert (error.kind, error.exit_code) == ('too_large', 6)
@@ -43,7 +43,7 @@ def test_too_large_carries_its_sizes():
 
 
 def test_a_lost_write_carries_its_generated_values():
-    from parsed.errors import LostWriteError
+    from tooled.errors import LostWriteError
 
     error = LostWriteError('no reply', generated={'move_id': 'abc'})
     assert (error.kind, error.exit_code) == ('mesh', 5)
@@ -53,7 +53,7 @@ def test_a_lost_write_carries_its_generated_values():
 
 
 def test_a_timeout_carries_the_last_value_seen():
-    from parsed.errors import TimedOutError
+    from tooled.errors import TimedOutError
 
     error = TimedOutError('not met', last={'stock': 3})
     assert (error.kind, error.exit_code) == ('timeout', 7)

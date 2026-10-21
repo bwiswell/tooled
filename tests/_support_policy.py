@@ -19,7 +19,7 @@ packages = ["_support_protocol"]
 """
 
 
-def write(directory: Path, body: str = '', *, head: str = HEAD, name: str = 'parsed.toml') -> Path:
+def write(directory: Path, body: str = '', *, head: str = HEAD, name: str = 'tooled.toml') -> Path:
     """Write ``head`` and ``body`` as a policy file in ``directory``, and return its path."""
     path = directory / name
     path.write_text(textwrap.dedent(head) + textwrap.dedent(body), encoding='utf-8')

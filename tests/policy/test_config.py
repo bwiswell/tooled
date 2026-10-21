@@ -2,8 +2,8 @@ import pytest
 from _support_policy import HEAD, write
 from zeared import Mode
 
-from parsed.errors import PolicyFileError
-from parsed.policy.config import DEFAULT_NAME, POLICY_ENV, Op, find, load
+from tooled.errors import PolicyFileError
+from tooled.policy.config import DEFAULT_NAME, POLICY_ENV, Op, find, load
 
 
 class TestFind:
@@ -26,7 +26,7 @@ class TestFind:
         monkeypatch.chdir(tmp_path)
         path = write(tmp_path)
         assert find(None) == path.resolve()
-        assert DEFAULT_NAME == 'parsed.toml'
+        assert DEFAULT_NAME == 'tooled.toml'
 
     @pytest.mark.parametrize('via', ['--policy', 'env', 'cwd'])
     def test_a_missing_file_says_where_it_looked(self, tmp_path, monkeypatch, via):
@@ -115,7 +115,7 @@ class TestLoad:
 
     def test_keepalive_is_refused_with_the_reason(self, tmp_path):
         body = '[[keepalive]]\ncontract = "X"\n'
-        with pytest.raises(PolicyFileError, match='parsed serve') as exc:
+        with pytest.raises(PolicyFileError, match='tooled serve') as exc:
             load(write(tmp_path, body))
         assert exc.value.path == ('keepalive',)
 
@@ -179,7 +179,7 @@ class TestChecks:
 
 class TestGenerate:
     def test_a_generated_source_loads(self, tmp_path):
-        from parsed.policy.config import Generator
+        from tooled.policy.config import Generator
 
         source = load(write(tmp_path, '[inject.order_id]\ngenerate = "uuid"\n')).inject['order_id']
         assert source.generate is Generator.UUID

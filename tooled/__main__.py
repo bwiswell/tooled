@@ -1,4 +1,4 @@
-"""``python -m parsed`` entrypoint."""
+"""``python -m tooled`` entrypoint."""
 
 from __future__ import annotations
 

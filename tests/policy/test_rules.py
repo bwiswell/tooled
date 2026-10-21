@@ -1,10 +1,10 @@
 import pytest
 from _support_policy import HEAD, write
 
-from parsed.catalog import Catalog
-from parsed.errors import PolicyFileError, RefusedError
-from parsed.policy.config import Op, load
-from parsed.policy.rules import Rules, op_of
+from tooled.catalog import Catalog
+from tooled.errors import PolicyFileError, RefusedError
+from tooled.policy.config import Op, load
+from tooled.policy.rules import Rules, op_of
 
 
 @pytest.fixture(scope='module')

@@ -104,13 +104,13 @@ def describe(contract: Contract, rules: Rules, *, reply: bool = False) -> dict[s
                 {'tag': tag, 'summary': summary_line(cls)} for tag, cls in variant_classes(contract) if tag in allowed
             ]
             request = fold_unions(request) if request is not None else None
-            more['variant'] = f"parsed describe {label} --variant TAG: one variant's fields"
+            more['variant'] = f"tooled describe {label} --variant TAG: one variant's fields"
         doc['request'] = request
     if reply:
         doc['reply'] = json_schema(contract.cls, mode='dump')
     else:
         doc['reply'] = field_list(contract.cls)
-        more['reply'] = f"parsed describe {label} --reply: the reply's whole schema"
+        more['reply'] = f"tooled describe {label} --reply: the reply's whole schema"
     if more:
         doc['more'] = more
     return doc
@@ -380,7 +380,7 @@ def walk(schema: dict[str, Any], parts: Sequence[str], *, indexes: bool = False)
     """Judge a path against a dump schema (seared's, from ``json_schema(cls, mode='dump')``).
 
     Each part is a field's name, or :data:`ITEMS` to step into a list. A map takes any key. A ``Bytes`` field takes
-    ``bytes`` and ``sha256``, the summary parsed prints in its place. A union offers the fields of every variant.
+    ``bytes`` and ``sha256``, the summary tooled prints in its place. A union offers the fields of every variant.
 
     Args:
         schema: The whole schema, its ``$defs`` included.

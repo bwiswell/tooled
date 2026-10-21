@@ -92,7 +92,7 @@ def open_session(config: SessionConfig) -> Any:  # a zenoh.Session, or a Managed
 
     try:
         return zeared.open(config)
-    except Exception as exc:  # zenoh raises its own error type, which parsed doesn't import
+    except Exception as exc:  # zenoh raises its own error type, which tooled doesn't import
         msg = f'the session would not open: {_reason(exc)}'
         raise MeshError(msg) from exc
 

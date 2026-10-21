@@ -1,12 +1,29 @@
 # Changelog
 
-Each version of parsed, newest first.
+Each version of tooled, newest first. tooled was named parsed until 0.2.3, and the entries before it say parsed, as
+they were written.
 
 A **Breaking** line means a command, a flag, an output or a policy file written for the version before may fail, or
 behave differently.
 
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
+
+## 0.2.3 — unreleased
+
+**parsed is now tooled.** The name parsed passes to a command-line library in the same family. The tool itself is
+unchanged: its verbs, flags, policies, output and exit codes are as they were.
+
+### Changed
+
+- **Breaking:** the command is `tooled`, and `python -m tooled`; the package is `tooled`, and the repository
+  `github.com/bwiswell/tooled`. Install it again under the new name: `uv tool uninstall parsed`, then
+  `uv tool install "git+https://github.com/bwiswell/tooled@v0.2.3" --with <protocol-package>`.
+- **Breaking:** the policy file is found at `--policy`, else `$TOOLED_POLICY`, else `./tooled.toml`, and the size
+  cap reads `$TOOLED_MAX_BYTES`. The old names aren't read: a policy left at `./parsed.toml`, or named by
+  `$PARSED_POLICY`, isn't found. Rename the file, or pass `--policy`.
+- **Breaking:** the base of every error, for a program that imports the package, is `TooledError`, no longer
+  `ParsedError`.
 
 ## 0.2.2 — 2026-10-20
 

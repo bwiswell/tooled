@@ -1,4 +1,4 @@
-"""The catalog: the contracts a protocol defines, as parsed sorts and names them.
+"""The catalog: the contracts a protocol defines, as tooled sorts and names them.
 
 A contract is a zeared ``Message`` class. Each one is read once, with zeared's and seared's own introspection,
 into a :class:`Contract`: its kind, its topic templates and their slots, its request class, its declared effect,

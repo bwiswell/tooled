@@ -1,11 +1,11 @@
 # The command
 
 ```
-parsed VERB [CONTRACT] [slot=value …] [--policy PATH] [options]
+tooled VERB [CONTRACT] [slot=value …] [--policy PATH] [options]
 ```
 
-Every verb takes `--policy` after the verb (else `$PARSED_POLICY`, else `./parsed.toml`; see
-[policy.md](policy.md)). `parsed --version` names parsed and the seared and zeared it runs on.
+Every verb takes `--policy` after the verb (else `$TOOLED_POLICY`, else `./tooled.toml`; see
+[policy.md](policy.md)). `tooled --version` names tooled and the seared and zeared it runs on.
 
 ## Verbs
 
@@ -125,7 +125,7 @@ that meets every `--until`; a retained contract already in that state answers at
 - **Results** go to stdout as JSON, indented on a terminal or with `--pretty` (`listen`'s lines are always compact).
 - **Errors** go to stderr as one JSON object: `{"error": kind, "message": …, "path": […]}`. That includes a
   malformed argument, an unknown flag or a missing one, as `usage` naming the verb
-  (`parsed fetch: argument --select: …`), never argparse's usage text. `--help` and `--version` print to stdout and
+  (`tooled fetch: argument --select: …`), never argparse's usage text. `--help` and `--version` print to stdout and
   exit 0.
 - **Notes** go to stderr as `{"note": …}` lines: an error reply, a reply that would not decode, no reply, a retry,
   samples left out of a stream, a dry run. A library's warning goes there as `{"log": level, "logger": …,
@@ -141,7 +141,7 @@ A result over the cap is refused rather than printed, with exit 6 and the size o
  "size": 261443, "cap": 28000, "parts": {"items": 1, "bytes": {"hulls": 192346, "parts": 40100, "sectors": 19646}}}
 ```
 
-The cap is `--max-bytes N`, else `$PARSED_MAX_BYTES`, else 28,000 bytes; `0` removes it. Then:
+The cap is `--max-bytes N`, else `$TOOLED_MAX_BYTES`, else 28,000 bytes; `0` removes it. Then:
 
 - **`--select PATHS`** keeps parts of a result, structure kept: comma-separated paths, dotted (`size.w`), with `[]`
   mapping over a list (`systems[].key`). It applies to each item of a list result (`fetch`, `query`, `invoke`,
@@ -151,8 +151,8 @@ The cap is `--max-bytes N`, else `$PARSED_MAX_BYTES`, else 28,000 bytes; `0` rem
     mesh, with the names nearest it: `--select 'stok' names no field of Station; did you mean 'stock'?`. A field
     the schema declares but a value leaves out (an optional one, say) is simply absent from that value. A map's
     keys and a `Bytes` field's `bytes` and `sha256` count as declared. A path into a shape the schema leaves open
-    (an `Any` field) can't be judged this way, so it must match something, as on parsed's own documents.
-  - **On parsed's own documents** (`check`, `contracts`, `describe`), a path that matches nothing in a non-empty
+    (an `Any` field) can't be judged this way, so it must match something, as on tooled's own documents.
+  - **On tooled's own documents** (`check`, `contracts`, `describe`), a path that matches nothing in a non-empty
     result is refused, so a typo shows.
 - **`--out FILE`** writes the whole result to a file, uncapped, and prints `{"written": path, "bytes": n}`. Every
   verb but `listen` takes it.

@@ -1,4 +1,4 @@
-"""The policy: the file that says which mesh parsed reaches, and what it may do there."""
+"""The policy: the file that says which mesh tooled reaches, and what it may do there."""
 
 from __future__ import annotations
 

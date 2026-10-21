@@ -1,5 +1,5 @@
 [project]
-name = "parsed"
+name = "tooled"
 version = "0.2.2"
 description = "Typed, policy-guarded access to a zeared mesh, for agents and people"
 authors = [
@@ -14,13 +14,13 @@ dependencies = [
 ]
 
 [project.scripts]
-# The `parsed` command; `python -m parsed` is the same CLI.
-parsed = "parsed.cli:main"
+# The `tooled` command; `python -m tooled` is the same CLI.
+tooled = "tooled.cli:main"
 
 [dependency-groups]
 dev = [
     "deptry",
-    # Test-only: the schema tests validate against what `describe` prints. parsed
+    # Test-only: the schema tests validate against what `describe` prints. tooled
     # itself never validates a schema; seared's load does the checking.
     "jsonschema>=4.23",
     "prek",
@@ -38,7 +38,7 @@ dev = [
 # holds. Moving to a new sibling release means moving its tag, then
 # `uv lock --upgrade-package <name>`. The two must also agree with each other:
 # zeared pins seared by tag, and uv refuses two different URLs for one package.
-# A protocol package parsed reads must pin the same zeared, for the same reason.
+# A protocol package tooled reads must pin the same zeared, for the same reason.
 # To test against an unpushed change, point a source at the sibling checkout:
 #   zeared = { path = "../zeared", editable = true }
 seared = { git = "https://github.com/bwiswell/seared", tag = "v0.4.4" }
@@ -49,7 +49,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["parsed"]
+packages = ["tooled"]
 
 [tool.hatch.build.targets.sdist]
 exclude = ["/project-plans"]
@@ -88,7 +88,7 @@ ignore = [
     "TD",      # TODO formatting
     "FIX002",  # disallow TODOs
     "TRY003",  # long messages outside exception class
-    # --- parsed-specific deviations from the house list ---
+    # --- tooled-specific deviations from the house list ---
     # policy/ is a subpackage whose modules reach the package's own (errors,
     # catalog) via `from ..x import`, the layout stored and zeared carry this for.
     "TID252",  # parent-relative imports are the subpackage layout working

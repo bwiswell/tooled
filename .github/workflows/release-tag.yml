@@ -26,9 +26,9 @@ jobs:
         id: version
         run: |
           VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
-          STAMPED=$(sed -n "s/^__version__ = '\(.*\)'$/\1/p" parsed/__init__.py)
+          STAMPED=$(sed -n "s/^__version__ = '\(.*\)'$/\1/p" tooled/__init__.py)
           if [[ "${VERSION}" != "${STAMPED}" ]]; then
-            echo "pyproject.toml says ${VERSION}, parsed/__init__.py says ${STAMPED}" >&2
+            echo "pyproject.toml says ${VERSION}, tooled/__init__.py says ${STAMPED}" >&2
             exit 1
           fi
           echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"

@@ -6,10 +6,10 @@ from _support_policy import write
 from jsonschema import Draft202012Validator
 from seared.doc import json_schema
 
-from parsed.catalog import Catalog
-from parsed.errors import RefusedError, UsageError
-from parsed.policy import Rules, load
-from parsed.schemas import (
+from tooled.catalog import Catalog
+from tooled.errors import RefusedError, UsageError
+from tooled.policy import Rules, load
+from tooled.schemas import (
     ITEMS,
     Walk,
     describe,
@@ -179,8 +179,8 @@ class TestDescribe:
         assert envelope['description'] == "what; a variant's fields: describe --variant TAG"
         assert '$defs' not in doc['request']
         assert doc['more'] == {
-            'variant': "parsed describe LookReply --variant TAG: one variant's fields",
-            'reply': "parsed describe LookReply --reply: the reply's whole schema",
+            'variant': "tooled describe LookReply --variant TAG: one variant's fields",
+            'reply': "tooled describe LookReply --reply: the reply's whole schema",
         }
 
     def test_a_retained_class_has_no_request(self, rules, catalog):
@@ -189,7 +189,7 @@ class TestDescribe:
         assert 'variants' not in doc
         assert doc['effect'] is None
         assert [field['name'] for field in doc['reply']] == ['world', 'station', 'stock', 'closed']
-        assert doc['more'] == {'reply': "parsed describe Station --reply: the reply's whole schema"}
+        assert doc['more'] == {'reply': "tooled describe Station --reply: the reply's whole schema"}
 
     def test_reply_prints_the_whole_reply_schema(self, rules, catalog):
         doc = describe(catalog.get('Station'), rules, reply=True)
@@ -306,7 +306,7 @@ class TestWalk:
             ['cargo', ITEMS, 'value'],
             ['numbers', 'any-key'],  # a map takes any key
             ['byname', 'any-key', 'value'],
-            ['logo', 'bytes'],  # the summary parsed prints for bytes
+            ['logo', 'bytes'],  # the summary tooled prints for bytes
             ['logo', 'sha256'],
             ['action'],  # a union's tag
             ['args', 'speed'],  # a nested envelope: each variant's payload under the same key
