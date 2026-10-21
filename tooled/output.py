@@ -6,7 +6,7 @@
   (``commander.name``), with ``[]`` mapping over a list (``systems[].key``). Applied to each item of a list result,
   or to the whole of any other. A path that matches nothing in a non-empty result is refused, so a typo shows,
   unless the reply's schema has judged it already (``held``): a field it declares may be absent.
-- **The cap.** A result over ``--max-bytes`` (else ``$PARSED_MAX_BYTES``, else 28,000 bytes) isn't printed: the
+- **The cap.** A result over ``--max-bytes`` (else ``$TOOLED_MAX_BYTES``, else 28,000 bytes) isn't printed: the
   error says its size, the size of each part, and how to get it. 28,000 is just under the 30,000 characters
   Claude Code shows of a command's output inline; past those, it keeps the output in a file and shows only its
   start, which is worse than a refusal that says what's there. ``0`` turns the cap off.
@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 DEFAULT_MAX_BYTES = 28_000
 
 #: The environment variable that sets the cap, when ``--max-bytes`` doesn't.
-MAX_BYTES_ENV = 'PARSED_MAX_BYTES'
+MAX_BYTES_ENV = 'TOOLED_MAX_BYTES'
 
 #: How many parts a too-large error names, the biggest first.
 _PARTS = 12
@@ -184,7 +184,7 @@ def _merge(a: Any, b: Any) -> Any:  # JSON-ready values
 
 
 def max_bytes(given: int | None) -> int:
-    """The cap: ``--max-bytes``, else ``$PARSED_MAX_BYTES``, else the default. ``0`` means none.
+    """The cap: ``--max-bytes``, else ``$TOOLED_MAX_BYTES``, else the default. ``0`` means none.
 
     Raises:
         UsageError: The variable isn't a whole number of bytes, zero or more.

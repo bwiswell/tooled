@@ -1,6 +1,6 @@
 """What can go wrong, and the exit code each answers with.
 
-Every failure the command reports is a :class:`ParsedError`. The command writes it to stderr as one JSON object:
+Every failure the command reports is a :class:`TooledError`. The command writes it to stderr as one JSON object:
 ``{"error": kind, "message": …, "path": […]}``, where ``path`` (when there is one) points into the input at fault,
 and exits with the error's code. stdout carries results only.
 
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 
-class ParsedError(Exception):
+class TooledError(Exception):
     """A failure the command reports, with its kind, its exit code, and where in the input it lies.
 
     Args:
@@ -46,42 +46,42 @@ class ParsedError(Exception):
         return out
 
 
-class UsageError(ParsedError):
+class UsageError(TooledError):
     """The command was given something it can't use: an unknown contract, say, or a malformed slot."""
 
     kind = 'usage'
     exit_code = 2
 
 
-class PolicyFileError(ParsedError):
+class PolicyFileError(TooledError):
     """The policy file can't be found, read or loaded, or names what the protocol doesn't have."""
 
     kind = 'policy'
     exit_code = 2
 
 
-class CatalogError(ParsedError):
+class CatalogError(TooledError):
     """A protocol package won't import, or one of its contracts can't be read."""
 
     kind = 'catalog'
     exit_code = 2
 
 
-class RefusedError(ParsedError):
+class RefusedError(TooledError):
     """The policy refuses the call."""
 
     kind = 'refused'
     exit_code = 3
 
 
-class InvalidRequestError(ParsedError):
+class InvalidRequestError(TooledError):
     """The request doesn't load as its class. The message is seared's, and the path names the field at fault."""
 
     kind = 'validation'
     exit_code = 4
 
 
-class MeshError(ParsedError):
+class MeshError(TooledError):
     """The mesh couldn't be reached: the session wouldn't open, or the link failed."""
 
     kind = 'mesh'
@@ -92,7 +92,7 @@ class LostWriteError(MeshError):
     """A write that got no reply, after its retry if it had one: it may or may not have been carried out.
 
     Args:
-        message: What was asked, and how long parsed waited.
+        message: What was asked, and how long tooled waited.
         generated: The values generated for the request (an order's id, say), so the effect can be looked for.
     """
 
@@ -108,7 +108,7 @@ class LostWriteError(MeshError):
         return out
 
 
-class TooLargeError(ParsedError):
+class TooLargeError(TooledError):
     """The result is over the size cap, so it isn't printed. The error carries what to narrow it by.
 
     Args:
@@ -130,7 +130,7 @@ class TooLargeError(ParsedError):
         return {**super().to_json(), 'size': self.size, 'cap': self.cap, 'parts': self.parts}
 
 
-class TimedOutError(ParsedError):
+class TimedOutError(TooledError):
     """``wait`` ended before any value met its conditions.
 
     The error carries the last value seen, so the agent sees how far it got.

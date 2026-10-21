@@ -1,8 +1,8 @@
-"""The ``parsed`` command (``python -m parsed``).
+"""The ``tooled`` command (``python -m tooled``).
 
-Stdlib ``argparse`` only. Every verb takes ``--policy`` (else ``$PARSED_POLICY``, else ``./parsed.toml``) after
-the verb, so a permission rule can match a verb by its prefix (``parsed fetch``). ``--version`` names the seared
-and zeared parsed runs on, since a protocol package parsed reads must pin the same zeared.
+Stdlib ``argparse`` only. Every verb takes ``--policy`` (else ``$TOOLED_POLICY``, else ``./tooled.toml``) after
+the verb, so a permission rule can match a verb by its prefix (``tooled fetch``). ``--version`` names the seared
+and zeared tooled runs on, since a protocol package tooled reads must pin the same zeared.
 
 **Verbs:**
 - ``check``: load the policy and its protocol, resolve what it injects, and summarize what it shows: each source's
@@ -37,9 +37,9 @@ A slot left out widens to every value; a bound one is filled by the policy. ``--
 or an invoke (5 s by default), and a wait (30 s).
 
 **Output.** Results go to stdout as JSON, indented on a terminal or with ``--pretty``. ``--select`` keeps parts of
-a result; a result over the cap (``--max-bytes``, else ``$PARSED_MAX_BYTES``, else 28,000 bytes) is refused with
+a result; a result over the cap (``--max-bytes``, else ``$TOOLED_MAX_BYTES``, else 28,000 bytes) is refused with
 the size of each part; ``--out FILE`` writes it whole. A failure goes to stderr as one JSON object, ``{"error":
-kind, "message": …, "path": […]}``, and the exit code says which kind (see :mod:`parsed.errors`). A note on
+kind, "message": …, "path": […]}``, and the exit code says which kind (see :mod:`tooled.errors`). A note on
 stderr (``{"note": …}``) says what a read left out, and a library's log line goes there as JSON too (``{"log":
 level, …}``).
 """
@@ -55,7 +55,7 @@ import sys
 import time
 from typing import TYPE_CHECKING, Any, NoReturn
 
-from .errors import ParsedError, UsageError
+from .errors import TooledError, UsageError
 
 if TYPE_CHECKING:
     import asyncio
@@ -69,11 +69,11 @@ if TYPE_CHECKING:
 #: How many of a level's names a refused path's hint lists, when none is close.
 _HINT_NAMES = 12
 
-#: The end of ``parsed --help``: where output goes, and what each exit code means.
+#: The end of ``tooled --help``: where output goes, and what each exit code means.
 EPILOG = """\
 Results go to stdout as JSON. Errors go to stderr as one JSON object, notes
 and log lines as JSON lines. A result over the size cap (--max-bytes, else
-$PARSED_MAX_BYTES, else 28000 bytes) is refused with each part's size:
+$TOOLED_MAX_BYTES, else 28000 bytes) is refused with each part's size:
 --select keeps parts, --out writes it whole.
 
 exit codes:
@@ -86,15 +86,15 @@ exit codes:
   6  a result over the size cap
   7  wait: no value met the conditions in time; "last" holds the last one seen
 
-The policy is --policy PATH, else $PARSED_POLICY, else ./parsed.toml.
+The policy is --policy PATH, else $TOOLED_POLICY, else ./tooled.toml.
 """
 
 
 class _Parser(argparse.ArgumentParser):
-    """argparse's parser, its errors parsed's own: one JSON line on stderr, exit 2, not argparse's usage text.
+    """argparse's parser, its errors tooled's own: one JSON line on stderr, exit 2, not argparse's usage text.
 
     ``add_subparsers`` makes each verb's parser of the same class, so a verb's errors go the same way, named by its
-    ``prog`` (``parsed query``). ``--help`` and ``--version`` print and exit 0 through their own actions, not here.
+    ``prog`` (``tooled query``). ``--help`` and ``--version`` print and exit 0 through their own actions, not here.
     """
 
     def error(self, message: str) -> NoReturn:
@@ -103,23 +103,23 @@ class _Parser(argparse.ArgumentParser):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """The ``parsed`` argument parser."""
+    """The ``tooled`` argument parser."""
     parser = _Parser(
-        prog='parsed',
+        prog='tooled',
         description='Typed, policy-guarded access to a zeared mesh, for agents and people.',
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument('--version', action='version', version=version())
     common = _Parser(add_help=False)
-    common.add_argument('--policy', metavar='PATH', help='the policy file (else $PARSED_POLICY, else ./parsed.toml)')
+    common.add_argument('--policy', metavar='PATH', help='the policy file (else $TOOLED_POLICY, else ./tooled.toml)')
     common.add_argument('--pretty', action='store_true', help='indent the JSON (the default on a terminal)')
     common.add_argument('--select', type=_paths, metavar='PATHS', help='keep parts: a.b, list[].key; comma-separated')
     common.add_argument(
         '--max-bytes',
         type=_bytes,
         metavar='N',
-        help='refuse a result over N bytes (else $PARSED_MAX_BYTES, else 28000; 0: none)',
+        help='refuse a result over N bytes (else $TOOLED_MAX_BYTES, else 28000; 0: none)',
     )
     saving = _Parser(add_help=False)
     saving.add_argument('--out', metavar='FILE', help='write the whole result to FILE, uncapped, and say where')
@@ -254,17 +254,17 @@ def _add_wait(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # ar
 
 
 def version() -> str:
-    """``parsed X (seared Y, zeared Z)``: parsed's version, and the seared and zeared it runs on."""
+    """``tooled X (seared Y, zeared Z)``: tooled's version, and the seared and zeared it runs on."""
     import seared
     import zeared
 
     from . import __version__  # lazy: the package imports this module before it sets its version
 
-    return f'parsed {__version__} (seared {seared.__version__}, zeared {zeared.__version__})'
+    return f'tooled {__version__} (seared {seared.__version__}, zeared {zeared.__version__})'
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the ``parsed`` command.
+    """Run the ``tooled`` command.
 
     Args:
         argv: The arguments, without the program name; ``sys.argv[1:]`` when ``None``.
@@ -276,7 +276,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args = build_parser().parse_args(argv)
         _log_as_json()
         return args.run(args)
-    except ParsedError as exc:
+    except TooledError as exc:
         sys.stderr.write(json.dumps(exc.to_json()) + '\n')
         return exc.exit_code
 
@@ -531,7 +531,7 @@ def _readable(catalog: Catalog, rules: Rules, name: str, verb: str) -> Contract:
         msg = f'the policy does not show {label}'
         raise RefusedError(msg)
     if verb not in verbs(contract):
-        acts = ', '.join(verbs(contract)) or 'nothing in this version of parsed'
+        acts = ', '.join(verbs(contract)) or 'nothing in this version of tooled'
         msg = f'{verb} does not act on {label}, a {contract.kind.value} contract; what does: {acts}'
         raise UsageError(msg)
     return contract
@@ -733,7 +733,7 @@ def _picked(value: Any, paths: Any, *, meta: bool) -> tuple[Any, list[bool]]:  #
 def _stopped_by_signals() -> Generator[asyncio.Event]:
     """An event SIGINT or SIGTERM sets, while the block runs on the running loop.
 
-    A loop takes signal handlers only on the main thread; elsewhere (parsed run inside another program) the
+    A loop takes signal handlers only on the main thread; elsewhere (tooled run inside another program) the
     program's own handling stands, and the verb's own bound ends it.
     """
     import asyncio
@@ -866,7 +866,7 @@ class _JsonLogHandler(logging.Handler):
 
 
 def _log_as_json() -> None:
-    """Send warnings and worse, from parsed's libraries, to stderr as JSON lines (once)."""
+    """Send warnings and worse, from tooled's libraries, to stderr as JSON lines (once)."""
     root = logging.getLogger()
     if not any(isinstance(handler, _JsonLogHandler) for handler in root.handlers):
         root.addHandler(_JsonLogHandler(logging.WARNING))

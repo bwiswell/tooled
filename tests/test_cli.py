@@ -14,9 +14,9 @@ import zeared
 from _support_policy import HEAD, write
 from _support_session import free_port
 
-import parsed
-from parsed.cli import main, version
-from parsed.errors import ParsedError
+import tooled
+from tooled.cli import main, version
+from tooled.errors import TooledError
 
 POLICY = """
 [bind]
@@ -43,8 +43,8 @@ def run(capsys, *argv):
 
 
 class TestVersion:
-    def test_names_parsed_seared_and_zeared(self):
-        assert version() == f'parsed {parsed.__version__} (seared {seared.__version__}, zeared {zeared.__version__})'
+    def test_names_tooled_seared_and_zeared(self):
+        assert version() == f'tooled {tooled.__version__} (seared {seared.__version__}, zeared {zeared.__version__})'
 
     def test_prints_and_exits_zero(self, capsys):
         with pytest.raises(SystemExit) as exc:
@@ -54,29 +54,29 @@ class TestVersion:
 
     def test_python_dash_m_runs_the_same_command(self):
         done = subprocess.run(
-            [sys.executable, '-m', 'parsed', '--version'], capture_output=True, text=True, check=False, timeout=60
+            [sys.executable, '-m', 'tooled', '--version'], capture_output=True, text=True, check=False, timeout=60
         )
         assert done.returncode == 0
         assert done.stdout == version() + '\n'
 
 
 class TestUsage:
-    """What argparse refuses is parsed's usage error: one JSON line on stderr, exit 2, no usage text."""
+    """What argparse refuses is tooled's usage error: one JSON line on stderr, exit 2, no usage text."""
 
     @pytest.mark.parametrize(
         ('argv', 'message'),
         [
-            ([], 'parsed: the following arguments are required: verb'),
-            (['check', '--nope'], 'parsed: unrecognized arguments: --nope'),
-            (['fetch'], 'parsed fetch: the following arguments are required: contract'),
-            (['fetch', 'Station', '--select', 'a..b'], 'parsed fetch: argument --select: --select takes dotted paths'),
-            (['wait', 'Station', '--until', 'nonsense'], 'parsed wait: argument --until: --until is path=value'),
-            (['fetch', 'Station', '--max-bytes', 'x'], 'parsed fetch: argument --max-bytes: a cap is a whole number'),
-            (['listen', 'Notice', '--count', 'x'], 'parsed listen: argument --count: a count is a whole number'),
-            (['query', 'LookReply', '--timeout', 'x'], 'parsed query: argument --timeout: a timeout is a number'),
-            (['query', 'LookReply', '--timeout', 'nan'], 'parsed query: argument --timeout: a timeout is a number'),
-            (['listen', 'Notice', '--for', 'inf'], 'parsed listen: argument --for: a duration is seconds'),
-            (['nope'], "parsed: argument verb: invalid choice: 'nope'"),
+            ([], 'tooled: the following arguments are required: verb'),
+            (['check', '--nope'], 'tooled: unrecognized arguments: --nope'),
+            (['fetch'], 'tooled fetch: the following arguments are required: contract'),
+            (['fetch', 'Station', '--select', 'a..b'], 'tooled fetch: argument --select: --select takes dotted paths'),
+            (['wait', 'Station', '--until', 'nonsense'], 'tooled wait: argument --until: --until is path=value'),
+            (['fetch', 'Station', '--max-bytes', 'x'], 'tooled fetch: argument --max-bytes: a cap is a whole number'),
+            (['listen', 'Notice', '--count', 'x'], 'tooled listen: argument --count: a count is a whole number'),
+            (['query', 'LookReply', '--timeout', 'x'], 'tooled query: argument --timeout: a timeout is a number'),
+            (['query', 'LookReply', '--timeout', 'nan'], 'tooled query: argument --timeout: a timeout is a number'),
+            (['listen', 'Notice', '--for', 'inf'], 'tooled listen: argument --for: a duration is seconds'),
+            (['nope'], "tooled: argument verb: invalid choice: 'nope'"),
         ],
     )
     def test_is_one_json_line(self, capsys, argv, message):
@@ -91,7 +91,7 @@ class TestUsage:
             main(['fetch', '--help'])
         assert exc.value.code == 0
         out, err = capsys.readouterr()
-        assert out.startswith('usage: parsed fetch')
+        assert out.startswith('usage: tooled fetch')
         assert err == ''
 
 
@@ -123,7 +123,7 @@ class TestCheck:
         assert out.startswith('{\n  "policy"')
 
     def test_finds_the_policy_in_the_environment(self, tmp_path, capsys, monkeypatch):
-        monkeypatch.setenv('PARSED_POLICY', str(write(tmp_path)))
+        monkeypatch.setenv('TOOLED_POLICY', str(write(tmp_path)))
         code, out, _ = run(capsys, 'check')
         assert code == 0
         assert out['visible'] == {}
@@ -274,7 +274,7 @@ class TestFetch:
     def test_a_presence_feed_has_no_verb_yet(self, reads, capsys):
         code, _, err = run(capsys, 'fetch', 'Seen', '--policy', reads)
         assert code == 2
-        assert err['message'].endswith('what does: nothing in this version of parsed')
+        assert err['message'].endswith('what does: nothing in this version of tooled')
 
     def test_a_hidden_contract_is_refused(self, reads, capsys):
         code, _, err = run(capsys, 'fetch', 'MoveResult', '--policy', reads)
@@ -562,10 +562,10 @@ class TestRefusedPaths:
         ],
     )
     def test_hints_on_other_shapes(self, flag, parts, found, hint):
-        from parsed.cli import _refuse
-        from parsed.schemas import Walk
+        from tooled.cli import _refuse
+        from tooled.schemas import Walk
 
-        with pytest.raises(ParsedError) as exc:
+        with pytest.raises(TooledError) as exc:
             _refuse(flag, parts, 'Ship', Walk(declared=False, **found))
         assert exc.value.message.endswith(f'; {hint}')
         assert exc.value.path == tuple(parts[: found['at'] + 1])
@@ -640,7 +640,7 @@ class TestEndToEnd:
     def test_python_dash_m_fetches_over_tcp(self, reads):
         env = {**os.environ, 'PYTHONPATH': os.pathsep.join(sys.path)}
         done = subprocess.run(
-            [sys.executable, '-m', 'parsed', 'fetch', 'Station', 'station=s1', '--policy', reads],
+            [sys.executable, '-m', 'tooled', 'fetch', 'Station', 'station=s1', '--policy', reads],
             capture_output=True,
             text=True,
             check=False,
@@ -692,7 +692,7 @@ class TestListen:
 
     @pytest.mark.parametrize(('text', 'seconds'), [('30', 30.0), ('30s', 30.0), ('1.5m', 90.0), ('1h', 3600.0)])
     def test_durations(self, text, seconds):
-        from parsed.cli import _duration
+        from tooled.cli import _duration
 
         assert _duration(text) == seconds
 
@@ -701,7 +701,7 @@ class TestListen:
 
         env = {**os.environ, 'PYTHONPATH': os.pathsep.join(sys.path)}
         proc = subprocess.Popen(
-            [sys.executable, '-m', 'parsed', 'listen', 'Notice', 'player=ann', '--policy', reads],
+            [sys.executable, '-m', 'tooled', 'listen', 'Notice', 'player=ann', '--policy', reads],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
@@ -786,7 +786,7 @@ class TestWait:
         assert message in err['message']
 
     def test_the_default_timeout_is_thirty_seconds(self):
-        from parsed.cli import build_parser
+        from tooled.cli import build_parser
 
         assert build_parser().parse_args(['wait', 'Station', '--until', 'stock=1']).timeout == 30.0
 
@@ -795,7 +795,7 @@ class TestWait:
         argv = ['wait', 'Notice', 'player=ann', '--until', 'text=never', '--timeout', '60', '--policy', reads]
         publisher = world.session.declare_publisher('demo/w1/notice/ann')
         proc = subprocess.Popen(
-            [sys.executable, '-m', 'parsed', *argv], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
+            [sys.executable, '-m', 'tooled', *argv], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
         )
         try:
             deadline = time.monotonic() + 20
@@ -845,7 +845,7 @@ class TestOutput:
         assert set(err['parts']['bytes']) == {'world', 'station', 'stock'}
 
     def test_the_cap_from_the_environment_and_no_cap(self, reads, capsys, monkeypatch):
-        monkeypatch.setenv('PARSED_MAX_BYTES', '50')
+        monkeypatch.setenv('TOOLED_MAX_BYTES', '50')
         assert run(capsys, 'fetch', 'Station', '--policy', reads)[0] == 6
         assert run(capsys, 'fetch', 'Station', '--max-bytes', '0', '--policy', reads)[0] == 0
 
@@ -873,7 +873,7 @@ class TestDescribeLayers:
     def test_variant_and_reply_are_one_or_the_other(self, tmp_path, capsys):
         policy = str(write(tmp_path, POLICY))
         code, _, err = run(capsys, 'describe', 'LookReply', '--variant', 'ping', '--reply', '--policy', policy)
-        assert (code, err['message']) == (2, 'parsed describe: argument --reply: not allowed with argument --variant')
+        assert (code, err['message']) == (2, 'tooled describe: argument --reply: not allowed with argument --variant')
 
 
 class TestListenOutput:
@@ -916,10 +916,10 @@ class TestListenOutput:
 
 
 def test_the_help_names_every_exit_code(capsys):
-    from parsed.cli import EPILOG
-    from parsed.errors import ParsedError
+    from tooled.cli import EPILOG
+    from tooled.errors import TooledError
 
-    codes = {cls.exit_code for cls in ParsedError.__subclasses__()}
+    codes = {cls.exit_code for cls in TooledError.__subclasses__()}
     assert codes == {2, 3, 4, 5, 6, 7}
     for code in (0, *codes):
         assert f'\n  {code}  ' in EPILOG
