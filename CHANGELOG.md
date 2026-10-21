@@ -9,7 +9,7 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
-## 0.2.3 — unreleased
+## 0.2.3 — 2026-10-20
 
 **parsed is now tooled.** The name parsed passes to a command-line library in the same family. The tool itself is
 unchanged: its verbs, flags, policies, output and exit codes are as they were.

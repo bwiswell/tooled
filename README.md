@@ -30,8 +30,8 @@ tooled runs in the same environment as the protocol packages it reads, and they 
 refuses two sources for one package). Install it as a uv tool, with the protocol beside it:
 
 ```sh
-uv tool install "git+https://github.com/bwiswell/tooled@v0.2.2" --with <protocol-package>
-tooled --version            # tooled 0.2.2 (seared 0.4.4, zeared 0.4.4)
+uv tool install "git+https://github.com/bwiswell/tooled@v0.2.3" --with <protocol-package>
+tooled --version            # tooled 0.2.3 (seared 0.4.4, zeared 0.4.4)
 ```
 
 `--with` takes whatever names the protocol: a path to its checkout, a git URL, or a package name. From a checkout of
@@ -134,7 +134,7 @@ nothing outside the repo is needed.
 
 ## Status
 
-0.2.2 reads and writes a mesh: `check`, `contracts`, `describe`, `fetch`, `query`, `listen`, `invoke` (with
+0.2.3 reads and writes a mesh: `check`, `contracts`, `describe`, `fetch`, `query`, `listen`, `invoke` (with
 `--dry-run`, generated ids, and one retry after a lost reply) and `wait`, under a strict policy file with bound
 slots, injected fields (from paths that may hold variables) and generated ones, and allow and deny rules over
 operations, contracts, keys and union variants. `--select` and `--until` paths are checked against each contract's
