@@ -4,8 +4,8 @@ import hashlib
 import pytest
 import seared as s
 
-from parsed.errors import TooLargeError, UsageError
-from parsed.output import (
+from tooled.errors import TooLargeError, UsageError
+from tooled.output import (
     DEFAULT_MAX_BYTES,
     MAX_BYTES_ENV,
     as_json,

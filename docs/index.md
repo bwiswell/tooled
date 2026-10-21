@@ -1,6 +1,6 @@
-# parsed: docs
+# tooled: docs
 
-parsed gives agents and people typed, policy-guarded access to a [zeared](https://github.com/bwiswell/zeared)
+tooled gives agents and people typed, policy-guarded access to a [zeared](https://github.com/bwiswell/zeared)
 mesh. It reads a protocol package and a policy file; each contract the policy allows becomes something to fetch,
 query, listen to, invoke or wait on, checked against the policy and against the contract's own types before
 anything reaches the mesh.
@@ -9,5 +9,5 @@ anything reaches the mesh.
   and the exit codes.
 - **[policy.md](policy.md)**: the policy file: the mesh, the protocol, bound slots, injected fields, and how
   allow and deny rules decide what's shown and what's allowed.
-- **[agents.md](agents.md)**: using parsed from Claude Code: permission rules by verb, the write loop and long
+- **[agents.md](agents.md)**: using tooled from Claude Code: permission rules by verb, the write loop and long
   waits, `listen` under Monitor, and keeping output readable.

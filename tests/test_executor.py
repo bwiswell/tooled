@@ -11,11 +11,11 @@ from _support_policy import write
 from _support_session import free_port
 from zeared import Mode, SessionConfig
 
-from parsed import executor
-from parsed.catalog import Catalog
-from parsed.errors import InvalidRequestError, LostWriteError, MeshError, RefusedError, TimedOutError, UsageError
-from parsed.executor import open_session
-from parsed.policy import Rules, load
+from tooled import executor
+from tooled.catalog import Catalog
+from tooled.errors import InvalidRequestError, LostWriteError, MeshError, RefusedError, TimedOutError, UsageError
+from tooled.executor import open_session
+from tooled.policy import Rules, load
 
 
 def test_opens_the_session_the_mesh_describes(listening):

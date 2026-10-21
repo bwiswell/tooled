@@ -1,15 +1,17 @@
-# parsed
+# tooled
 
 Typed, policy-guarded access to a [zeared](https://github.com/bwiswell/zeared) mesh, for agents and people.
 
-parsed reads a zeared protocol package and a policy file. Each contract the policy allows becomes something to
+tooled was named parsed until 0.2.3 (see the [changelog](CHANGELOG.md)).
+
+tooled reads a zeared protocol package and a policy file. Each contract the policy allows becomes something to
 fetch, query, listen to, invoke or wait on, with a JSON Schema, and every call is checked against the policy, and
 against the contract's own types, before anything reaches the mesh.
 
-## Why `parsed`
+## Why `tooled`
 
 Agents already work against Zenoh meshes, mostly through hand-written CLIs and ad-hoc scripts that open a session
-and guess at contract names. parsed generates that surface from the protocol itself:
+and guess at contract names. tooled generates that surface from the protocol itself:
 
 - **Typed discovery.** The commands come from the protocol's own classes, so a contract or a field that doesn't
   exist is refused with seared's error, which names the argument at fault.
@@ -24,16 +26,16 @@ own access control.
 
 ## Install
 
-parsed runs in the same environment as the protocol packages it reads, and they must pin the same zeared (uv
+tooled runs in the same environment as the protocol packages it reads, and they must pin the same zeared (uv
 refuses two sources for one package). Install it as a uv tool, with the protocol beside it:
 
 ```sh
-uv tool install "git+https://github.com/bwiswell/parsed@v0.2.2" --with <protocol-package>
-parsed --version            # parsed 0.2.2 (seared 0.4.4, zeared 0.4.4)
+uv tool install "git+https://github.com/bwiswell/tooled@v0.2.2" --with <protocol-package>
+tooled --version            # tooled 0.2.2 (seared 0.4.4, zeared 0.4.4)
 ```
 
 `--with` takes whatever names the protocol: a path to its checkout, a git URL, or a package name. From a checkout of
-parsed, `uv tool install . --with …` does the same.
+tooled, `uv tool install . --with …` does the same.
 
 ## Quick start
 
@@ -41,7 +43,7 @@ A protocol package, say `demo.protocol`, with a retained `Station` on `demo/{wor
 read queryable `LookReply` on `demo/{world}/look/{player}`. A policy that reads world `w1`:
 
 ```toml
-# parsed.toml
+# tooled.toml
 [mesh]
 mode = "client"
 router = "tcp/127.0.0.1:7447"
@@ -61,14 +63,14 @@ keys = ["demo/w1/**"]
 ```
 
 ```sh
-parsed check --connect                      # what the policy shows; is the mesh there?
-parsed contracts                            # one line per contract
-parsed describe LookReply                   # its slots, request schema and reply fields
-parsed fetch Station                        # every station of w1, sorted
-parsed fetch Station station=s2             # one
-parsed query LookReply player=ann --request '{"kind": "ping", "station": "s1"}'
-parsed listen Station --meta --count 5      # the current set, then live changes
-parsed fetch Station --select station,stock
+tooled check --connect                      # what the policy shows; is the mesh there?
+tooled contracts                            # one line per contract
+tooled describe LookReply                   # its slots, request schema and reply fields
+tooled fetch Station                        # every station of w1, sorted
+tooled fetch Station station=s2             # one
+tooled query LookReply player=ann --request '{"kind": "ping", "station": "s1"}'
+tooled listen Station --meta --count 5      # the current set, then live changes
+tooled fetch Station --select station,stock
 ```
 
 ### A write
@@ -88,10 +90,10 @@ keys = ["demo/w1/move/ann"]
 ```
 
 ```sh
-parsed describe MoveResult                  # the request left to give: `to` (token and move_id are injected)
-parsed invoke MoveResult player=ann --request '{"to": "s2"}' --dry-run    # what would be sent; nothing is
-parsed invoke MoveResult player=ann --request '{"to": "s2"}'              # the replies; a refusal is one too
-parsed wait Player player=ann --until at=s2                               # until the move shows, 30 s at most
+tooled describe MoveResult                  # the request left to give: `to` (token and move_id are injected)
+tooled invoke MoveResult player=ann --request '{"to": "s2"}' --dry-run    # what would be sent; nothing is
+tooled invoke MoveResult player=ann --request '{"to": "s2"}'              # the replies; a refusal is one too
+tooled wait Player player=ann --until at=s2                               # until the move shows, 30 s at most
 ```
 
 A write reaches one key, so every slot is given or bound. One that gets no reply is asked once more with the same
@@ -101,7 +103,7 @@ A write reaches one key, so every slot is given or bound. One that gets no reply
 
 - **[docs/cli.md](docs/cli.md)**: the verbs and their options, the output, the size cap, and the exit codes.
 - **[docs/policy.md](docs/policy.md)**: the policy file, and how its rules decide what's shown and allowed.
-- **[docs/agents.md](docs/agents.md)**: using parsed from Claude Code.
+- **[docs/agents.md](docs/agents.md)**: using tooled from Claude Code.
 
 ## Development
 
@@ -122,7 +124,7 @@ same gate `seared` and `zeared` run. A fifth refuses any commit on `master`.
 - **A minor release then takes a `chore/code-hygiene-and-docs` branch:** docs checked against the code, pins and
   deferred lint swept.
 - **Once those are all in, one `chore: version bump` commit** on the version branch bumps the version in
-  `pyproject.toml` and `parsed/__init__.py` together (a test checks that they agree), refreshes the lockfile, and
+  `pyproject.toml` and `tooled/__init__.py` together (a test checks that they agree), refreshes the lockfile, and
   dates the changelog entry.
 - **The version branch then merges into `master`.** There, the `Release Tag` workflow
   (`.github/workflows/release-tag.yml`) tags it `v<version>` and publishes a GitHub release.
@@ -137,4 +139,4 @@ nothing outside the repo is needed.
 slots, injected fields (from paths that may hold variables) and generated ones, and allow and deny rules over
 operations, contracts, keys and union variants. `--select` and `--until` paths are checked against each contract's
 schema before the call, and every error, a malformed argument's included, is one JSON line on stderr. Not yet:
-publishing and unretaining, a long-lived `parsed serve` with an MCP face, and per-protocol extensions.
+publishing and unretaining, a long-lived `tooled serve` with an MCP face, and per-protocol extensions.

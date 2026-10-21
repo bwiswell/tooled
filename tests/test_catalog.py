@@ -1,8 +1,8 @@
 import pytest
 from zeared import Effect
 
-from parsed.catalog import Catalog, Kind, read, render, union_tags, wire_names
-from parsed.errors import CatalogError, UsageError
+from tooled.catalog import Catalog, Kind, read, render, union_tags, wire_names
+from tooled.errors import CatalogError, UsageError
 
 
 @pytest.fixture(scope='module')

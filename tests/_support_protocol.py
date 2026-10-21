@@ -1,4 +1,4 @@
-"""A small zeared protocol for the tests: one contract of each kind parsed sorts by, on ``demo/{world}/…``."""
+"""A small zeared protocol for the tests: one contract of each kind tooled sorts by, on ``demo/{world}/…``."""
 
 from __future__ import annotations
 

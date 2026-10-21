@@ -30,8 +30,8 @@ contracts = ["MoveResult"]
 variants = ["dev-*"]
 ```
 
-Nothing is allowed until a rule allows it. Where the file is found: ``--policy``, else ``$PARSED_POLICY``, else
-``./parsed.toml``. A relative path inside it (an inject source's file) is read from the file's own directory.
+Nothing is allowed until a rule allows it. Where the file is found: ``--policy``, else ``$TOOLED_POLICY``, else
+``./tooled.toml``. A relative path inside it (an inject source's file) is read from the file's own directory.
 """
 
 from __future__ import annotations
@@ -47,10 +47,10 @@ from zeared import KeyExprError, SessionConfig, keyexpr
 from ..errors import PolicyFileError
 
 #: The environment variable that names the policy file, when ``--policy`` doesn't.
-POLICY_ENV = 'PARSED_POLICY'
+POLICY_ENV = 'TOOLED_POLICY'
 
 #: The policy file looked for in the working directory when nothing else names one.
-DEFAULT_NAME = 'parsed.toml'
+DEFAULT_NAME = 'tooled.toml'
 
 
 class Generator(enum.StrEnum):
@@ -125,15 +125,15 @@ class Policy(s.Seared):
 
 #: Tables a later release reads, refused here with the reason rather than as an unknown key.
 _LATER = {
-    'keepalive': '`[[keepalive]]` runs in `parsed serve`, which this version of parsed does not have',
+    'keepalive': '`[[keepalive]]` runs in `tooled serve`, which this version of tooled does not have',
 }
 _LATER_PROTOCOL = {
-    'extension': '`[protocol] extension` arrives with extensions, which this version of parsed does not have',
+    'extension': '`[protocol] extension` arrives with extensions, which this version of tooled does not have',
 }
 
 
 def find(given: str | None) -> Path:
-    """The policy file: ``given`` (``--policy``), else ``$PARSED_POLICY``, else ``./parsed.toml``.
+    """The policy file: ``given`` (``--policy``), else ``$TOOLED_POLICY``, else ``./tooled.toml``.
 
     Raises:
         PolicyFileError: There's no file there.

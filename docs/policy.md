@@ -1,11 +1,11 @@
 # The policy file
 
-A policy says which mesh parsed reaches, which protocol it reads there, and what it may do. It is a TOML file,
+A policy says which mesh tooled reaches, which protocol it reads there, and what it may do. It is a TOML file,
 loaded strict: a key the file format doesn't have, anywhere, is refused with its path, so a typo can't silently
 weaken a rule.
 
-parsed finds it at `--policy PATH` (given after the verb), else at `$PARSED_POLICY`, else at `./parsed.toml`.
-`parsed check` loads it and reports what it shows.
+tooled finds it at `--policy PATH` (given after the verb), else at `$TOOLED_POLICY`, else at `./tooled.toml`.
+`tooled check` loads it and reports what it shows.
 
 The examples here read a small protocol, `demo.protocol`, on keys under `demo/{world}/…`:
 
@@ -56,7 +56,7 @@ variants = ["dev-*"]
 
 ## `[mesh]`
 
-The session parsed opens: zeared's own `SessionConfig`, loaded by zeared, strict too. `mode` and `router` are the
+The session tooled opens: zeared's own `SessionConfig`, loaded by zeared, strict too. `mode` and `router` are the
 usual pair for reaching a hub; `connect`, `listen`, `retry` and the rest are as zeared documents them. No flag
 overrides it, so a policy can't be pointed at another mesh from the command line.
 
@@ -64,7 +64,7 @@ overrides it, so a policy can't be pointed at another mesh from the command line
 
 | Key | Meaning |
 |---|---|
-| `packages` | The protocol packages (or modules) whose contracts parsed reads, submodules included. Each must import in parsed's environment, on the same zeared parsed runs on. |
+| `packages` | The protocol packages (or modules) whose contracts tooled reads, submodules included. Each must import in tooled's environment, on the same zeared tooled runs on. |
 
 Each zeared `Message` class becomes a **contract**, sorted by what it is:
 
@@ -162,5 +162,5 @@ glob must exist in the protocol, so a typo is refused at load. A glob may match 
 
 ## Not in this version
 
-`[[keepalive]]` and `[protocol] extension` are refused with the reason: they arrive with `parsed serve` and with
+`[[keepalive]]` and `[protocol] extension` are refused with the reason: they arrive with `tooled serve` and with
 extensions.

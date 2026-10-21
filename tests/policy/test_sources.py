@@ -2,9 +2,9 @@ import re
 
 import pytest
 
-from parsed.errors import PolicyFileError
-from parsed.policy.config import Source
-from parsed.policy.sources import Injected, describe, resolve
+from tooled.errors import PolicyFileError
+from tooled.policy.config import Source
+from tooled.policy.sources import Injected, describe, resolve
 
 IDS = """
 # a client's identities
@@ -140,7 +140,7 @@ class TestGenerate:
         assert first.value != second.value
 
     def test_it_is_generated_and_described(self):
-        from parsed.policy.sources import generated
+        from tooled.policy.sources import generated
 
         assert generated(Source(generate='uuid'))
         assert not generated(Source(env='A'))
