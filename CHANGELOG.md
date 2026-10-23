@@ -9,6 +9,24 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
+## 0.2.4 — unreleased
+
+**Operations, not contracts.** What tooled lists, names and looks up is an operation, so a later version can list a
+command tree's commands beside a protocol's contracts. Every contract is one, and the listing and a rule's key take
+the new name.
+
+### Changed
+
+- **Breaking:** `tooled contracts` is `tooled operations`, which lists the same lines. `tooled contracts` is refused
+  (exit 2), naming the new verb.
+- **Breaking:** a rule's `contracts` key is `operations`: globs over the names `tooled operations` lists, or
+  `module:Class`, as before. A rule that still says `contracts` is refused, naming the key to write instead. A
+  rule's `ops` say what's done, and its `operations` what it's done to.
+- **Breaking:** `check` counts `operations`, not `contracts`; `describe` takes an operation's name; and a name that
+  names nothing is refused as `no operation named …`.
+- **Breaking,** for a program that imports the package: a `Catalog` is made from operations, and `Catalog.of`
+  reads classes, as the constructor did. `get` gives any operation, and `contract` a contract.
+
 ## 0.2.3 — 2026-10-20
 
 **parsed is now tooled.** The name parsed passes to a command-line library in the same family. The tool itself is

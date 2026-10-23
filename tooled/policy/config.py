@@ -26,12 +26,14 @@ keys = ["demo/w1/**"]
 
 [[deny]]                # deny wins
 ops = ["invoke"]
-contracts = ["MoveResult"]
+operations = ["MoveResult"]
 variants = ["dev-*"]
 ```
 
-Nothing is allowed until a rule allows it. Where the file is found: ``--policy``, else ``$TOOLED_POLICY``, else
-``./tooled.toml``. A relative path inside it (an inject source's file) is read from the file's own directory.
+A rule's ``ops`` say what's done (``read``, ``query``, ``invoke``…), and its ``operations`` what it's done to: globs
+over the names ``tooled operations`` lists. Nothing is allowed until a rule allows it. Where the file is found:
+``--policy``, else ``$TOOLED_POLICY``, else ``./tooled.toml``. A relative path inside it (an inject source's file) is
+read from the file's own directory.
 """
 
 from __future__ import annotations
@@ -60,7 +62,7 @@ class Generator(enum.StrEnum):
 
 
 class Op(enum.StrEnum):
-    """What a rule allows or denies: one operation per kind of contract."""
+    """What a rule allows or denies: what's done, one op per kind of contract."""
 
     READ = 'read'  # fetch and listen: a retained class, a stream, a presence feed
     QUERY = 'query'  # a queryable that declares EFFECT = READ
@@ -92,9 +94,9 @@ class Source(s.Seared):
 class Rule(s.Seared):
     """One allow or deny rule. A call matches it when every part matches."""
 
-    ops: list[Op] = s.Enum(enum=Op, many=True, required=True, doc='the operations it covers')
-    contracts: list[str] = s.Str(
-        many=True, default_factory=lambda: ['*'], doc='globs over contract names, or `module:Class`'
+    ops: list[Op] = s.Enum(enum=Op, many=True, required=True, doc="the ops it covers: what's done")
+    operations: list[str] = s.Str(
+        many=True, default_factory=lambda: ['*'], doc='globs over operation names, or `module:Class`: what to'
     )
     keys: list[str] = s.Str(many=True, default_factory=lambda: ['**'], doc='Zenoh key expressions')
     variants: list[str] | None = s.Str(
@@ -131,6 +133,11 @@ _LATER_PROTOCOL = {
     'extension': '`[protocol] extension` arrives with extensions, which this version of tooled does not have',
 }
 
+#: A rule's keys renamed, refused naming the new one rather than as an unknown key.
+_RENAMED_RULE = {
+    'contracts': '`contracts` was renamed `operations` in tooled 0.2.4; rename the key',
+}
+
 
 def find(given: str | None) -> Path:
     """The policy file: ``given`` (``--policy``), else ``$TOOLED_POLICY``, else ``./tooled.toml``.
@@ -154,9 +161,9 @@ def load(path: Path) -> Policy:
     """Read and check the policy file at ``path``.
 
     Raises:
-        PolicyFileError: It isn't TOML, or doesn't load: an unknown key, a wrong type, a missing table, a rule
-            with no operations, a key that isn't a key expression, a bound value that isn't one chunk, or an
-            inject source that isn't exactly one source.
+        PolicyFileError: It isn't TOML, or doesn't load: an unknown key (a renamed one named), a wrong type, a
+            missing table, a rule with no ops, a key that isn't a key expression, a bound value that isn't one
+            chunk, or an inject source that isn't exactly one source.
     """
     try:
         raw = tomllib.loads(path.read_text(encoding='utf-8'))
@@ -166,13 +173,7 @@ def load(path: Path) -> Policy:
     except tomllib.TOMLDecodeError as exc:
         msg = f'{path} is not valid TOML: {exc}'
         raise PolicyFileError(msg) from exc
-    for table, why in _LATER.items():
-        if table in raw:
-            raise PolicyFileError(why, path=(table,))
-    protocol = raw.get('protocol')
-    for key, why in _LATER_PROTOCOL.items():
-        if isinstance(protocol, dict) and key in protocol:
-            raise PolicyFileError(why, path=('protocol', key))
+    _refuse_unread(raw)
     try:
         policy = Policy.load(raw)
     except s.ValidationError as exc:
@@ -181,8 +182,25 @@ def load(path: Path) -> Policy:
     return policy
 
 
+def _refuse_unread(raw: dict[str, object]) -> None:
+    """Refuse a key this version doesn't read, saying why: a later release's table, or a rule's renamed key."""
+    for table, why in _LATER.items():
+        if table in raw:
+            raise PolicyFileError(why, path=(table,))
+    protocol = raw.get('protocol')
+    for key, why in _LATER_PROTOCOL.items():
+        if isinstance(protocol, dict) and key in protocol:
+            raise PolicyFileError(why, path=('protocol', key))
+    for side in ('allow', 'deny'):
+        rules = raw.get(side)
+        for index, rule in enumerate(rules if isinstance(rules, list) else ()):
+            for key, why in _RENAMED_RULE.items():
+                if isinstance(rule, dict) and key in rule:
+                    raise PolicyFileError(why, path=(side, index, key))
+
+
 def _check(policy: Policy) -> None:
-    """What the classes can't say: rules with operations and real keys, bound chunks, single sources."""
+    """What the classes can't say: rules with ops and real keys, bound chunks, single sources."""
     if not policy.protocol.packages:
         msg = '`[protocol] packages` names no package'
         raise PolicyFileError(msg, path=('protocol', 'packages'))
@@ -190,7 +208,7 @@ def _check(policy: Policy) -> None:
         for index, rule in enumerate(getattr(policy, side)):
             where = (side, index)
             if not rule.ops:
-                msg = 'a rule must name at least one operation'
+                msg = 'a rule must name at least one op'
                 raise PolicyFileError(msg, path=(*where, 'ops'))
             for at, key in enumerate(rule.keys):
                 try:

@@ -1,7 +1,8 @@
 """The policy's rules, checked against a catalog: which contracts it shows, and whether it allows a call.
 
-Each contract takes one operation (:func:`op_of`). A rule matches a contract when it names that operation and one
-of its globs matches the contract's name. Then its keys decide, with Zenoh's own matching (``zeared.keyexpr``):
+Each contract takes one op (:func:`op_of`). A rule matches a contract when its ``ops`` name that op and one of its
+``operations`` globs matches the contract's name. Then its keys decide, with Zenoh's own matching
+(``zeared.keyexpr``):
 
 - **What's shown.** A contract is shown when an allow rule's keys intersect one of its topics (as the policy's
   ``[bind]`` renders it) and no deny rule covers all of them.
@@ -21,21 +22,21 @@ from typing import TYPE_CHECKING
 
 from zeared import Effect, keyexpr
 
-from ..catalog import SLOT, Kind, render
+from ..catalog import SLOT, Contract, Kind, render
 from ..errors import PolicyFileError, RefusedError, UsageError
 from .config import Op
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from ..catalog import Catalog, Contract
+    from ..catalog import Catalog
     from .config import Policy, Rule
 
 _GLOB = frozenset('*?[')
 
 
 def op_of(contract: Contract) -> Op:
-    """The operation ``contract`` takes.
+    """The op ``contract`` takes: what a rule's ``ops`` name to cover it.
 
     ``read`` for a retained class, a stream or a presence feed; ``query`` for a queryable that declares
     ``EFFECT = READ``; ``invoke`` for any other queryable, an undeclared one included, so the default fails safe.
@@ -53,7 +54,7 @@ class Rules:
         catalog: The contracts of its protocol.
 
     Raises:
-        PolicyFileError: A rule names a contract or a variant the protocol doesn't have, a bound slot is no
+        PolicyFileError: A rule names an operation or a variant the protocol doesn't have, a bound slot is no
             contract's, or an injected field is no request's.
     """
 
@@ -153,7 +154,7 @@ class Rules:
     # ---- references --------------------------------------------------------------------------
 
     def _check_references(self) -> None:
-        """A name without a glob must name something: a contract, a variant, a slot, a request field."""
+        """A name without a glob must name something: an operation, a variant, a slot, a request field."""
         for side in ('allow', 'deny'):
             for index, rule in enumerate(getattr(self.policy, side)):
                 self._check_rule(rule, (side, index))
@@ -170,14 +171,14 @@ class Rules:
 
     def _check_rule(self, rule: Rule, where: tuple[str | int, ...]) -> None:
         matched: dict[str, Contract] = {}
-        for at, pattern in enumerate(rule.contracts):
+        for at, pattern in enumerate(rule.operations):
             found = self.catalog.matching(pattern)
             if not (_GLOB & set(pattern)):
                 try:
                     found = [self.catalog.get(pattern)]
                 except UsageError as exc:
-                    raise PolicyFileError(exc.message, path=(*where, 'contracts', at)) from exc
-            matched |= {c.qualname: c for c in found}
+                    raise PolicyFileError(exc.message, path=(*where, 'operations', at)) from exc
+            matched |= {o.qualname: o for o in found if isinstance(o, Contract)}
         if rule.variants is None:
             return
         tags = {tag for contract in matched.values() for tag in contract.variants}
@@ -239,10 +240,10 @@ def _wild(chunk: str) -> bool:
 
 
 def _covers(rule: Rule, op: Op, contract: Contract) -> bool:
-    """Whether ``rule`` names ``op`` and a glob of it matches ``contract``."""
+    """Whether ``rule``'s ``ops`` name ``op`` and one of its ``operations`` globs matches ``contract``."""
     return op in rule.ops and any(
         fnmatch.fnmatchcase(contract.name, glob) or fnmatch.fnmatchcase(contract.qualname, glob)
-        for glob in rule.contracts
+        for glob in rule.operations
     )
 
 

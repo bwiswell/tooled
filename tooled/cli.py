@@ -9,9 +9,9 @@ and zeared tooled runs on, since a protocol package tooled reads must pin the sa
   length, and the path it read, variables expanded. With ``--connect``, also open the session; with
   ``--no-resolve``, read no inject source and expand no variable, so a policy can be checked against its protocol
   without its secrets (in CI, say).
-- ``contracts``: every contract the policy shows, one line of each: its kind, the verbs that act on it, its topic
+- ``operations``: every operation the policy shows, one line of each: its kind, the verbs that act on it, its topic
   with the bound slots filled, the slots left to give, and its summary.
-- ``describe CONTRACT``: one contract, layered: its slots, its request's schema (a root union folded to its tags),
+- ``describe OPERATION``: one operation, layered: its slots, its request's schema (a root union folded to its tags),
   and its reply as a field list. ``--reply`` gives the reply's whole schema; ``--variant TAG`` one variant's.
 - ``fetch CONTRACT [slot=value …]``: a retained contract's values, those the slots select or every one.
 - ``query CONTRACT [slot=value …] [--request JSON]``: ask a read queryable. ``--request`` takes JSON, ``-`` for
@@ -33,7 +33,8 @@ and zeared tooled runs on, since a protocol package tooled reads must pin the sa
   (``numbers.fuel``); a value reads as JSON if it can (``40``, ``true``, ``"30%"``), else as a string (``idle``).
   Past ``--timeout`` (30 s by default), or on SIGINT or SIGTERM, it exits 7 with the last value seen.
 
-A slot left out widens to every value; a bound one is filled by the policy. ``--timeout`` bounds a fetch, a query
+A verb renamed is refused naming its new name (``contracts`` is ``operations`` since 0.2.4). A slot left out
+widens to every value; a bound one is filled by the policy. ``--timeout`` bounds a fetch, a query
 or an invoke (5 s by default), and a wait (30 s).
 
 **Output.** Results go to stdout as JSON, indented on a terminal or with ``--pretty``. ``--select`` keeps parts of
@@ -68,6 +69,11 @@ if TYPE_CHECKING:
 
 #: How many of a level's names a refused path's hint lists, when none is close.
 _HINT_NAMES = 12
+
+#: Verbs renamed, refused naming the new one rather than as unknown verbs.
+RENAMED = {
+    'contracts': '`tooled contracts` was renamed `tooled operations` in tooled 0.2.4',
+}
 
 #: The end of ``tooled --help``: where output goes, and what each exit code means.
 EPILOG = """\
@@ -137,20 +143,20 @@ def build_parser() -> argparse.ArgumentParser:
         help='read no inject source: check the policy against its protocol without its secrets, as in CI',
     )
     check.set_defaults(run=_check)
-    contracts = verbs.add_parser(
-        'contracts',
+    operations = verbs.add_parser(
+        'operations',
         parents=[common, saving],
-        help='list the contracts the policy shows',
-        description='Every contract the policy shows, one line of each.',
+        help='list the operations the policy shows',
+        description='Every operation the policy shows, one line of each.',
     )
-    contracts.set_defaults(run=_contracts)
+    operations.set_defaults(run=_operations)
     describe = verbs.add_parser(
         'describe',
         parents=[common, saving],
-        help='describe one contract: its slots, and the schemas of what it takes and gives',
-        description='One contract whole: its slots, and the JSON Schemas of what it takes and gives.',
+        help='describe one operation: its slots, and the schemas of what it takes and gives',
+        description='One operation whole: its slots, and the JSON Schemas of what it takes and gives.',
     )
-    describe.add_argument('contract', help='a contract: its class name, or module:Class')
+    describe.add_argument('operation', help='an operation: its class name, or module:Class')
     layers = describe.add_mutually_exclusive_group()
     layers.add_argument('--variant', metavar='TAG', help="one variant of the request's union, by its tag")
     layers.add_argument('--reply', action='store_true', help="the reply's whole schema, not its field list")
@@ -273,7 +279,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         The exit code.
     """
     try:
-        args = build_parser().parse_args(argv)
+        given = sys.argv[1:] if argv is None else argv
+        if given and given[0] in RENAMED:
+            raise UsageError(RENAMED[given[0]])
+        args = build_parser().parse_args(given)
         _log_as_json()
         return args.run(args)
     except TooledError as exc:
@@ -335,9 +344,9 @@ def _check(args: argparse.Namespace) -> int:
         'policy': str(path),
         'mesh': {'mode': mesh.mode.value, 'router': mesh.router, 'connect': list(mesh.connect)},
         'packages': list(loaded.protocol.packages),
-        'contracts': len(catalog.contracts),
+        'operations': len(catalog.operations),
         'visible': {op.value: shown[op.value] for op in policy.Op if op.value in shown},
-        'hidden': len(catalog.contracts) - len(visible),
+        'hidden': len(catalog.operations) - len(visible),
         'bind': dict(sorted(loaded.bind.items())),
         'inject': inject,
     }
@@ -349,7 +358,7 @@ def _check(args: argparse.Namespace) -> int:
     return 0
 
 
-def _contracts(args: argparse.Namespace) -> int:
+def _operations(args: argparse.Namespace) -> int:
     from .schemas import listing
 
     *_, rules = load(args.policy)
@@ -362,7 +371,7 @@ def _describe(args: argparse.Namespace) -> int:
     from .schemas import describe, describe_variant
 
     *_, catalog, rules = load(args.policy)
-    contract = catalog.get(args.contract)
+    contract = catalog.contract(args.operation)
     if not rules.visible(contract):
         msg = f'the policy does not show {catalog.label(contract)}'
         raise RefusedError(msg)
@@ -525,7 +534,7 @@ def _readable(catalog: Catalog, rules: Rules, name: str, verb: str) -> Contract:
     from .errors import RefusedError, UsageError
     from .schemas import verbs
 
-    contract = catalog.get(name)
+    contract = catalog.contract(name)
     label = catalog.label(contract)
     if not rules.visible(contract):
         msg = f'the policy does not show {label}'
