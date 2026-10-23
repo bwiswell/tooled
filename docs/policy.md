@@ -87,7 +87,8 @@ Slot values every key renders with. A bound slot is fixed: a call that gives it 
 
 Binding is a guardrail and a convenience. Where a server checks a token against a slot, binding that slot saves
 giving it each time; a policy that wants other values of a slot (another player's public state, say) leaves it
-unbound.
+unbound. `tooled check` lists, under `fixed`, each open slot that the allow rules let only one value fill: a slot
+every call must give that value, which is better bound.
 
 ## `[inject]`
 
@@ -142,8 +143,9 @@ matching:
 - **What a fetch, a query or a write may reach.** A call renders one selector: the topic with its given and bound
   slots filled, the rest widened. It is allowed when an allow rule's keys include the whole selector, and no deny
   rule's keys intersect it. Replies carry no keys to filter by afterwards, so a selector that could reach a denied
-  key is refused outright, with a hint to narrow the slots. A write (`invoke`) is never widened: every slot must be
-  given or bound, so it reaches one key.
+  key is refused outright, with a hint to narrow the slots. A selector no allow rule covers is refused naming each
+  open slot an allow rule's keys fix, with its value when they fix it to one (`give world=w1`), else `…`. A write
+  (`invoke`) is never widened: every slot must be given or bound, so it reaches one key.
 - **What a stream hands on.** `listen` and `wait` check each sample's key, which it does carry: a sample on a
   denied key is left out and counted, rather than the whole stream refused.
 

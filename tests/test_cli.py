@@ -119,8 +119,18 @@ class TestCheck:
             },
             'hidden': 2,
             'bind': {'world': 'w1'},
+            'fixed': {},
             'inject': {'token': {'source': 'env DEMO_TOKEN', 'length': 16}},
         }
+
+    def test_notes_each_open_slot_the_allow_rules_fix(self, tmp_path, capsys):
+        body = (
+            '[[allow]]\nops = ["read"]\noperations = ["Station", "Notice"]\n'
+            'keys = ["demo/w1/station/*", "demo/w1/notice/ann"]\n'
+        )
+        code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', str(write(tmp_path, body)))
+        assert code == 0
+        assert out['fixed'] == {'Notice': {'world': 'w1', 'player': 'ann'}, 'Station': {'world': 'w1'}}
 
     def test_never_prints_an_injected_value(self, tmp_path, capsys, monkeypatch):
         monkeypatch.setenv('DEMO_TOKEN', 'tok-secret-value')
@@ -292,7 +302,7 @@ class TestFetch:
         policy = str(write(tmp_path, '[[allow]]\nops = ["read"]\nkeys = ["demo/w1/**"]\n', head=head))
         code, _, err = run(capsys, 'fetch', 'Station', '--policy', policy)
         assert (code, err['error']) == (3, 'refused')
-        assert err['message'].endswith(": slot 'world' is open; give world=…, or bind it in [bind]")
+        assert err['message'].endswith(": slot 'world' is open; give world=w1, or bind it in [bind]")
 
     @pytest.mark.parametrize(('slots', 'message'), [(['station'], 'name=value'), (['station=a', 'station=b'], 'twice')])
     def test_malformed_slot_arguments(self, reads, capsys, slots, message):

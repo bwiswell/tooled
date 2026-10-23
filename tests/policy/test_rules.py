@@ -1,4 +1,7 @@
+from typing import ClassVar
+
 import pytest
+import zeared
 from _support_policy import HEAD, write
 
 from tooled.catalog import Catalog
@@ -185,22 +188,34 @@ class TestFillHint:
             r.check(catalog.get(name), selector)
         return exc.value.message
 
-    def test_names_the_slot_a_key_fixes(self, tmp_path, catalog):
+    def test_names_the_slot_a_key_fixes_and_its_value(self, tmp_path, catalog):
         message = self.refusal(tmp_path, catalog, '["demo/w1/**"]', 'Station', 'demo/*/station/*')
         assert message == (
-            "no allow rule covers read on Station at demo/*/station/*: slot 'world' is open; give world=…, or bind it"
-            ' in [bind]'
+            "no allow rule covers read on Station at demo/*/station/*: slot 'world' is open; give world=w1, or bind"
+            ' it in [bind]'
         )
 
     def test_names_every_slot_the_keys_fix(self, tmp_path, catalog):
         message = self.refusal(tmp_path, catalog, '["demo/w1/station/s1"]', 'Station', 'demo/*/station/*')
         assert message.endswith(
-            ": slots 'world' and 'station' are open; give world=… station=…, or bind them in [bind]"
+            ": slots 'world' and 'station' are open; give world=w1 station=s1, or bind them in [bind]"
         )
 
     def test_a_trailing_multi_chunk_slot(self, tmp_path, catalog):
         message = self.refusal(tmp_path, catalog, '["demo/w1/trace/a/b"]', 'Trace', 'demo/*/trace/*/**')
-        assert message.endswith(": slots 'world' and 'path' are open; give world=… path=…, or bind them in [bind]")
+        assert message.endswith(": slots 'world' and 'path' are open; give world=w1 path=a/b, or bind them in [bind]")
+
+    @pytest.mark.parametrize(
+        ('keys', 'target', 'give'),
+        [
+            ('["demo/w1/**", "demo/w2/**"]', ('Station', 'demo/*/station/*'), 'world=…'),  # two values fit
+            ('["demo/w1/**", "demo/*/station/s9"]', ('Station', 'demo/*/station/*'), 'world=… station=…'),  # or s9
+            ('["demo/w1/trace/a/**"]', ('Trace', 'demo/w1/trace/*/**'), 'path=…'),  # it begins a/, then any
+        ],
+    )
+    def test_names_no_value_where_more_than_one_fits(self, tmp_path, catalog, keys, target, give):
+        message = self.refusal(tmp_path, catalog, keys, *target)
+        assert f'; give {give}, or bind' in message
 
     @pytest.mark.parametrize(
         ('keys', 'selector'),
@@ -213,3 +228,50 @@ class TestFillHint:
     def test_names_nothing_a_value_would_not_fix(self, tmp_path, catalog, keys, selector):
         message = self.refusal(tmp_path, catalog, keys, 'Station', selector)
         assert message == f'no allow rule covers read on Station at {selector}'
+
+
+@zeared.zeared
+class Dock(zeared.Message):
+    """A dock, retained under two topics."""
+
+    TOPIC: ClassVar[str] = 'east/{site}/dock/{dock}'
+    EXTRA_TOPICS: ClassVar[tuple[str, ...]] = ('west/{site}/dock/{dock}',)
+    RETAINED: ClassVar[bool] = True
+
+    site: str = zeared.Str(required=True, doc="the site's key")
+    dock: str = zeared.Str(required=True, doc="the dock's key")
+
+
+class TestFixed:
+    """The slots a contract leaves open that the allow rules let only one value fill: ``check``'s ``fixed``."""
+
+    @pytest.mark.parametrize(
+        ('body', 'name', 'fixed'),
+        [
+            ('[[allow]]\nops = ["read"]\nkeys = ["demo/w1/**"]\n', 'Station', {'world': 'w1'}),
+            ('[[allow]]\nops = ["read"]\nkeys = ["demo/w1/station/s1"]\n', 'Station', {'world': 'w1', 'station': 's1'}),
+            ('[[allow]]\nops = ["read"]\nkeys = ["demo/w1/trace/a/b"]\n', 'Trace', {'world': 'w1', 'path': 'a/b'}),
+            ('[bind]\nworld = "w1"\n\n[[allow]]\nops = ["read"]\nkeys = ["demo/w1/**"]\n', 'Station', {}),
+            ('[[allow]]\nops = ["read"]\nkeys = ["demo/w1/**", "demo/w2/**"]\n', 'Station', {}),
+            ('[[allow]]\nops = ["read"]\nkeys = ["demo/**"]\n', 'Station', {}),
+        ],
+    )
+    def test_reads_the_allow_rules_keys(self, tmp_path, catalog, body, name, fixed):
+        assert rules(tmp_path, catalog, body).fixed(catalog.get(name)) == fixed
+
+    def test_counts_only_the_rules_that_cover_the_contract(self, tmp_path, catalog):
+        body = (
+            '[[allow]]\nops = ["read"]\noperations = ["Station"]\nkeys = ["demo/w1/**"]\n\n'
+            '[[allow]]\nops = ["query"]\nkeys = ["demo/w2/**"]\n'
+        )
+        r = rules(tmp_path, catalog, body)
+        assert r.fixed(catalog.get('Station')) == {'world': 'w1'}
+        assert r.fixed(catalog.get('LookReply')) == {'world': 'w2'}
+
+    @pytest.mark.parametrize(
+        ('keys', 'fixed'), [('["east/x/**", "west/x/**"]', {'site': 'x'}), ('["east/x/**", "west/y/**"]', {})]
+    )
+    def test_every_topic_must_agree(self, tmp_path, keys, fixed):
+        docks = Catalog.of([Dock])
+        r = Rules(load(write(tmp_path, f'[[allow]]\nops = ["read"]\nkeys = {keys}\n')), docks)
+        assert r.fixed(docks.get('Dock')) == fixed

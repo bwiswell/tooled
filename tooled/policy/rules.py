@@ -130,7 +130,8 @@ class Rules:
         Raises:
             RefusedError: A deny rule's keys intersect the selector (for its variant, if it names variants), or no
                 allow rule's keys include it. Then, when a slot left open is one an allow rule's keys fix, the
-                message names it, since filling it is what the call needs.
+                message names it, since filling it is what the call needs, and the value too, when the allow
+                rules that reach the selector all fix it to one.
         """
         op, label = op_of(contract), self.catalog.label(contract)
         for index, rule in enumerate(self.policy.deny):
@@ -150,6 +151,23 @@ class Rules:
         if not any(keyexpr.includes(key, selector) for rule in allows for key in rule.keys):
             msg = f'no allow rule covers {op} on {label} at {selector}{_fill_hint(contract, selector, allows)}'
             raise RefusedError(msg)
+
+    def fixed(self, contract: Contract) -> dict[str, str]:
+        """The slots ``contract``'s topics leave open that the allow rules let only one value fill, with that value.
+
+        Read on each topic as ``[bind]`` renders it, against the keys of the allow rules that cover the contract
+        and reach that topic. Every call must give such a slot that one value, so a policy would rather bind it. A
+        slot two topics fix to different values is left out.
+        """
+        op = op_of(contract)
+        allows = [rule for rule in self.policy.allow if _covers(rule, op, contract) and _any_tag(rule, contract)]
+        found: dict[str, str | None] = {}
+        for shape in self.shapes(contract):
+            keys = _reaching(allows, shape)
+            for name, at, multi in _open_slots(contract, shape):
+                value = _only_value(keys, at, multi=multi)
+                found[name] = value if found.get(name, value) == value else None
+        return {name: value for name, value in found.items() if value is not None}
 
     # ---- references --------------------------------------------------------------------------
 
@@ -193,28 +211,53 @@ def _fill_hint(contract: Contract, selector: str, allows: Sequence[Rule]) -> str
 
     A slot the call left open renders as ``*`` (``*/**`` for a trailing ``{name**}``). One is named when an allow
     rule's key intersects the selector and holds a literal chunk where the slot is, with no ``**`` before it: a
-    value there is what the rule wants. A slot every rule leaves wild already is no help, so it isn't named.
+    value there is what the rule wants. A slot every rule leaves wild already is no help, so it isn't named. The
+    value is given too when every key that reaches the selector fixes the slot to the same one; else it's ``…``.
     """
-    keys = [key.split('/') for rule in allows for key in rule.keys if keyexpr.intersects(key, selector)]
+    keys = _reaching(allows, selector)
     named = [
-        name
-        for name, at in _open_slots(contract, selector)
-        if any(at < len(key) and '**' not in key[: at + 1] and not _wild(key[at]) for key in keys)
+        (name, _only_value(keys, at, multi=multi) or '…')
+        for name, at, multi in _open_slots(contract, selector)
+        if any(_fixes(key, at) for key in keys)
     ]
     if not named:
         return ''
-    give = ' '.join(f'{name}=…' for name in named)
+    give = ' '.join(f'{name}={value}' for name, value in named)
     if len(named) == 1:
-        return f': slot {named[0]!r} is open; give {give}, or bind it in [bind]'
-    listed = ', '.join(repr(name) for name in named[:-1]) + f' and {named[-1]!r}'
+        return f': slot {named[0][0]!r} is open; give {give}, or bind it in [bind]'
+    listed = ', '.join(repr(name) for name, _ in named[:-1]) + f' and {named[-1][0]!r}'
     return f': slots {listed} are open; give {give}, or bind them in [bind]'
 
 
-def _open_slots(contract: Contract, selector: str) -> list[tuple[str, int]]:
-    """Each slot ``selector`` leaves open, with its chunk's index, read against the template it was rendered from.
+def _reaching(allows: Sequence[Rule], selector: str) -> list[list[str]]:
+    """The keys of ``allows`` that intersect ``selector``, each split into its chunks."""
+    return [key.split('/') for rule in allows for key in rule.keys if keyexpr.intersects(key, selector)]
 
-    A template fits when its literal chunks are the selector's own; a slot sharing a chunk with other text can't be
-    told apart, so a template with one is passed over, and nothing is named for it.
+
+def _fixes(key: Sequence[str], at: int) -> bool:
+    """Whether ``key`` holds a literal chunk at ``at``, with no ``**`` before it: a slot there wants that value."""
+    return at < len(key) and '**' not in key[: at + 1] and not _wild(key[at])
+
+
+def _only_value(keys: Sequence[Sequence[str]], at: int, *, multi: bool) -> str | None:
+    """The one value every key in ``keys`` fixes for a slot at chunk ``at``, or ``None`` when they don't agree.
+
+    A key fixes a slot's value when it holds literal chunks there: one chunk, or for a trailing multi-chunk slot
+    every chunk to the key's end. A key that leaves any of it wild lets other values in, so then there's none.
+    """
+    values = set()
+    for key in keys:
+        chunks = key[at:] if multi else key[at : at + 1]
+        values.add('/'.join(chunks) if _fixes(key, at) and not any(_wild(c) for c in chunks) else None)
+    return values.pop() if len(values) == 1 and None not in values else None
+
+
+def _open_slots(contract: Contract, selector: str) -> list[tuple[str, int, bool]]:
+    """Each slot ``selector`` leaves open: its name, its chunk's index, and whether it takes the rest of the key.
+
+    It's read against the template ``selector`` was rendered from. A template fits when its literal chunks are the
+    selector's own; a slot sharing a chunk with other text can't be told apart, so a template with one is passed
+    over, and nothing is named for it.
     """
     chunks = selector.split('/')
     for template in contract.templates:
@@ -227,7 +270,7 @@ def _open_slots(contract: Contract, selector: str) -> list[tuple[str, int]]:
             continue
         tail = len(parts) - 1
         return [
-            (slot.group(1), at)
+            (slot.group(1), at, multi and at == tail)
             for at, slot in enumerate(slots)
             if slot is not None and (chunks[at:] == ['*', '**'] if multi and at == tail else chunks[at] == '*')
         ]

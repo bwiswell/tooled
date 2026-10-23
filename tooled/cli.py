@@ -6,7 +6,8 @@ and zeared tooled runs on, since a protocol package tooled reads must pin the sa
 
 **Verbs:**
 - ``check``: load the policy and its protocol, resolve what it injects, and summarize what it shows: each source's
-  length, and the path it read, variables expanded. With ``--connect``, also open the session; with
+  length, and the path it read, variables expanded; and, as ``fixed``, each open slot the allow rules let only one
+  value fill, which the policy would rather bind. With ``--connect``, also open the session; with
   ``--no-resolve``, read no inject source and expand no variable, so a policy can be checked against its protocol
   without its secrets (in CI, say).
 - ``operations``: every operation the policy shows, one line of each: its kind, the verbs that act on it, its topic
@@ -328,6 +329,7 @@ def _check(args: argparse.Namespace) -> int:
     visible = rules.visible_contracts()
     for contract in visible:
         shown.setdefault(policy.op_of(contract).value, []).append(catalog.label(contract))
+    fixed = {catalog.label(contract): slots for contract in visible if (slots := rules.fixed(contract))}
     inject: dict[str, Any] = {}
     for name, source in sorted(loaded.inject.items()):
         if policy.generated(source):
@@ -348,6 +350,7 @@ def _check(args: argparse.Namespace) -> int:
         'visible': {op.value: shown[op.value] for op in policy.Op if op.value in shown},
         'hidden': len(catalog.operations) - len(visible),
         'bind': dict(sorted(loaded.bind.items())),
+        'fixed': fixed,
         'inject': inject,
     }
     if args.connect:
