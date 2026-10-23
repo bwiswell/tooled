@@ -11,9 +11,9 @@ Every schema is seared's own (``seared.doc.json_schema`` and ``field_schema``), 
   shows its value instead, since it can't be given.
 
 **``describe`` is layered,** so even a large contract describes in a few kilobytes. By default the reply shows as a
-field list (each top-level field's name, type and doc), and a request's root union folds to its tag list, its
-branches left out. ``--reply`` prints the reply's whole schema, and ``--variant TAG`` one variant's; the document's
-``more`` names those commands.
+field list (each top-level field's name, type, doc and constraints), and a request's root union folds to its tag
+list, its branches left out. ``--reply`` prints the reply's whole schema, and ``--variant TAG`` one variant's; the
+document's ``more`` names those commands.
 
 **A path into a reply** (``--select``, ``wait --until``) is judged against the reply's dump schema by :func:`walk`,
 before the call: the schema declares it, has no such field, or takes a shape the walker can't read.
@@ -204,15 +204,21 @@ def variant_classes(contract: Contract) -> list[tuple[str, type]]:
     return list(out.items())
 
 
-def field_list(cls: type) -> list[dict[str, str]]:
-    """Each top-level field of ``cls``: its wire name, its type, and its doc, when it has one."""
+def field_list(cls: type) -> list[dict[str, Any]]:
+    """Each top-level field of ``cls``: its wire name, its type, and its doc and its constraints, when it has them.
+
+    The constraints are seared's, by the names a declaration gives them (``ge``, ``max_length``, ``pattern``…), in
+    seared's order; on a list or a map, they hold for each value.
+    """
     if not is_seared_class(cls):
         return []
     out = []
     for field in introspect(cls).fields:
-        entry = {'name': field.wire_key or field.attr, 'type': field.type_str}
+        entry: dict[str, Any] = {'name': field.wire_key or field.attr, 'type': field.type_str}
         if field.doc:
             entry['doc'] = field.doc
+        if field.constraints:
+            entry['constraints'] = dict(field.constraints)
         out.append(entry)
     return out
 

@@ -15,6 +15,13 @@ lines as it lands, and the entry is dated when that version is released.
 command tree's commands beside a protocol's contracts. Every contract is one, and the listing and a rule's key take
 the new name.
 
+### Added
+
+- **`describe` shows a reply field's constraints:** the field list gives each field that declares any its
+  `constraints`, seared's, by the names a declaration gives them (`{"ge": 0}`, `{"max_length": 80}`), which on a
+  list or a map hold for each value. `describe --reply` and a request's schema already carried them as JSON Schema
+  keywords.
+
 ### Changed
 
 - **Breaking:** `tooled contracts` is `tooled operations`, which lists the same lines. `tooled contracts` is refused
