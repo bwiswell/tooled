@@ -1,4 +1,4 @@
-"""Schemas: what a contract takes and gives, as JSON Schema, and the documents ``contracts`` and ``describe`` print.
+"""Schemas: what a contract takes and gives, as JSON Schema, and the documents ``operations`` and ``describe`` print.
 
 Every schema is seared's own (``seared.doc.json_schema`` and ``field_schema``), shaped by the policy:
 
@@ -60,7 +60,7 @@ def summary_line(cls: type) -> str:
 
 
 def listing(rules: Rules) -> list[dict[str, Any]]:
-    """What ``contracts`` prints: every contract the policy shows, in order, one line of each."""
+    """What ``operations`` prints: every operation the policy shows, in order, one line of each."""
     return [
         {
             'name': rules.catalog.label(contract),

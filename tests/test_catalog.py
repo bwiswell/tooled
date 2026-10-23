@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 import pytest
 from zeared import Effect
 
@@ -75,7 +77,7 @@ class TestNames:
         assert catalog.get('_support_protocol:Station') is catalog.get('Station')
 
     def test_an_unknown_name_is_a_usage_error(self, catalog):
-        with pytest.raises(UsageError, match="no contract named 'Stations'"):
+        with pytest.raises(UsageError, match="no operation named 'Stations'"):
             catalog.get('Stations')
         with pytest.raises(UsageError):
             catalog.get('nowhere:Station')
@@ -101,6 +103,40 @@ class TestNames:
     def test_slot_names_and_request_fields(self, catalog):
         assert catalog.slot_names == {'world', 'station', 'player', 'path'}
         assert catalog.request_fields == {'token', 'ask_id', 'to', 'move_id', 'text'}  # a flat union adds no wire name
+
+
+@dataclass(frozen=True)
+class Stand:
+    """An operation that isn't a contract, as a command read from a tree is to be."""
+
+    name: str
+    qualname: str
+
+
+class TestOperations:
+    def test_every_contract_is_an_operation(self, catalog):
+        assert catalog.operations == catalog.contracts
+
+    def test_lookups_labels_and_globs_serve_any_operation(self, catalog):
+        mine = Stand('Mine', 'game:Mine')
+        mixed = Catalog([*catalog.contracts, mine, Stand('Station', 'game:Station')])
+        assert mixed.get('Mine') is mine
+        assert mixed.get('game:Mine') is mine
+        assert mixed.label(mine) == 'Mine'
+        assert mixed.label(mixed.get('game:Station')) == 'game:Station'  # it shares a contract's name
+        assert [o.qualname for o in mixed.matching('M*')] == ['game:Mine', '_support_protocol:MoveResult']
+        assert mine in mixed.operations
+        assert mine not in mixed.contracts
+
+    def test_a_contract_lookup_refuses_another_operation(self, catalog):
+        mixed = Catalog([*catalog.contracts, Stand('Mine', 'game:Mine')])
+        assert mixed.contract('Station') is catalog.get('Station')
+        with pytest.raises(UsageError, match='Mine is not a contract'):
+            mixed.contract('Mine')
+
+    def test_each_qualname_is_kept_once(self, catalog):
+        station = catalog.get('Station')
+        assert Catalog([station, read(station.cls)]).operations == (station,)
 
 
 class TestLoad:

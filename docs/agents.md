@@ -11,7 +11,7 @@ apply to any agent with a shell tool.
   first with its options after it, so reads can be allowed by name:
 
   ```json
-  {"permissions": {"allow": ["Bash(tooled check *)", "Bash(tooled contracts *)", "Bash(tooled describe *)",
+  {"permissions": {"allow": ["Bash(tooled check *)", "Bash(tooled operations *)", "Bash(tooled describe *)",
                              "Bash(tooled fetch *)", "Bash(tooled query *)", "Bash(tooled listen *)",
                              "Bash(tooled wait *)"]}}
   ```
@@ -28,8 +28,8 @@ apply to any agent with a shell tool.
 
 ## The loop
 
-1. `tooled contracts` for what exists, one line each.
-2. `tooled describe CONTRACT` for one contract's slots, request and reply fields; `--variant TAG` for one variant
+1. `tooled operations` for what exists, one line each.
+2. `tooled describe OPERATION` for one operation's slots, request and reply fields; `--variant TAG` for one variant
    of a request's union, `--reply` for the reply's whole schema.
 3. `tooled fetch`, `tooled query` or `tooled wait`. A refusal comes back as JSON with an exit code that says what
    kind (policy 3, the request 4, the mesh 5, size 6, a wait out of time 7), and a request error names the field

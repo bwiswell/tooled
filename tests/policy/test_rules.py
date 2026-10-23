@@ -61,7 +61,7 @@ class TestVisible:
         assert shown(rules(tmp_path, catalog, body)) == []
 
     def test_contract_globs(self, tmp_path, catalog):
-        body = '[[allow]]\nops = ["read", "query", "invoke"]\ncontracts = ["*Reply", "Station"]\n'
+        body = '[[allow]]\nops = ["read", "query", "invoke"]\noperations = ["*Reply", "Station"]\n'
         assert shown(rules(tmp_path, catalog, body)) == ['EchoReply', 'LookReply', 'Station']
 
     def test_a_deny_with_variants_hides_only_those_variants(self, tmp_path, catalog):
@@ -143,9 +143,9 @@ class TestReferences:
     @pytest.mark.parametrize(
         ('body', 'path', 'match'),
         [
-            ('[[allow]]\nops = ["read"]\ncontracts = ["Stations"]\n', ('allow', 0, 'contracts', 0), 'no contract'),
+            ('[[allow]]\nops = ["read"]\noperations = ["Stations"]\n', ('allow', 0, 'operations', 0), 'no operation'),
             (
-                '[[deny]]\nops = ["query"]\ncontracts = ["LookReply"]\nvariants = ["ping", "peek"]\n',
+                '[[deny]]\nops = ["query"]\noperations = ["LookReply"]\nvariants = ["ping", "peek"]\n',
                 ('deny', 0, 'variants', 1),
                 "variant 'peek' is no tag",
             ),
@@ -159,18 +159,18 @@ class TestReferences:
         assert exc.value.path == path
 
     def test_globs_may_match_nothing(self, tmp_path, catalog):
-        rules(tmp_path, catalog, '[[deny]]\nops = ["invoke"]\ncontracts = ["Order*"]\nvariants = ["dev-*"]\n')
+        rules(tmp_path, catalog, '[[deny]]\nops = ["invoke"]\noperations = ["Order*"]\nvariants = ["dev-*"]\n')
 
     def test_an_ambiguous_name_is_refused_naming_both(self, tmp_path):
         head = HEAD.replace('["_support_protocol"]', '["_support_protocol", "_support_protocol_two"]')
-        policy = load(write(tmp_path, '[[allow]]\nops = ["read"]\ncontracts = ["Station"]\n', head=head))
+        policy = load(write(tmp_path, '[[allow]]\nops = ["read"]\noperations = ["Station"]\n', head=head))
         with pytest.raises(PolicyFileError, match='ambiguous') as exc:
             Rules(policy, Catalog.load(policy.protocol.packages))
-        assert exc.value.path == ('allow', 0, 'contracts', 0)
+        assert exc.value.path == ('allow', 0, 'operations', 0)
 
     def test_a_qualname_resolves_the_ambiguity(self, tmp_path):
         head = HEAD.replace('["_support_protocol"]', '["_support_protocol", "_support_protocol_two"]')
-        body = '[[allow]]\nops = ["read"]\ncontracts = ["_support_protocol_two:Station"]\n'
+        body = '[[allow]]\nops = ["read"]\noperations = ["_support_protocol_two:Station"]\n'
         policy = load(write(tmp_path, body, head=head))
         r = Rules(policy, Catalog.load(policy.protocol.packages))
         assert [c.qualname for c in r.visible_contracts()] == ['_support_protocol_two:Station']
