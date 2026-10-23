@@ -9,11 +9,12 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
-## 0.2.4 — unreleased
+## 0.2.4 — 2026-10-22
 
 **Operations, not contracts.** What tooled lists, names and looks up is an operation, so a later version can list a
-command tree's commands beside a protocol's contracts. Every contract is one, and the listing and a rule's key take
-the new name.
+command tree's commands beside a protocol's contracts; the listing and a rule's key take the new name. `describe`
+shows a reply field's constraints, a refusal names the value an open slot needs when only one fits, and `check`
+lists such slots for the policy to bind.
 
 ### Added
 
