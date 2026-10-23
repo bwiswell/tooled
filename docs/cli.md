@@ -44,7 +44,10 @@ exception: it reaches one key, so it takes every slot (below).
 - `request`: the request's JSON Schema: seared's load schema, closed against unknown keys, without the fields the
   policy injects or the variants it denies. A root union shows folded, as its list of tags, with `variants` beside
   it (each tag and a line of what it does);
-- `reply`: a field list, each top-level field's name, type and doc;
+- `reply`: a field list, each top-level field's name, type and doc, and its `constraints` when it declares any:
+  seared's, by the names a declaration gives them (`{"ge": 0}`, `{"max_length": 80}`, `{"pattern": "^[a-z]+$"}`),
+  which on a list or a map hold for each value. The request's schema carries the same constraints as JSON Schema
+  keywords (`minimum`, `maxLength`, `pattern`);
 - `more`: the commands that go deeper: `--reply` for the reply's whole dump schema, `--variant TAG` for one
   variant's fields.
 

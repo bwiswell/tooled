@@ -873,7 +873,7 @@ class TestDescribeLayers:
     def test_the_reply_is_a_field_list_unless_asked(self, tmp_path, capsys):
         policy = str(write(tmp_path, POLICY))
         _, out, _ = run(capsys, 'describe', 'Station', '--policy', policy)
-        assert out['reply'][2] == {'name': 'stock', 'type': 'int', 'doc': 'units in stock'}
+        assert out['reply'][2] == {'name': 'stock', 'type': 'int', 'doc': 'units in stock', 'constraints': {'ge': 0}}
         _, out, _ = run(capsys, 'describe', 'Station', '--reply', '--policy', policy)
         assert out['reply']['title'] == 'Station'
 

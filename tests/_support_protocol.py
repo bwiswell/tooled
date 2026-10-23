@@ -62,8 +62,8 @@ class Station(zeared.Message):
 
     world: str = zeared.Str(required=True, doc="the world's name")
     station: str = zeared.Str(required=True, doc="the station's key")
-    stock: int = zeared.Int(default=0, doc='units in stock')
-    closed: str | None = zeared.Str(default=None, doc='why it is closed, when it is')
+    stock: int = zeared.Int(default=0, ge=0, doc='units in stock')
+    closed: str | None = zeared.Str(default=None, max_length=80, doc='why it is closed, when it is')
 
 
 @zeared.zeared

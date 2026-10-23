@@ -251,6 +251,27 @@ class TestLayers:
     def test_field_list_of_a_non_seared_class_is_empty(self):
         assert field_list(int) == []
 
+    def test_field_list_shows_what_a_field_constrains(self, catalog):
+        fields = {field['name']: field for field in field_list(catalog.get('Station').cls)}
+        assert fields['stock']['constraints'] == {'ge': 0}
+        assert fields['closed']['constraints'] == {'max_length': 80}
+        assert 'constraints' not in fields['world']
+
+    def test_constraints_keep_seared_s_names_and_order_and_hold_for_each_value(self):
+        @seared.seared
+        class Gauge(seared.Seared):
+            level: float = seared.Float(default=0.5, le=1.0, gt=0.0)
+            name: str | None = seared.Str(default=None, pattern='^[a-z]+$', min_length=1)
+            readings: list[int] = seared.Int(many=True, default_factory=list, ge=0)
+            labels: dict[str, str] = seared.Str(keyed=True, default_factory=dict, max_length=8)
+
+        assert [field.get('constraints') for field in field_list(Gauge)] == [
+            {'gt': 0.0, 'le': 1.0},
+            {'min_length': 1, 'pattern': '^[a-z]+$'},
+            {'ge': 0},
+            {'max_length': 8},
+        ]
+
     def test_fold_unions_leaves_its_input_alone_and_keeps_the_tags(self, rules, catalog):
         schema = request_schema(catalog.get('LookReply'), rules)
         assert schema is not None
