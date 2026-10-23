@@ -21,6 +21,9 @@ the new name.
   `constraints`, seared's, by the names a declaration gives them (`{"ge": 0}`, `{"max_length": 80}`), which on a
   list or a map hold for each value. `describe --reply` and a request's schema already carried them as JSON Schema
   keywords.
+- **`check` lists the slots a policy would rather bind:** under `fixed`, each shown operation's open slots that the
+  allow rules let only one value fill, with that value. Every call must give such a slot that value, so binding it
+  in `[bind]` saves the agent the refusal.
 
 ### Changed
 
@@ -33,6 +36,9 @@ the new name.
   names nothing is refused as `no operation named …`.
 - **Breaking,** for a program that imports the package: a `Catalog` is made from operations, and `Catalog.of`
   reads classes, as the constructor did. `get` gives any operation, and `contract` a contract.
+- **A refusal over an open slot names its value,** when every allow rule's key that reaches the call fixes the slot
+  to one (`give world=w1`, where it said `give world=…`). Where more than one value fits, it still says `…`. The
+  kind and exit code are unchanged (`refused`, 3).
 
 ## 0.2.3 — 2026-10-20
 
