@@ -86,6 +86,13 @@ class TestUsage:
         assert err['message'].startswith(message)
         assert 'usage:' not in err['message']
 
+    @pytest.mark.parametrize('argv', [['contracts'], ['contracts', '--policy', 'tooled.toml', '--pretty']])
+    def test_a_renamed_verb_names_its_new_name(self, capsys, argv):
+        code, out, err = run(capsys, *argv)
+        assert (code, out) == (2, None)
+        assert err['error'] == 'usage'
+        assert err['message'] == '`tooled contracts` was renamed `tooled operations` in tooled 0.2.4'
+
     def test_help_still_prints_and_exits_zero(self, capsys):
         with pytest.raises(SystemExit) as exc:
             main(['fetch', '--help'])
@@ -105,15 +112,25 @@ class TestCheck:
             'policy': str(path),
             'mesh': {'mode': 'client', 'router': 'tcp/127.0.0.1:7447', 'connect': []},
             'packages': ['_support_protocol'],
-            'contracts': 8,
+            'operations': 8,
             'visible': {
                 'read': ['Notice', 'Seen', 'Station', 'Status', 'Trace'],
                 'query': ['LookReply'],
             },
             'hidden': 2,
             'bind': {'world': 'w1'},
+            'fixed': {},
             'inject': {'token': {'source': 'env DEMO_TOKEN', 'length': 16}},
         }
+
+    def test_notes_each_open_slot_the_allow_rules_fix(self, tmp_path, capsys):
+        body = (
+            '[[allow]]\nops = ["read"]\noperations = ["Station", "Notice"]\n'
+            'keys = ["demo/w1/station/*", "demo/w1/notice/ann"]\n'
+        )
+        code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', str(write(tmp_path, body)))
+        assert code == 0
+        assert out['fixed'] == {'Notice': {'world': 'w1', 'player': 'ann'}, 'Station': {'world': 'w1'}}
 
     def test_never_prints_an_injected_value(self, tmp_path, capsys, monkeypatch):
         monkeypatch.setenv('DEMO_TOKEN', 'tok-secret-value')
@@ -173,16 +190,16 @@ class TestCheckConnect:
         assert err['error'] == 'mesh'
 
 
-class TestContracts:
+class TestOperations:
     def test_lists_what_the_policy_shows(self, tmp_path, capsys):
-        code, out, err = run(capsys, 'contracts', '--policy', str(write(tmp_path, POLICY)))
+        code, out, err = run(capsys, 'operations', '--policy', str(write(tmp_path, POLICY)))
         assert (code, err) == (0, None)
         assert [row['name'] for row in out] == ['LookReply', 'Notice', 'Seen', 'Station', 'Status', 'Trace']
         assert out[0]['verbs'] == ['query']
         assert out[0]['topic'] == 'demo/w1/look/{player}'
 
     def test_an_empty_policy_lists_nothing(self, tmp_path, capsys):
-        assert run(capsys, 'contracts', '--policy', str(write(tmp_path))) == (0, [], None)
+        assert run(capsys, 'operations', '--policy', str(write(tmp_path))) == (0, [], None)
 
 
 class TestDescribe:
@@ -214,7 +231,7 @@ class TestDescribe:
     def test_an_unknown_contract_is_a_usage_error(self, tmp_path, capsys):
         code, _, err = run(capsys, 'describe', 'Stations', '--policy', str(write(tmp_path, POLICY)))
         assert code == 2
-        assert err == {'error': 'usage', 'message': "no contract named 'Stations'"}
+        assert err == {'error': 'usage', 'message': "no operation named 'Stations'"}
 
     def test_an_ambiguous_name_names_both(self, tmp_path, capsys):
         head = HEAD.replace('["_support_protocol"]', '["_support_protocol", "_support_protocol_two"]')
@@ -285,7 +302,7 @@ class TestFetch:
         policy = str(write(tmp_path, '[[allow]]\nops = ["read"]\nkeys = ["demo/w1/**"]\n', head=head))
         code, _, err = run(capsys, 'fetch', 'Station', '--policy', policy)
         assert (code, err['error']) == (3, 'refused')
-        assert err['message'].endswith(": slot 'world' is open; give world=…, or bind it in [bind]")
+        assert err['message'].endswith(": slot 'world' is open; give world=w1, or bind it in [bind]")
 
     @pytest.mark.parametrize(('slots', 'message'), [(['station'], 'name=value'), (['station=a', 'station=b'], 'twice')])
     def test_malformed_slot_arguments(self, reads, capsys, slots, message):
@@ -512,7 +529,7 @@ class TestInvoke:
         assert err['message'] == 'query does not act on MoveResult, a queryable contract; what does: invoke'
 
     def test_contracts_and_describe_list_it(self, writes, capsys):
-        rows = {row['name']: row for row in run(capsys, 'contracts', '--policy', writes)[1]}
+        rows = {row['name']: row for row in run(capsys, 'operations', '--policy', writes)[1]}
         assert (rows['MoveResult']['verbs'], rows['EchoReply']['verbs']) == (['invoke'], ['invoke'])
         _, out, _ = run(capsys, 'describe', 'MoveResult', '--policy', writes)
         assert out['verbs'] == ['invoke']
@@ -866,7 +883,7 @@ class TestDescribeLayers:
     def test_the_reply_is_a_field_list_unless_asked(self, tmp_path, capsys):
         policy = str(write(tmp_path, POLICY))
         _, out, _ = run(capsys, 'describe', 'Station', '--policy', policy)
-        assert out['reply'][2] == {'name': 'stock', 'type': 'int', 'doc': 'units in stock'}
+        assert out['reply'][2] == {'name': 'stock', 'type': 'int', 'doc': 'units in stock', 'constraints': {'ge': 0}}
         _, out, _ = run(capsys, 'describe', 'Station', '--reply', '--policy', policy)
         assert out['reply']['title'] == 'Station'
 

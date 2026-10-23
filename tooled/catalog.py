@@ -1,4 +1,7 @@
-"""The catalog: the contracts a protocol defines, as tooled sorts and names them.
+"""The catalog: the operations tooled lists, names and looks up, and the contracts a protocol defines.
+
+An operation is anything tooled can list, describe, guard or carry out (:class:`Operation`). A contract is one; the
+catalog's lookups, listing and labels serve any operation alike.
 
 A contract is a zeared ``Message`` class. Each one is read once, with zeared's and seared's own introspection,
 into a :class:`Contract`: its kind, its topic templates and their slots, its request class, its declared effect,
@@ -10,7 +13,7 @@ and the tags of its request's unions. Request and view classes aren't contracts;
 - ``liveliness``: ``LIVELINESS`` alone, a presence feed;
 - ``stream``: anything else, a plain publish-subscribe topic.
 
-**Names:** a contract is named by its class's name (``FleetState``), and always also answers to
+**Names:** an operation is named by its class's name (``FleetState``), and always also answers to
 ``module:Class``. When two packages define classes with the same name, the bare name is ambiguous: it's refused
 wherever it's used, naming both, and the catalog lists each by ``module:Class``.
 """
@@ -22,7 +25,7 @@ import fnmatch
 import importlib
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from seared import FieldKind
 from seared.doc import collect, introspect, is_seared_class
@@ -48,6 +51,18 @@ class Kind(enum.StrEnum):
     QUERYABLE = 'queryable'
     LIVELINESS = 'liveliness'
     STREAM = 'stream'
+
+
+class Operation(Protocol):
+    """What the catalog holds: anything tooled can list, describe, guard or carry out, named as a class is."""
+
+    @property
+    def name(self) -> str:
+        """The class's name."""
+
+    @property
+    def qualname(self) -> str:
+        """``module:Class``, which always names it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,22 +99,26 @@ class Contract:
 
 
 class Catalog:
-    """The contracts of one or more protocol packages.
+    """Operations, sorted and named: each once, by ``module:Class``.
 
     Args:
-        classes: Any classes; the zeared ``Message`` classes among them become contracts.
+        operations: The operations; one whose ``module:Class`` comes again is kept once, the first.
     """
 
-    def __init__(self, classes: Iterable[type]) -> None:
-        found: dict[str, Contract] = {}
-        for cls in classes:
-            if is_message_class(cls):
-                contract = read(cls)
-                found.setdefault(contract.qualname, contract)
-        self.contracts: tuple[Contract, ...] = tuple(sorted(found.values(), key=lambda c: (c.name, c.qualname)))
-        self._by_name: dict[str, list[Contract]] = {}
-        for contract in self.contracts:
-            self._by_name.setdefault(contract.name, []).append(contract)
+    def __init__(self, operations: Iterable[Operation]) -> None:
+        found: dict[str, Operation] = {}
+        for operation in operations:
+            found.setdefault(operation.qualname, operation)
+        self.operations: tuple[Operation, ...] = tuple(sorted(found.values(), key=lambda o: (o.name, o.qualname)))
+        self.contracts: tuple[Contract, ...] = tuple(o for o in self.operations if isinstance(o, Contract))
+        self._by_name: dict[str, list[Operation]] = {}
+        for operation in self.operations:
+            self._by_name.setdefault(operation.name, []).append(operation)
+
+    @classmethod
+    def of(cls, classes: Iterable[type]) -> Catalog:
+        """The contracts among ``classes``: the zeared ``Message`` classes, each read into a :class:`Contract`."""
+        return cls(read(c) for c in classes if is_message_class(c))
 
     @classmethod
     def load(cls, packages: Sequence[str]) -> Catalog:
@@ -116,39 +135,51 @@ class Catalog:
             except Exception as exc:  # whatever a package raises on import, it's this error
                 msg = f'protocol package {package!r} would not import: {type(exc).__name__}: {exc}'
                 raise CatalogError(msg, path=('protocol', 'packages', index)) from exc
-        return cls(classes)
+        return cls.of(classes)
 
-    def label(self, contract: Contract) -> str:
-        """The name to show for ``contract``: its class's name, or ``module:Class`` when that's ambiguous."""
-        return contract.name if len(self._by_name.get(contract.name, ())) == 1 else contract.qualname
+    def label(self, operation: Operation) -> str:
+        """The name to show for ``operation``: its class's name, or ``module:Class`` when that's ambiguous."""
+        return operation.name if len(self._by_name.get(operation.name, ())) == 1 else operation.qualname
 
-    def get(self, name: str) -> Contract:
-        """The contract ``name`` names: a class's name, or ``module:Class``.
+    def get(self, name: str) -> Operation:
+        """The operation ``name`` names: a class's name, or ``module:Class``.
 
         Raises:
             UsageError: It names none, or a class's name that two packages define.
         """
         if ':' in name:
-            for contract in self.contracts:
-                if contract.qualname == name:
-                    return contract
+            for operation in self.operations:
+                if operation.qualname == name:
+                    return operation
         else:
             named = self._by_name.get(name, [])
             if len(named) == 1:
                 return named[0]
             if named:
-                both = ', '.join(c.qualname for c in named)
+                both = ', '.join(o.qualname for o in named)
                 msg = f'{name!r} is ambiguous: name one of {both}'
                 raise UsageError(msg)
-        msg = f'no contract named {name!r}'
+        msg = f'no operation named {name!r}'
         raise UsageError(msg)
 
-    def matching(self, pattern: str) -> list[Contract]:
-        """The contracts a glob matches, by class name or by ``module:Class``."""
+    def contract(self, name: str) -> Contract:
+        """The contract ``name`` names, as :meth:`get` finds it.
+
+        Raises:
+            UsageError: It names no operation, an ambiguous one, or one that isn't a contract.
+        """
+        found = self.get(name)
+        if not isinstance(found, Contract):
+            msg = f'{self.label(found)} is not a contract'
+            raise UsageError(msg)
+        return found
+
+    def matching(self, pattern: str) -> list[Operation]:
+        """The operations a glob matches, by class name or by ``module:Class``."""
         return [
-            c
-            for c in self.contracts
-            if fnmatch.fnmatchcase(c.name, pattern) or fnmatch.fnmatchcase(c.qualname, pattern)
+            o
+            for o in self.operations
+            if fnmatch.fnmatchcase(o.name, pattern) or fnmatch.fnmatchcase(o.qualname, pattern)
         ]
 
     @property

@@ -45,12 +45,12 @@ keys = ["demo/w1/**"]
 
 [[allow]]                       # one write, for one player
 ops = ["invoke"]
-contracts = ["MoveResult"]
+operations = ["MoveResult"]
 keys = ["demo/w1/move/ann"]
 
 [[deny]]                        # deny wins
 ops = ["query"]
-contracts = ["LookReply"]
+operations = ["LookReply"]
 variants = ["dev-*"]
 ```
 
@@ -66,9 +66,10 @@ overrides it, so a policy can't be pointed at another mesh from the command line
 |---|---|
 | `packages` | The protocol packages (or modules) whose contracts tooled reads, submodules included. Each must import in tooled's environment, on the same zeared tooled runs on. |
 
-Each zeared `Message` class becomes a **contract**, sorted by what it is:
+Each zeared `Message` class becomes a **contract**, one of the operations `tooled operations` lists, sorted by what
+it is, which decides its op:
 
-| Kind | What makes it so | Operation |
+| Kind | What makes it so | Op |
 |---|---|---|
 | retained | `RETAINED = True`, presence feed or not | `read` |
 | stream | none of the others | `read` |
@@ -82,11 +83,12 @@ naming both, and `module:Class` picks one.
 ## `[bind]`
 
 Slot values every key renders with. A bound slot is fixed: a call that gives it another value is refused, and
-`describe` and `contracts` show it filled. Each value is one concrete chunk of a key: no `/`, and no wildcard.
+`describe` and `operations` show it filled. Each value is one concrete chunk of a key: no `/`, and no wildcard.
 
 Binding is a guardrail and a convenience. Where a server checks a token against a slot, binding that slot saves
 giving it each time; a policy that wants other values of a slot (another player's public state, say) leaves it
-unbound.
+unbound. `tooled check` lists, under `fixed`, each open slot that the allow rules let only one value fill: a slot
+every call must give that value, which is better bound.
 
 ## `[inject]`
 
@@ -127,21 +129,23 @@ key = "token"
 
 | Key | Default | Meaning |
 |---|---|---|
-| `ops` | required | `read`, `query`, `invoke`, `publish`, `unretain`. This version acts on `read`, `query` and `invoke`; `publish` and `unretain` load, so a policy written now carries forward |
-| `contracts` | `["*"]` | globs over contract names, or `module:Class` |
+| `ops` | required | what's done: `read`, `query`, `invoke`, `publish`, `unretain`. This version acts on `read`, `query` and `invoke`; `publish` and `unretain` load, so a policy written now carries forward |
+| `operations` | `["*"]` | what it's done to: globs over the names `tooled operations` lists, or `module:Class`. It was `contracts` before 0.2.4; that key is refused, naming this one |
 | `keys` | `["**"]` | Zenoh key expressions (`*` one chunk, `**` any number, `$*` within a chunk) |
 | `variants` | none | globs over the tags of a request's root union; none covers the whole contract |
 
-**Nothing is allowed until a rule allows it, and deny wins.** A rule covers a contract when it names the contract's
-operation and one of its globs matches the contract's name. Then its keys decide, with Zenoh's own matching:
+**Nothing is allowed until a rule allows it, and deny wins.** A rule covers a contract when its `ops` name the
+contract's op and one of its `operations` globs matches the contract's name. Then its keys decide, with Zenoh's own
+matching:
 
 - **What's shown.** A contract is shown when an allow rule's keys intersect one of its topics (as `[bind]` renders
-  it) and no deny rule covers all of them. `contracts`, `describe` and every call see only what's shown.
+  it) and no deny rule covers all of them. `operations`, `describe` and every call see only what's shown.
 - **What a fetch, a query or a write may reach.** A call renders one selector: the topic with its given and bound
   slots filled, the rest widened. It is allowed when an allow rule's keys include the whole selector, and no deny
   rule's keys intersect it. Replies carry no keys to filter by afterwards, so a selector that could reach a denied
-  key is refused outright, with a hint to narrow the slots. A write (`invoke`) is never widened: every slot must be
-  given or bound, so it reaches one key.
+  key is refused outright, with a hint to narrow the slots. A selector no allow rule covers is refused naming each
+  open slot an allow rule's keys fix, with its value when they fix it to one (`give world=w1`), else `…`. A write
+  (`invoke`) is never widened: every slot must be given or bound, so it reaches one key.
 - **What a stream hands on.** `listen` and `wait` check each sample's key, which it does carry: a sample on a
   denied key is left out and counted, rather than the whole stream refused.
 

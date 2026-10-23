@@ -1,7 +1,8 @@
 """The policy's rules, checked against a catalog: which contracts it shows, and whether it allows a call.
 
-Each contract takes one operation (:func:`op_of`). A rule matches a contract when it names that operation and one
-of its globs matches the contract's name. Then its keys decide, with Zenoh's own matching (``zeared.keyexpr``):
+Each contract takes one op (:func:`op_of`). A rule matches a contract when its ``ops`` name that op and one of its
+``operations`` globs matches the contract's name. Then its keys decide, with Zenoh's own matching
+(``zeared.keyexpr``):
 
 - **What's shown.** A contract is shown when an allow rule's keys intersect one of its topics (as the policy's
   ``[bind]`` renders it) and no deny rule covers all of them.
@@ -21,21 +22,21 @@ from typing import TYPE_CHECKING
 
 from zeared import Effect, keyexpr
 
-from ..catalog import SLOT, Kind, render
+from ..catalog import SLOT, Contract, Kind, render
 from ..errors import PolicyFileError, RefusedError, UsageError
 from .config import Op
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from ..catalog import Catalog, Contract
+    from ..catalog import Catalog
     from .config import Policy, Rule
 
 _GLOB = frozenset('*?[')
 
 
 def op_of(contract: Contract) -> Op:
-    """The operation ``contract`` takes.
+    """The op ``contract`` takes: what a rule's ``ops`` name to cover it.
 
     ``read`` for a retained class, a stream or a presence feed; ``query`` for a queryable that declares
     ``EFFECT = READ``; ``invoke`` for any other queryable, an undeclared one included, so the default fails safe.
@@ -53,7 +54,7 @@ class Rules:
         catalog: The contracts of its protocol.
 
     Raises:
-        PolicyFileError: A rule names a contract or a variant the protocol doesn't have, a bound slot is no
+        PolicyFileError: A rule names an operation or a variant the protocol doesn't have, a bound slot is no
             contract's, or an injected field is no request's.
     """
 
@@ -129,7 +130,8 @@ class Rules:
         Raises:
             RefusedError: A deny rule's keys intersect the selector (for its variant, if it names variants), or no
                 allow rule's keys include it. Then, when a slot left open is one an allow rule's keys fix, the
-                message names it, since filling it is what the call needs.
+                message names it, since filling it is what the call needs, and the value too, when the allow
+                rules that reach the selector all fix it to one.
         """
         op, label = op_of(contract), self.catalog.label(contract)
         for index, rule in enumerate(self.policy.deny):
@@ -150,10 +152,27 @@ class Rules:
             msg = f'no allow rule covers {op} on {label} at {selector}{_fill_hint(contract, selector, allows)}'
             raise RefusedError(msg)
 
+    def fixed(self, contract: Contract) -> dict[str, str]:
+        """The slots ``contract``'s topics leave open that the allow rules let only one value fill, with that value.
+
+        Read on each topic as ``[bind]`` renders it, against the keys of the allow rules that cover the contract
+        and reach that topic. Every call must give such a slot that one value, so a policy would rather bind it. A
+        slot two topics fix to different values is left out.
+        """
+        op = op_of(contract)
+        allows = [rule for rule in self.policy.allow if _covers(rule, op, contract) and _any_tag(rule, contract)]
+        found: dict[str, str | None] = {}
+        for shape in self.shapes(contract):
+            keys = _reaching(allows, shape)
+            for name, at, multi in _open_slots(contract, shape):
+                value = _only_value(keys, at, multi=multi)
+                found[name] = value if found.get(name, value) == value else None
+        return {name: value for name, value in found.items() if value is not None}
+
     # ---- references --------------------------------------------------------------------------
 
     def _check_references(self) -> None:
-        """A name without a glob must name something: a contract, a variant, a slot, a request field."""
+        """A name without a glob must name something: an operation, a variant, a slot, a request field."""
         for side in ('allow', 'deny'):
             for index, rule in enumerate(getattr(self.policy, side)):
                 self._check_rule(rule, (side, index))
@@ -170,14 +189,14 @@ class Rules:
 
     def _check_rule(self, rule: Rule, where: tuple[str | int, ...]) -> None:
         matched: dict[str, Contract] = {}
-        for at, pattern in enumerate(rule.contracts):
+        for at, pattern in enumerate(rule.operations):
             found = self.catalog.matching(pattern)
             if not (_GLOB & set(pattern)):
                 try:
                     found = [self.catalog.get(pattern)]
                 except UsageError as exc:
-                    raise PolicyFileError(exc.message, path=(*where, 'contracts', at)) from exc
-            matched |= {c.qualname: c for c in found}
+                    raise PolicyFileError(exc.message, path=(*where, 'operations', at)) from exc
+            matched |= {o.qualname: o for o in found if isinstance(o, Contract)}
         if rule.variants is None:
             return
         tags = {tag for contract in matched.values() for tag in contract.variants}
@@ -192,28 +211,53 @@ def _fill_hint(contract: Contract, selector: str, allows: Sequence[Rule]) -> str
 
     A slot the call left open renders as ``*`` (``*/**`` for a trailing ``{name**}``). One is named when an allow
     rule's key intersects the selector and holds a literal chunk where the slot is, with no ``**`` before it: a
-    value there is what the rule wants. A slot every rule leaves wild already is no help, so it isn't named.
+    value there is what the rule wants. A slot every rule leaves wild already is no help, so it isn't named. The
+    value is given too when every key that reaches the selector fixes the slot to the same one; else it's ``…``.
     """
-    keys = [key.split('/') for rule in allows for key in rule.keys if keyexpr.intersects(key, selector)]
+    keys = _reaching(allows, selector)
     named = [
-        name
-        for name, at in _open_slots(contract, selector)
-        if any(at < len(key) and '**' not in key[: at + 1] and not _wild(key[at]) for key in keys)
+        (name, _only_value(keys, at, multi=multi) or '…')
+        for name, at, multi in _open_slots(contract, selector)
+        if any(_fixes(key, at) for key in keys)
     ]
     if not named:
         return ''
-    give = ' '.join(f'{name}=…' for name in named)
+    give = ' '.join(f'{name}={value}' for name, value in named)
     if len(named) == 1:
-        return f': slot {named[0]!r} is open; give {give}, or bind it in [bind]'
-    listed = ', '.join(repr(name) for name in named[:-1]) + f' and {named[-1]!r}'
+        return f': slot {named[0][0]!r} is open; give {give}, or bind it in [bind]'
+    listed = ', '.join(repr(name) for name, _ in named[:-1]) + f' and {named[-1][0]!r}'
     return f': slots {listed} are open; give {give}, or bind them in [bind]'
 
 
-def _open_slots(contract: Contract, selector: str) -> list[tuple[str, int]]:
-    """Each slot ``selector`` leaves open, with its chunk's index, read against the template it was rendered from.
+def _reaching(allows: Sequence[Rule], selector: str) -> list[list[str]]:
+    """The keys of ``allows`` that intersect ``selector``, each split into its chunks."""
+    return [key.split('/') for rule in allows for key in rule.keys if keyexpr.intersects(key, selector)]
 
-    A template fits when its literal chunks are the selector's own; a slot sharing a chunk with other text can't be
-    told apart, so a template with one is passed over, and nothing is named for it.
+
+def _fixes(key: Sequence[str], at: int) -> bool:
+    """Whether ``key`` holds a literal chunk at ``at``, with no ``**`` before it: a slot there wants that value."""
+    return at < len(key) and '**' not in key[: at + 1] and not _wild(key[at])
+
+
+def _only_value(keys: Sequence[Sequence[str]], at: int, *, multi: bool) -> str | None:
+    """The one value every key in ``keys`` fixes for a slot at chunk ``at``, or ``None`` when they don't agree.
+
+    A key fixes a slot's value when it holds literal chunks there: one chunk, or for a trailing multi-chunk slot
+    every chunk to the key's end. A key that leaves any of it wild lets other values in, so then there's none.
+    """
+    values = set()
+    for key in keys:
+        chunks = key[at:] if multi else key[at : at + 1]
+        values.add('/'.join(chunks) if _fixes(key, at) and not any(_wild(c) for c in chunks) else None)
+    return values.pop() if len(values) == 1 and None not in values else None
+
+
+def _open_slots(contract: Contract, selector: str) -> list[tuple[str, int, bool]]:
+    """Each slot ``selector`` leaves open: its name, its chunk's index, and whether it takes the rest of the key.
+
+    It's read against the template ``selector`` was rendered from. A template fits when its literal chunks are the
+    selector's own; a slot sharing a chunk with other text can't be told apart, so a template with one is passed
+    over, and nothing is named for it.
     """
     chunks = selector.split('/')
     for template in contract.templates:
@@ -226,7 +270,7 @@ def _open_slots(contract: Contract, selector: str) -> list[tuple[str, int]]:
             continue
         tail = len(parts) - 1
         return [
-            (slot.group(1), at)
+            (slot.group(1), at, multi and at == tail)
             for at, slot in enumerate(slots)
             if slot is not None and (chunks[at:] == ['*', '**'] if multi and at == tail else chunks[at] == '*')
         ]
@@ -239,10 +283,10 @@ def _wild(chunk: str) -> bool:
 
 
 def _covers(rule: Rule, op: Op, contract: Contract) -> bool:
-    """Whether ``rule`` names ``op`` and a glob of it matches ``contract``."""
+    """Whether ``rule``'s ``ops`` name ``op`` and one of its ``operations`` globs matches ``contract``."""
     return op in rule.ops and any(
         fnmatch.fnmatchcase(contract.name, glob) or fnmatch.fnmatchcase(contract.qualname, glob)
-        for glob in rule.contracts
+        for glob in rule.operations
     )
 
 

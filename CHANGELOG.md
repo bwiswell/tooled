@@ -9,6 +9,38 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
+## 0.2.4 — 2026-10-22
+
+**Operations, not contracts.** What tooled lists, names and looks up is an operation, so a later version can list a
+command tree's commands beside a protocol's contracts; the listing and a rule's key take the new name. `describe`
+shows a reply field's constraints, a refusal names the value an open slot needs when only one fits, and `check`
+lists such slots for the policy to bind.
+
+### Added
+
+- **`describe` shows a reply field's constraints:** the field list gives each field that declares any its
+  `constraints`, seared's, by the names a declaration gives them (`{"ge": 0}`, `{"max_length": 80}`), which on a
+  list or a map hold for each value. `describe --reply` and a request's schema already carried them as JSON Schema
+  keywords.
+- **`check` lists the slots a policy would rather bind:** under `fixed`, each shown operation's open slots that the
+  allow rules let only one value fill, with that value. Every call must give such a slot that value, so binding it
+  in `[bind]` saves the agent the refusal.
+
+### Changed
+
+- **Breaking:** `tooled contracts` is `tooled operations`, which lists the same lines. `tooled contracts` is refused
+  (exit 2), naming the new verb.
+- **Breaking:** a rule's `contracts` key is `operations`: globs over the names `tooled operations` lists, or
+  `module:Class`, as before. A rule that still says `contracts` is refused, naming the key to write instead. A
+  rule's `ops` say what's done, and its `operations` what it's done to.
+- **Breaking:** `check` counts `operations`, not `contracts`; `describe` takes an operation's name; and a name that
+  names nothing is refused as `no operation named …`.
+- **Breaking,** for a program that imports the package: a `Catalog` is made from operations, and `Catalog.of`
+  reads classes, as the constructor did. `get` gives any operation, and `contract` a contract.
+- **A refusal over an open slot names its value,** when every allow rule's key that reaches the call fixes the slot
+  to one (`give world=w1`, where it said `give world=…`). Where more than one value fits, it still says `…`. The
+  kind and exit code are unchanged (`refused`, 3).
+
 ## 0.2.3 — 2026-10-20
 
 **parsed is now tooled.** The name parsed passes to a command-line library in the same family. The tool itself is

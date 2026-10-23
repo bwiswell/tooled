@@ -60,7 +60,7 @@ class TestLoad:
 
                 [[deny]]
                 ops = ["query"]
-                contracts = ["LookReply"]
+                operations = ["LookReply"]
                 variants = ["dev-*"]
                 """,
             )
@@ -72,7 +72,7 @@ class TestLoad:
         assert policy.inject['token'].env == 'DEMO_TOKEN'
         (allow,) = policy.allow
         assert allow.ops == [Op.READ, Op.QUERY]
-        assert allow.contracts == ['*']
+        assert allow.operations == ['*']
         assert allow.keys == ['demo/w1/**']
         assert allow.variants is None
         assert policy.deny[0].variants == ['dev-*']
@@ -125,6 +125,13 @@ class TestLoad:
             load(write(tmp_path, head=head))
         assert exc.value.path == ('protocol', 'extension')
 
+    @pytest.mark.parametrize('side', ['allow', 'deny'])
+    def test_a_rule_s_contracts_is_refused_naming_operations(self, tmp_path, side):
+        body = f'[[{side}]]\nops = ["read"]\n\n[[{side}]]\nops = ["read"]\ncontracts = ["Station"]\n'
+        with pytest.raises(PolicyFileError, match=r'`contracts` was renamed `operations` in tooled 0\.2\.4') as exc:
+            load(write(tmp_path, body))
+        assert exc.value.path == (side, 1, 'contracts')
+
 
 class TestChecks:
     def test_no_packages(self, tmp_path):
@@ -132,8 +139,8 @@ class TestChecks:
         with pytest.raises(PolicyFileError, match='names no package'):
             load(write(tmp_path, head=head))
 
-    def test_a_rule_with_no_operations(self, tmp_path):
-        with pytest.raises(PolicyFileError, match='at least one operation') as exc:
+    def test_a_rule_with_no_ops(self, tmp_path):
+        with pytest.raises(PolicyFileError, match='at least one op') as exc:
             load(write(tmp_path, '[[deny]]\nops = []\n'))
         assert exc.value.path == ('deny', 0, 'ops')
 

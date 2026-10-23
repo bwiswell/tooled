@@ -1,7 +1,7 @@
 # The command
 
 ```
-tooled VERB [CONTRACT] [slot=value …] [--policy PATH] [options]
+tooled VERB [OPERATION] [slot=value …] [--policy PATH] [options]
 ```
 
 Every verb takes `--policy` after the verb (else `$TOOLED_POLICY`, else `./tooled.toml`; see
@@ -11,17 +11,19 @@ Every verb takes `--policy` after the verb (else `$TOOLED_POLICY`, else `./toole
 
 | Verb | Acts on | Prints |
 |---|---|---|
-| `check [--connect] [--no-resolve]` | the policy | what it shows, by operation; each injected field's source, the length of one read, and the path it read, variables expanded (a generated one is never made); with `--connect`, whether the session opens; with `--no-resolve`, the same without reading any inject source or expanding any variable |
-| `contracts` | the policy | one line of each contract it shows: kind, verbs, topic (bound slots filled), slots left to give, summary |
-| `describe CONTRACT [--reply \| --variant TAG]` | any shown contract | the contract, layered (below) |
+| `check [--connect] [--no-resolve]` | the policy | how many operations its protocol has, what it shows by op, and how many it hides; under `fixed`, each shown operation's open slots that the allow rules let only one value fill, with that value (bind them, or every call must give it); each injected field's source, the length of one read, and the path it read, variables expanded (a generated one is never made); with `--connect`, whether the session opens; with `--no-resolve`, the same without reading any inject source or expanding any variable |
+| `operations` | the policy | one line of each operation it shows: kind, verbs, topic (bound slots filled), slots left to give, summary |
+| `describe OPERATION [--reply \| --variant TAG]` | any shown operation | the operation, layered (below) |
 | `fetch CONTRACT [slot=value …]` | a retained contract | its values, sorted |
 | `query CONTRACT [slot=value …] [--request JSON]` | a queryable that declares `EFFECT = READ` | its replies, in the order they arrived |
 | `listen CONTRACT [slot=value …]` | a retained contract or a stream | one JSON line per value as it arrives |
 | `invoke CONTRACT [slot=value …] [--request JSON] [--dry-run]` | a queryable that writes: `EFFECT = WRITE` or `ACTION`, or none declared | its replies, in the order they arrived; with `--dry-run`, what it would send |
 | `wait CONTRACT [slot=value …] --until PATH=VALUE [--until …]` | a retained contract or a stream | the first value that meets every condition |
 
-A contract is its class's name, or `module:Class`. Presence feeds have no verb in this version; `contracts` lists
-them with none, and a verb that doesn't act on a contract says which ones do.
+An operation is anything tooled lists and acts on; each is a contract in this version. An operation, a contract
+included, is its class's name, or `module:Class`. Presence feeds have no verb in this version; `operations` lists
+them with none, and a verb that doesn't act on a contract says which ones do. `tooled contracts`, the listing's name
+before 0.2.4, is refused naming `operations`.
 
 `--timeout S` bounds how long a verb waits on the mesh: 5 seconds for `fetch`, `query` and `invoke`, 30 for
 `wait`. It bounds the whole of a `fetch`, a contract with several topics too. A topic whose queryable didn't answer
@@ -42,7 +44,10 @@ exception: it reaches one key, so it takes every slot (below).
 - `request`: the request's JSON Schema: seared's load schema, closed against unknown keys, without the fields the
   policy injects or the variants it denies. A root union shows folded, as its list of tags, with `variants` beside
   it (each tag and a line of what it does);
-- `reply`: a field list, each top-level field's name, type and doc;
+- `reply`: a field list, each top-level field's name, type and doc, and its `constraints` when it declares any:
+  seared's, by the names a declaration gives them (`{"ge": 0}`, `{"max_length": 80}`, `{"pattern": "^[a-z]+$"}`),
+  which on a list or a map hold for each value. The request's schema carries the same constraints as JSON Schema
+  keywords (`minimum`, `maxLength`, `pattern`);
 - `more`: the commands that go deeper: `--reply` for the reply's whole dump schema, `--variant TAG` for one
   variant's fields.
 
@@ -145,14 +150,14 @@ The cap is `--max-bytes N`, else `$TOOLED_MAX_BYTES`, else 28,000 bytes; `0` rem
 
 - **`--select PATHS`** keeps parts of a result, structure kept: comma-separated paths, dotted (`size.w`), with `[]`
   mapping over a list (`systems[].key`). It applies to each item of a list result (`fetch`, `query`, `invoke`,
-  `contracts`), and to each line of `listen`.
+  `operations`), and to each line of `listen`.
   - **On a contract's values** (`fetch`, `query`, `invoke`, `listen`, `wait`), each path is checked against the
     contract's schema before the call. A path that names no field is refused (exit 2), before anything reaches the
     mesh, with the names nearest it: `--select 'stok' names no field of Station; did you mean 'stock'?`. A field
     the schema declares but a value leaves out (an optional one, say) is simply absent from that value. A map's
     keys and a `Bytes` field's `bytes` and `sha256` count as declared. A path into a shape the schema leaves open
     (an `Any` field) can't be judged this way, so it must match something, as on tooled's own documents.
-  - **On tooled's own documents** (`check`, `contracts`, `describe`), a path that matches nothing in a non-empty
+  - **On tooled's own documents** (`check`, `operations`, `describe`), a path that matches nothing in a non-empty
     result is refused, so a typo shows.
 - **`--out FILE`** writes the whole result to a file, uncapped, and prints `{"written": path, "bytes": n}`. Every
   verb but `listen` takes it.

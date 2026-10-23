@@ -30,8 +30,8 @@ tooled runs in the same environment as the protocol packages it reads, and they 
 refuses two sources for one package). Install it as a uv tool, with the protocol beside it:
 
 ```sh
-uv tool install "git+https://github.com/bwiswell/tooled@v0.2.3" --with <protocol-package>
-tooled --version            # tooled 0.2.3 (seared 0.4.4, zeared 0.4.4)
+uv tool install "git+https://github.com/bwiswell/tooled@v0.2.4" --with <protocol-package>
+tooled --version            # tooled 0.2.4 (seared 0.4.4, zeared 0.4.4)
 ```
 
 `--with` takes whatever names the protocol: a path to its checkout, a git URL, or a package name. From a checkout of
@@ -64,7 +64,7 @@ keys = ["demo/w1/**"]
 
 ```sh
 tooled check --connect                      # what the policy shows; is the mesh there?
-tooled contracts                            # one line per contract
+tooled operations                           # one line per operation
 tooled describe LookReply                   # its slots, request schema and reply fields
 tooled fetch Station                        # every station of w1, sorted
 tooled fetch Station station=s2             # one
@@ -85,7 +85,7 @@ generate = "uuid"
 
 [[allow]]
 ops = ["invoke"]
-contracts = ["MoveResult"]
+operations = ["MoveResult"]
 keys = ["demo/w1/move/ann"]
 ```
 
@@ -134,9 +134,9 @@ nothing outside the repo is needed.
 
 ## Status
 
-0.2.3 reads and writes a mesh: `check`, `contracts`, `describe`, `fetch`, `query`, `listen`, `invoke` (with
+0.2.4 reads and writes a mesh: `check`, `operations`, `describe`, `fetch`, `query`, `listen`, `invoke` (with
 `--dry-run`, generated ids, and one retry after a lost reply) and `wait`, under a strict policy file with bound
 slots, injected fields (from paths that may hold variables) and generated ones, and allow and deny rules over
-operations, contracts, keys and union variants. `--select` and `--until` paths are checked against each contract's
+ops, operations, keys and union variants. `--select` and `--until` paths are checked against each contract's
 schema before the call, and every error, a malformed argument's included, is one JSON line on stderr. Not yet:
 publishing and unretaining, a long-lived `tooled serve` with an MCP face, and per-protocol extensions.

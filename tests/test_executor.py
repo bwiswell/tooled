@@ -119,7 +119,7 @@ class TestWideFetch:
 
     @pytest.fixture
     def berths(self, tmp_path):
-        catalog = Catalog([Berth])
+        catalog = Catalog.of([Berth])
         return catalog.get('Berth'), Rules(load(write(tmp_path, '[[allow]]\nops = ["read"]\n')), catalog)
 
     def test_every_topic_s_values(self, client, world, berths):

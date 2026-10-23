@@ -47,7 +47,7 @@ class TooledError(Exception):
 
 
 class UsageError(TooledError):
-    """The command was given something it can't use: an unknown contract, say, or a malformed slot."""
+    """The command was given something it can't use: an unknown operation, say, or a malformed slot."""
 
     kind = 'usage'
     exit_code = 2
