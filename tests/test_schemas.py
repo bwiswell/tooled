@@ -2,7 +2,7 @@ import copy
 
 import pytest
 import seared
-from _support_policy import write
+from _support_policy import HEAD, write
 from jsonschema import Draft202012Validator
 from seared.doc import json_schema
 
@@ -13,6 +13,7 @@ from tooled.schemas import (
     ITEMS,
     Walk,
     describe,
+    describe_command,
     describe_variant,
     drop_fields,
     drop_variants,
@@ -90,8 +91,10 @@ class TestListing:
         (station,) = [row for row in rows if row['name'] == 'Station']
         assert station == {
             'name': 'Station',
+            'route': 'wire',
             'kind': 'retained',
             'verbs': ['fetch', 'listen', 'wait'],
+            'effect': None,
             'topic': 'demo/w1/station/{station}',
             'slots': ['station'],
             'summary': "A station's state, retained.",
@@ -397,3 +400,122 @@ class TestWalk:
         schema = json_schema(catalog.get('Status').cls, mode='dump')
         assert walk(schema, ['logo', 'sha256']).declared is True
         assert walk(schema, ['up']).declared is True
+
+
+#: A policy over the fixture app: every command's op, the service mounted twice, a slot bound.
+TREE = """
+[app]
+factory = "_support_app:factory"
+
+[bind]
+fleet = "f1"
+
+[[allow]]
+ops = ["see", "do", "confirm"]
+"""
+
+
+@pytest.fixture(scope='module')
+def app_catalog():
+    return Catalog.load(['_support_protocol'], factory='_support_app:factory')
+
+
+@pytest.fixture
+def tree(tmp_path, app_catalog):
+    return Rules(load(write(tmp_path, TREE)), app_catalog)
+
+
+class TestCommandListing:
+    def test_commands_beside_contracts_each_with_its_route(self, tree):
+        rows = {row['name']: row for row in listing(tree)}
+        assert list(rows) == [
+            'FleetMine',
+            'PlayerMove',
+            'StationDock',
+            'StationMap',
+            'StationShow',
+            'gateway/Run',
+            'gateway/Status',
+            'relay/Run',
+            'relay/Status',
+        ]
+        assert rows['relay/Run'] == {
+            'name': 'relay/Run',
+            'route': 'tree',
+            'verbs': [],
+            'effect': 'action',
+            'phrase': 'relay run',
+            'slots': [],
+            'summary': "Run the service until it's stopped.",
+        }
+        assert (rows['FleetMine']['phrase'], rows['FleetMine']['slots'], rows['FleetMine']['effect']) == (
+            'fleet {fleet} mine',
+            [],  # bound
+            None,
+        )
+
+    def test_an_interactive_command_names_the_one_to_say_instead(self, tree):
+        (shown,) = [row for row in listing(tree) if row['name'] == 'StationMap']
+        assert (shown['interactive'], shown['instead']) == (True, 'StationShow')
+        assert 'interactive' not in next(row for row in listing(tree) if row['name'] == 'StationShow')
+
+
+class TestDescribeCommand:
+    def test_a_command_whole(self, tree, app_catalog):
+        doc = describe_command(app_catalog.get('StationDock'), tree)
+        assert {k: doc[k] for k in ('name', 'qualname', 'route', 'op', 'verbs', 'effect', 'phrases', 'keys')} == {
+            'name': 'StationDock',
+            'qualname': '_support_tree.game:StationDock',
+            'route': 'tree',
+            'op': 'do',
+            'verbs': [],
+            'effect': 'action',
+            'phrases': ['dock {station}'],
+            'keys': ['dock/{station}'],
+        }
+        assert (doc['asks'], doc['interactive'], doc['instead'], doc['overlaps'], doc['reply']) == (
+            True,
+            False,
+            None,
+            [],
+            None,
+        )
+        assert doc['slots'] == {'station': {'type': 'string', 'description': "the station's key", 'x-kind': 'station'}}
+        assert doc['arguments']['x-asks'] is True
+        assert doc['arguments']['unevaluatedProperties'] is False
+
+    def test_a_bound_slot_is_filled_and_out_of_its_arguments(self, tree, app_catalog):
+        doc = describe_command(app_catalog.get('FleetMine'), tree)
+        assert doc['slots'] == {'fleet': {'bound': 'f1'}}
+        assert doc['phrases'] == ['fleet {fleet} mine', 'mine with {fleet}']
+        assert 'fleet' not in doc['arguments']['properties']
+        assert 'required' not in doc['arguments']
+
+    def test_its_reply_and_its_contract(self, tree, app_catalog):
+        doc = describe_command(app_catalog.get('StationShow'), tree)
+        assert doc['overlaps'] == ['Station']
+        assert [field['name'] for field in doc['reply']] == ['world', 'station', 'stock', 'closed']
+        assert doc['more'] == {'reply': "tooled describe StationShow --reply: the reply's whole schema"}
+        whole = describe_command(app_catalog.get('StationShow'), tree, reply=True)
+        assert whole['reply']['properties']['stock']['type'] == 'integer'
+        assert 'more' not in whole
+
+    def test_a_command_inheriting_a_request(self, tree, app_catalog):
+        doc = describe_command(app_catalog.get('PlayerMove'), tree)
+        assert doc['overlaps'] == ['MoveResult']
+        assert list(doc['arguments']['properties']) == ['token', 'to', 'move_id']
+
+    def test_under_its_mount_s_prefix(self, tree, app_catalog):
+        doc = describe_command(app_catalog.get('gateway/Status'), tree)
+        assert (doc['phrases'], doc['keys'], doc['op']) == (['gateway status'], ['gateway/status'], 'see')
+
+    def test_no_reply_to_describe_whole(self, tree, app_catalog):
+        with pytest.raises(UsageError, match='StationDock declares no REPLY'):
+            describe_command(app_catalog.get('StationDock'), tree, reply=True)
+
+    def test_a_contract_names_the_commands_on_it(self, tmp_path, app_catalog):
+        head = HEAD + 'route = "wire"\n'
+        body = '[[allow]]\nops = ["read"]\n\n[[allow]]\nops = ["see"]\n'
+        r = Rules(load(write(tmp_path, body, head=head)), app_catalog)
+        assert describe(app_catalog.get('Station'), r)['overlaps'] == ['StationShow']
+        assert 'overlaps' not in describe(app_catalog.get('Notice'), r)

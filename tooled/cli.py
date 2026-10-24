@@ -9,13 +9,16 @@ parsed.
 - ``check``: load the policy, its protocol and its app's commands, resolve what it injects, and summarize what it
   shows: how many commands it read, when it reads any; each source's length, and the path it read, variables
   expanded; and, as ``fixed``, each open slot the allow rules let only one value fill, which the policy would rather
-  bind. With ``--connect``, also open the session; with
+  bind; and the shown commands that declare neither an effect nor that they're interactive. With ``--connect``, also
+  open the session; with
   ``--no-resolve``, read no inject source and expand no variable, so a policy can be checked against its protocol
   without its secrets (in CI, say).
-- ``operations``: every operation the policy shows, one line of each: its kind, the verbs that act on it, its topic
-  with the bound slots filled, the slots left to give, and its summary.
-- ``describe OPERATION``: one operation, layered: its slots, its request's schema (a root union folded to its tags),
-  and its reply as a field list. ``--reply`` gives the reply's whole schema; ``--variant TAG`` one variant's.
+- ``operations``: every operation the policy shows, contracts and commands, one line of each: its route, its kind
+  or its phrase, the verbs that act on it, its effect, its topic with the bound slots filled, the slots left to give,
+  and its summary; an interactive command marked, with the one to say instead.
+- ``describe OPERATION``: one operation, layered. A contract's slots, its request's schema (a root union folded to its
+  tags), and its reply as a field list; ``--variant TAG`` gives one variant's. A command's phrases, keys, slots,
+  flags, asking first, overlaps, arguments' schema and reply. ``--reply`` gives the reply's whole schema.
 - ``fetch CONTRACT [slot=value …]``: a retained contract's values, those the slots select or every one.
 - ``query CONTRACT [slot=value …] [--request JSON]``: ask a read queryable. ``--request`` takes JSON, ``-`` for
   stdin, or ``@path`` for a file, in the protocol's wire form, without the fields the policy injects.
@@ -456,6 +459,7 @@ def _check(args: argparse.Namespace) -> int:
         **({'app': loaded.app.factory} if loaded.app is not None else {}),
         **({'trees': list(loaded.protocol.trees)} if loaded.protocol.trees else {}),
         **({'commands': len(catalog.commands)} if loaded.app is not None or loaded.protocol.trees else {}),
+        **({'unmarked': _unmarked(visible, catalog)} if catalog.commands else {}),
         'operations': len(catalog.operations),
         'visible': {op.value: shown[op.value] for op in policy.Op if op.value in shown},
         'hidden': len(catalog.operations) - len(visible),
@@ -470,6 +474,16 @@ def _check(args: argparse.Namespace) -> int:
         summary['connect'] = {'ok': True, 'seconds': round(time.perf_counter() - started, 3)}
     emit(summary, args)
     return 0
+
+
+def _unmarked(visible: Sequence[Any], catalog: Catalog) -> list[str]:  # contracts and commands
+    """The shown commands that declare neither ``EFFECT`` nor ``INTERACTIVE``: the ones a profile may want to deny.
+
+    An undeclared command counts as a write, and an unmarked one might wait on a person who isn't there.
+    """
+    from .catalog import Command
+
+    return [catalog.label(o) for o in visible if isinstance(o, Command) and o.effect is None and not o.doc.interactive]
 
 
 def _overlaps(rules: Rules) -> dict[str, Any]:
@@ -545,18 +559,28 @@ def _call(args: argparse.Namespace) -> int:
 
 
 def _describe(args: argparse.Namespace) -> int:
+    from .catalog import Command, Contract
     from .errors import RefusedError
-    from .schemas import describe, describe_variant
+    from .schemas import describe, describe_command, describe_variant
 
     *_, catalog, rules = load(args.policy)
-    contract = catalog.contract(args.operation)
-    _entry(args).acted_on(catalog.label(contract))
-    if not rules.visible(contract):
-        raise RefusedError(_not_shown(rules, contract))
-    if args.variant is not None:
-        emit(describe_variant(contract, args.variant, rules), args)
+    operation = catalog.get(args.operation)
+    label = catalog.label(operation)
+    _entry(args).acted_on(label)
+    if not isinstance(operation, Contract | Command):
+        msg = f'{label} is no operation tooled describes'
+        raise UsageError(msg)
+    if not rules.visible(operation):
+        raise RefusedError(_not_shown(rules, operation))
+    if isinstance(operation, Command):
+        if args.variant is not None:
+            msg = f"{label} is a command, whose arguments hold no union's variants: describe it whole"
+            raise UsageError(msg)
+        emit(describe_command(operation, rules, reply=args.reply), args)
+    elif args.variant is not None:
+        emit(describe_variant(operation, args.variant, rules), args)
     else:
-        emit(describe(contract, rules, reply=args.reply), args)
+        emit(describe(operation, rules, reply=args.reply), args)
     return 0
 
 
