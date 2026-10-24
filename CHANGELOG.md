@@ -26,6 +26,13 @@ tools rather than a shell.
   `--verbs` keeps some verbs' tools, or some operations' (`fetch,query,invoke,wait:Fleet*`), and `--sizes` gives
   each tool's bytes and estimated tokens. The output is sorted and byte-stable, so a model server's prompt cache
   keeps hitting.
+- **`tooled call TOOL --args JSON`:** carries out one tool call as the model wrote it, for a harness to hand back
+  what it prints. The arguments map back onto the verb the tool's name begins with (slots, the request with the
+  variant's tag, a wait's conditions, a listen's count and timeout), and then it's that verb's call: checked by the
+  policy and seared, printed as the verb prints, with its exit code. A listen's values come as one JSON list. What
+  the tool says is checked first, each refusal a `validation` error (exit 4) naming the parameter, worded for the
+  model: a required one missing, one it doesn't take, a slot or a condition of the wrong type, a value its field
+  doesn't list. Any tool the policy shows can be called, not only those an export's `--verbs` kept.
 - **Hidden request fields:** a deny rule's `fields`, globs over a request's optional top-level fields, its own or a
   flat union variant's. A hidden field is left out of the tools and `describe`, and a call that gives one is
   refused (exit 3) before the request loads; the rule denies nothing else. A required field can't be hidden: a

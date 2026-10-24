@@ -1,7 +1,7 @@
 # Tools for a harness
 
 `tooled tools` prints the operations a policy shows as tool definitions: what a harness hands a model, so the model
-can ask for a call by name with typed arguments. It's for a model that calls tools rather than a shell, a local one
+can ask for a call by name with typed arguments; `tooled call` carries out each call it asks for. It's for a model that calls tools rather than a shell, a local one
 on llama.cpp or Ollama say. An agent with a shell, Claude Code among them, uses the verbs themselves
 ([agents.md](agents.md)).
 
@@ -9,6 +9,7 @@ on llama.cpp or Ollama say. An agent with a shell, Claude Code among them, uses 
 tooled tools --format openai --policy agents/player.toml --out tools.json
 tooled tools --sizes --policy agents/player.toml
 tooled tools --verbs fetch,query,invoke,wait:Fleet* --policy agents/player.toml --out tools.json
+tooled call wait_fleet_state --args '{"fleet": "ann.f1", "until": {"docked": true}}' --policy agents/player.toml
 ```
 
 The examples here read the small protocol [policy.md](policy.md) describes, under a policy that binds `world`,
@@ -31,9 +32,9 @@ A request with a union at its root becomes **one tool per variant** the policy a
 contract has no listen, which would give what its fetch does. A presence feed has no verb yet, so no tool; a note on
 stderr names the ones the policy shows.
 
-Each tool is a call of the verb its name begins with: its slots are that verb's `slot=value` arguments, and the
-rest its `--request` (with the variant's tag added), its `--until` conditions, or its `--count`; `timeout` is a
-wait's `--timeout` and a listen's `--for`, 30 seconds by default.
+Each tool is a call of the verb its name begins with, and `tooled call` carries it out as that verb: its slots are
+the verb's `slot=value` arguments, and the rest its `--request` (with the variant's tag added), its `--until`
+conditions, or its `--count`; `timeout` is a wait's `--timeout` and a listen's `--for`, 30 seconds by default.
 
 ### Waiting
 
@@ -135,6 +136,34 @@ call that will pass.
 **Other refusals:** a slot that shares its name with another parameter, a request field or a wait's `until`, say
 (bind the slot, and the other is the one parameter); a request with two unions at its root; a name over 64
 characters, or two tools of one name.
+
+## Calling a tool
+
+`tooled call TOOL --args JSON` carries out one tool call as the model wrote it, and prints what the harness hands
+back. `--args` is the call's arguments, a JSON object (`-` for stdin, `@path` for a file); left out, `{}`.
+
+```sh
+tooled call query_look_reply_ping --args '{"player": "ann", "station": "s1"}' --policy agents/player.toml
+```
+
+- **What the tool says is checked first:** every required parameter given; none it doesn't take; a slot one value
+  of its type; a condition on a field `until` lists, of that field's type (one of its values, when it lists them);
+  `count` and `timeout` in range. A refusal is a `validation` error (exit 4), worded for the model, with the
+  parameter in `path`:
+
+  ```json
+  {"error": "validation", "message": "wait_station can't wait on 'stok'; 'until' takes 'station', 'stock' and 'closed'", "path": ["until", "stok"]}
+  ```
+
+- **Then it's the verb's call.** The policy and seared check it as they check the verb: a request's fields are
+  seared's to judge, and a field the policy injects or hides is refused (exit 3) with the policy's reason. It prints
+  what the verb prints, with the verb's exit code: a fetch's values, a query's or a write's replies, the value a
+  wait found, or exit 7 with the last one seen.
+- **A listen's values come as one JSON list,** once `count` have come or `timeout` is up; a note says when fewer
+  came. A fetch, a query and a write wait 5 seconds on the mesh, as the verbs do by default.
+- **Any tool the policy shows,** not only those `--verbs` kept: picking shapes what a harness offers, and the
+  policy is the guard. A name the policy shows no tool of is a usage error (exit 2) naming the closest. Only the
+  tool called need be one the dialect can say, so a profile that exports with picks calls the same way.
 
 ## Formats
 
