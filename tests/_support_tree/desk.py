@@ -19,6 +19,14 @@ class ScreenShow(parsed.Command):
 
 
 @parsed.parsed
+class BellRing(parsed.Command):
+    """Ring the bell until someone answers: a read whose handler waits on a person without blocking its loop."""
+
+    PHRASE = 'bell ring'
+    EFFECT = parsed.Effect.READ
+
+
+@parsed.parsed
 class Clock(parsed.Parsed):
     """The desk's clock: how many times it's been read."""
 

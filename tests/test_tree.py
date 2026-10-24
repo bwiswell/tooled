@@ -9,7 +9,7 @@ from _support_policy import write
 from tooled.catalog import Catalog
 from tooled.errors import CatalogError, MeshError, RefusedError, TimedOutError, UsageError
 from tooled.policy import Op, Rules, load
-from tooled.tree import GRACE, app_of, bound_of, judged, made_state, opened, ran, state_of, watched
+from tooled.tree import GRACE, Cold, Held, app_of, bound_of, judged, made_state, opened, ran, state_of, watched
 
 #: A policy of the fixture app, its state built from a bound slot and two injected values.
 POLICY = """
@@ -297,3 +297,86 @@ class TestWatched:
     def test_a_wait_until_its_conditions_are_met(self, quick):
         result, _ = ran(_support_app.desk(), None, 'clock show --until tick=3 --timeout 5s', bound=10)
         assert (result.ok, result.met, result.reply.tick) == (True, True, 3)
+
+
+class TestCold:
+    def test_a_line_opened_and_closed_for_it(self):
+        state = _support_app.State({}, {})
+        result, wrote = Cold(_support_app.factory(), state).ran('station s1 show', bound=5)
+        assert (result.reply.stock, wrote, state.entered, state.left) == (5, '', True, True)
+
+
+@pytest.fixture
+def held(quick):
+    """The desk's session, held open on its loop, on a state of its own; closed after."""
+    state = _support_app.State({}, {})
+    told = []
+    lines = Held(_support_app.desk(), state, on_wedged=told.append)
+    lines.open(timeout=5)
+    lines.told, lines.given = told, state
+    yield lines
+    _support_app.RELEASED.set()  # a wedged loop's handler ends, and its thread with it
+    lines.close(timeout=5)
+
+
+class TestHeld:
+    """A session's app: opened once, its lines run on its loop, closed when the session is."""
+
+    def test_lines_on_one_session(self, held):
+        ticks = [held.ran('clock show', bound=5)[0].reply.tick for _ in range(3)]
+        assert (ticks, held.given.entered, held.given.left) == ([1, 2, 3], True, False)
+
+    def test_closed_its_state_left(self, quick):
+        state = _support_app.State({}, {})
+        lines = Held(_support_app.desk(), state)
+        lines.open(timeout=5)
+        lines.close(timeout=5)
+        assert (state.entered, state.left, state.left_with) == (True, True, None)
+
+    def test_a_state_that_will_not_open(self):
+        with pytest.raises(MeshError, match='the server is down'):
+            Held(_support_app.factory(), _support_app.Unopenable()).open(timeout=5)
+
+    def test_past_its_bound_cancelled_and_the_session_goes_on(self, held):
+        with pytest.raises(TimedOutError, match=r"no result for 'bell ring' within 0\.2s"):
+            held.ran('bell ring', bound=0.2)
+        assert (held.dead, held.ran('clock show', bound=5)[0].ok) == (None, True)
+
+    def test_a_handler_that_blocks_the_loop_wedges_it(self, held, monkeypatch):
+        import tooled.tree
+
+        monkeypatch.setattr(tooled.tree, 'GRACE', 0.1)
+        _support_app.RELEASED.clear()
+        with pytest.raises(MeshError) as exc:
+            held.ran('screen show', bound=0.2)
+        assert exc.value.message == held.dead == held.told[0]
+        assert exc.value.message.startswith("the session's loop is blocked: a handler of 'screen show' hasn't returned")
+        with pytest.raises(MeshError, match="the session's loop is blocked"):
+            held.ran('clock show', bound=5)  # every call on it, after
+
+    def test_a_call_s_stop_cancels_its_line(self, held):
+        from tooled import attached
+
+        call = attached.Call(out=None, err=None, stdin=None, cwd='/', environ={})
+        token = attached.CALL.set(call)
+        try:
+            threading.Timer(0.1, call.stop.by, args=(2,)).start()
+            with pytest.raises(attached.Stopped) as exc:
+                held.ran('bell ring', bound=5)
+        finally:
+            attached.CALL.reset(token)
+        assert exc.value.signum == 2
+        assert held.ran('clock show', bound=5)[0].ok
+
+    def test_a_watch(self, held):
+        got = []
+        last, wrote, ended = held.watched(
+            'clock show --watch --count 3', each=lambda r: got.append(r.reply.tick), bound=10
+        )
+        assert (got, last.code, wrote, ended) == ([1, 2, 3], 0, '', True)
+
+    def test_a_watch_stopped_leaves_the_session_open(self, held):
+        stop = threading.Event()
+        last, _, ended = held.watched('clock show --watch', each=lambda r: stop.set(), bound=None, stop=stop)
+        assert (last.reply.tick, ended, held.given.left) == (1, False, False)
+        assert held.ran('clock show', bound=5)[0].ok

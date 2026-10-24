@@ -48,6 +48,14 @@ parsed.
   (``numbers.fuel``); a value reads as JSON if it can (``40``, ``true``, ``"30%"``), else as a string (``idle``).
   Past ``--timeout`` (30 s by default), or on SIGINT or SIGTERM, it exits 7 with the last value seen.
 
+- ``session start | run | stop | status``: a session holding the policy's world open, for the calls that name it
+  (:mod:`tooled.sessions`): ``start`` opens one and says where it is, ``run -- COMMAND`` opens one for a command,
+  named in its ``$TOOLED_SESSION``, and closes it when the command ends, ``stop`` closes one, and ``status`` says how
+  one is, or every one.
+
+A call of ``operations``, ``describe``, ``tools``, ``call``, ``see`` or ``do`` given ``--session`` (else
+``$TOOLED_SESSION``) runs in that session, and prints what it would cold.
+
 A verb renamed is refused naming its new name (``contracts`` is ``operations`` since 0.2.4). A slot left out
 widens to every value; a bound one is filled by the policy. ``--timeout`` bounds a fetch, a query
 or an invoke (5 s by default), and a wait (30 s).
@@ -71,6 +79,7 @@ import contextlib
 import json
 import logging
 import math
+import os
 import sys
 import time
 from typing import TYPE_CHECKING, Any, NoReturn
@@ -96,7 +105,21 @@ _HINT_NAMES = 12
 _ASKED = 5.0
 
 #: The verbs, as the parser has them.
-VERBS = ('check', 'operations', 'describe', 'fetch', 'query', 'listen', 'invoke', 'wait', 'tools', 'call', 'see', 'do')
+VERBS = (
+    'check',
+    'operations',
+    'describe',
+    'fetch',
+    'query',
+    'listen',
+    'invoke',
+    'wait',
+    'tools',
+    'call',
+    'see',
+    'do',
+    'session',
+)
 
 #: The verbs that take a line: tooled's own options first, then the line's words, each as the shell gave it.
 LINES = ('see', 'do')
@@ -109,6 +132,7 @@ _LINE_OPTIONS = {
     '--out': True,
     '--pretty': False,
     '--timeout': True,
+    '--session': True,
 }
 
 #: How long a line's verb waits on its line, in seconds, when none is given: longer for a line that waits itself.
@@ -176,6 +200,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     saving = _Parser(add_help=False)
     saving.add_argument('--out', metavar='FILE', help='write the whole result to FILE, uncapped, and say where')
+    attaching = _Parser(add_help=False)
+    attaching.add_argument(
+        '--session',
+        metavar='NAME',
+        help="run in this session: its name, or its socket's path (else $TOOLED_SESSION; empty: none)",
+    )
     verbs = parser.add_subparsers(dest='verb', metavar='verb', required=True)
     check = verbs.add_parser(
         'check',
@@ -192,14 +222,14 @@ def build_parser() -> argparse.ArgumentParser:
     check.set_defaults(run=_check)
     operations = verbs.add_parser(
         'operations',
-        parents=[common, saving],
+        parents=[common, saving, attaching],
         help='list the operations the policy shows',
         description='Every operation the policy shows, one line of each.',
     )
     operations.set_defaults(run=_operations)
     describe = verbs.add_parser(
         'describe',
-        parents=[common, saving],
+        parents=[common, saving, attaching],
         help='describe one operation: its slots, and the schemas of what it takes and gives',
         description='One operation whole: its slots, and the JSON Schemas of what it takes and gives.',
     )
@@ -245,9 +275,10 @@ def build_parser() -> argparse.ArgumentParser:
     listen.set_defaults(run=_listen)
     _add_invoke(verbs, [common, saving])
     _add_wait(verbs, [common, saving])
-    _add_tools(verbs, [common, saving])
-    _add_call(verbs, [common, saving])
-    _add_lines(verbs, [common, saving])
+    _add_tools(verbs, [common, saving, attaching])
+    _add_call(verbs, [common, saving, attaching])
+    _add_lines(verbs, [common, saving, attaching])
+    _add_session(verbs)
     return parser
 
 
@@ -380,6 +411,77 @@ def _add_call(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # ar
     call.set_defaults(run=_call)
 
 
+def _add_session(verbs: Any) -> None:  # argparse's subparsers
+    """``session``'s parsers: ``start``, ``run``, ``stop`` and ``status``."""
+    from . import sessions
+
+    session = verbs.add_parser(
+        'session',
+        help="hold the policy's world open in a session, for the calls that name it",
+        description=(
+            "A session holds the policy's world open (its catalog, its injected values, its app's session on its "
+            'state) in a process of its own, for the calls given --session (else $TOOLED_SESSION).'
+        ),
+    )
+    asks = session.add_subparsers(dest='action', metavar='action', required=True)
+    shown = _Parser(add_help=False)
+    shown.add_argument('--pretty', action='store_true', help='indent the JSON (the default on a terminal)')
+    shown.set_defaults(select=None, max_bytes=None, out=None)
+    waited = _Parser(add_help=False)
+    waited.add_argument(
+        '--timeout',
+        type=_seconds,
+        default=sessions.WAIT,
+        metavar='S',
+        help='seconds to wait on the session (default 30)',
+    )
+    opening = _Parser(add_help=False)
+    opening.add_argument('--policy', metavar='PATH', help='the policy file (else $TOOLED_POLICY, else ./tooled.toml)')
+    opening.add_argument(
+        '--name', metavar='NAME', help="its name, or its socket's path (holding /); made up when not given"
+    )
+    opening.add_argument(
+        '--idle',
+        type=_idle,
+        metavar='DURATION',
+        help='end it after this long with no call: 30m, 1h, 0 for never (default 30m; never, tied to a process)',
+    )
+    start = asks.add_parser(
+        'start',
+        parents=[opening, waited, shown],
+        help='open a session, and say where it is',
+        description='Open a session in a process of its own, wait until it is ready, and say where it is.',
+    )
+    start.add_argument('--for', dest='tied', type=_pid, metavar='PID', help='end it when this process ends')
+    start.add_argument(
+        '--foreground', action='store_true', help='hold it in this process until it ends, for a supervisor'
+    )
+    start.set_defaults(run=sessions.start)
+    run = asks.add_parser(
+        'run',
+        parents=[opening, waited],
+        usage='tooled session run [options] -- COMMAND …',
+        help='run a command in a session of its own, closed when it ends',
+        description=(
+            'Open a session, run the command with $TOOLED_SESSION naming it, and close the session when the '
+            "command ends, however it ends; the exit code is the command's."
+        ),
+    )
+    run.add_argument('command', nargs=argparse.REMAINDER, help='the command, after --')
+    run.set_defaults(run=sessions.run)
+    for action, what in (
+        ('stop', 'close a session, its state left'),
+        ('status', "say how a session is, or every one's"),
+    ):
+        asked = asks.add_parser(
+            action, parents=[waited, shown], help=what, description=what[0].upper() + what[1:] + '.'
+        )
+        asked.add_argument(
+            'name', nargs='?', metavar='NAME', help='its name, or its socket path (else $TOOLED_SESSION)'
+        )
+        asked.set_defaults(run=sessions.stop if action == 'stop' else sessions.status)
+
+
 def version() -> str:
     """``tooled X (seared Y, zeared Z, parsed W)``: tooled's version, and the seared, zeared and parsed it runs on."""
     import parsed
@@ -401,10 +503,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     Returns:
         The exit code.
     """
+    from . import sessions
     from .ledger import Entry
 
     given = list(sys.argv[1:] if argv is None else argv)
     entry = Entry.begin(given, VERBS)
+    handle = _session_of(given)
+    code = sessions.attach(given, handle, entry) if handle else ran(given, entry)
+    _log_call(entry)
+    return code
+
+
+def ran(given: list[str], entry: Entry) -> int:
+    """One run of the command, as :func:`main` makes it cold and a session makes it for a call: its exit code.
+
+    An error is written to stderr, and ends ``entry`` with it; no line is logged here.
+    """
+    from .sessions import failed
+
     try:
         if given and given[0] in RENAMED:
             raise UsageError(RENAMED[given[0]])
@@ -417,13 +533,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         _log_as_json()
         code = args.run(args)
     except TooledError as exc:
-        sys.stderr.write(json.dumps(exc.to_json()) + '\n')
-        entry.end(exc.exit_code, exc)
-        _log_call(entry)
-        return exc.exit_code
+        return failed(exc, entry)
     entry.end(code)
-    _log_call(entry)
     return code
+
+
+def _session_of(given: list[str]) -> str | None:
+    """The session a call attaches to: ``--session``'s value, else ``$TOOLED_SESSION``; ``None`` for none.
+
+    Only a verb that attaches has one, and a line's verb only among tooled's own options, before its line. An empty
+    value names none.
+    """
+    from .sessions import ATTACHES, SESSION_ENV
+
+    if not given or given[0] not in ATTACHES:
+        return None
+    head, _ = _split_line(given)
+    named = None
+    for at, word in enumerate(head):
+        if word == '--session' and at + 1 < len(head):
+            named = head[at + 1]
+        elif word.startswith('--session='):
+            named = word.partition('=')[2]
+    if named is None:
+        named = os.environ.get(SESSION_ENV, '')
+    return named or None
 
 
 def _split_line(given: list[str]) -> tuple[list[str], list[str] | None]:
@@ -491,10 +625,13 @@ def emit(result: Any, args: argparse.Namespace) -> None:  # any JSON-ready value
 
 
 def load(given: str | None) -> tuple[Path, Policy, Catalog, Rules]:
-    """The policy file, the policy, its protocol's catalog, and its rules over that catalog."""
-    from . import policy
+    """The policy file, the policy, its protocol's catalog, and its rules over that catalog: in a session, its own."""
+    from . import attached, policy
     from .catalog import Catalog
 
+    held = attached.held()
+    if held is not None:
+        return held.loaded(given)
     path = policy.find(given)
     loaded = policy.load(path)
     factory = loaded.app.factory if loaded.app is not None else None
@@ -644,10 +781,9 @@ def _call_line(args: argparse.Namespace, rules: Rules, tool: Any, mapped: Any) -
     """A command's tool call: said as a line, in the mount that holds it, and run as ``see`` or ``do`` runs one."""
     from parsed import RenderError
 
-    from . import tree
     from .policy import Op
 
-    app = tree.app_of(rules.policy)
+    app = _app(rules.policy)
     command = tool.operation
     mount = next(m for m in app.mounts if m.under == command.under and m.holds(command.cls))
     try:
@@ -700,39 +836,46 @@ def _line(args: argparse.Namespace, op: Any) -> int:  # a tree op
     if loaded.app is None:
         msg = f"tooled {args.verb} runs a line of the policy's app, and the policy names no [app]"
         raise UsageError(msg)
-    app = tree.app_of(loaded)
+    from . import attached
+
+    app = _app(loaded)
     judged = tree.judged(app, rules, text, op=op)
     entry = _entry(args)
     if judged is not None:
         entry.acted_on(catalog.label(judged.commands[0]), route='tree')
         entry.arguments = entry.arguments or list(judged.given)  # a tool call's are its arguments
-    state = tree.state_of(loaded, path)
+    held = attached.held()
+    lines = held.lines if held is not None else tree.Cold(app, tree.state_of(loaded, path))
     bound = tree.bound_of(judged, args.timeout)
     if judged is not None and judged.wait is not None and judged.wait.watch:
-        return _watched(args, app, state, text, bound=bound)
-    result, wrote = tree.ran(app, state, text, bound=bound)
+        return _watched(args, lines, text, bound=bound)
+    result, wrote = lines.ran(text, bound=bound)
     emit(result.to_json(), args)
     _notes(_wrote(wrote))
     return result.code
 
 
-def _watched(args: argparse.Namespace, app: Any, state: Any, text: str, *, bound: float | None) -> int:
+def _app(loaded: Policy) -> Any:  # a parsed App
+    """The policy's app: in a session, the one it holds."""
+    from . import attached, tree
+
+    held = attached.held()
+    return held.app if held is not None else tree.app_of(loaded)
+
+
+def _watched(args: argparse.Namespace, lines: Any, text: str, *, bound: float | None) -> int:  # tree.Cold or Held
     """A line that watches: each envelope as a line of JSON as it comes, until the watch ends, or a signal.
 
     Each is written as ``listen`` writes a value, after ``--select``, one over the cap left out and noted. The exit
-    code is the last envelope's, or 0 when a signal stopped it.
+    code is the last envelope's, or 0 when a signal stopped it (in a session, the call's client asking).
     """
-    import threading
-
-    from . import tree
+    from . import attached
 
     args.meta = False
     line = _Lines(args)
-    stop = threading.Event()
+    stop = attached.stop()
     with _signalled(stop):
-        last, wrote, ended = tree.watched(
-            app, state, text, each=lambda result: line(result.to_json()), bound=bound, stop=stop
-        )
+        last, wrote, ended = lines.watched(text, each=lambda result: line(result.to_json()), bound=bound, stop=stop)
     _notes([*line.notes(), *_wrote(wrote)])
     return last.code if ended and last is not None else 0
 
@@ -911,11 +1054,18 @@ def _mesh(loaded: Policy) -> SessionConfig:
 
 
 def _injected(path: Path, loaded: Policy, contract: Contract, rules: Rules) -> dict[str, str]:
-    """The values the policy injects into ``contract``'s request: each source read, each generated value made."""
-    from . import policy, schemas
+    """The values the policy injects into ``contract``'s request: each source read, each generated value made.
+
+    In a session, a source was read once, as it started; a generated value is still made for each call.
+    """
+    from . import attached, policy, schemas
 
     names = schemas.injected(contract, rules)
-    return {name: policy.resolve(name, loaded.inject[name], base=path.parent).value for name in names}
+    read = held.injected if (held := attached.held()) is not None else {}
+    return {
+        name: read[name] if name in read else policy.resolve(name, loaded.inject[name], base=path.parent).value
+        for name in names
+    }
 
 
 def _judge(contract: Contract, catalog: Catalog, args: argparse.Namespace, *, until: Sequence[Any] = ()) -> None:
@@ -1012,8 +1162,7 @@ def _pairs(items: Sequence[str], what: str) -> dict[str, str]:
 
 def _request(text: str, *, what: str = 'the request') -> dict[str, Any]:
     """``--request`` (or ``call``'s ``--args``): JSON, ``-`` for stdin, or ``@path`` for a file; one JSON object."""
-    from pathlib import Path
-
+    from . import attached
     from .errors import UsageError
 
     source = what
@@ -1021,7 +1170,7 @@ def _request(text: str, *, what: str = 'the request') -> dict[str, Any]:
         text, source = sys.stdin.read(), f'{what} on stdin'
     elif text.startswith('@'):
         try:
-            text, source = Path(text[1:]).expanduser().read_text(encoding='utf-8'), text[1:]
+            text, source = attached.path(text[1:]).read_text(encoding='utf-8'), text[1:]
         except OSError as exc:
             msg = f'could not read {what} from {text[1:]}: {exc.strerror or exc}'
             raise UsageError(msg) from exc
@@ -1338,6 +1487,31 @@ def _duration(text: str) -> float:
         value = 0.0
     if not math.isfinite(value) or value <= 0:
         msg = f'a duration is seconds above zero, or with s, m or h: 30, 30s, 5m, 1h; not {text}'
+        raise argparse.ArgumentTypeError(msg)
+    return value
+
+
+def _idle(text: str) -> float:
+    """An idle timeout: a duration, as ``--for`` takes one, or ``0`` for none."""
+    return 0.0 if text.strip() in {'0', '0s', '0m', '0h'} else _duration(text)
+
+
+def _pid(text: str) -> int:
+    """A process that's running, by its id."""
+    try:
+        value = int(text)
+    except ValueError:
+        value = 0
+    running = value > 0
+    if running:
+        try:
+            os.kill(value, 0)
+        except ProcessLookupError:
+            running = False
+        except PermissionError:
+            pass  # running, as another user
+    if not running:
+        msg = f'no process {text} is running'
         raise argparse.ArgumentTypeError(msg)
     return value
 

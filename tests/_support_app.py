@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 from typing import Self
 
@@ -138,6 +139,12 @@ def screen_show(command: object, ctx: parsed.Context[State]) -> str:
     return 'drawn'
 
 
+async def bell_ring(command: object, ctx: parsed.Context[State]) -> str:
+    """A bell that rings until it's answered: awaited, so the loop goes on while it waits."""
+    await asyncio.sleep(60)
+    return 'answered'
+
+
 #: The desk clock's reads so far; a test sets it back to 0.
 TICKS = [0]
 
@@ -159,6 +166,7 @@ def desk() -> parsed.App:
     app.on(commands.NoteEdit, '_support_app:note_edit')
     app.on(commands.ScreenShow, '_support_app:screen_show')
     app.on(commands.ClockShow, '_support_app:clock_show')
+    app.on(commands.BellRing, '_support_app:bell_ring')
     return app
 
 

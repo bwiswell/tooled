@@ -133,6 +133,18 @@ class TooLargeError(TooledError):
         return {**super().to_json(), 'size': self.size, 'cap': self.cap, 'parts': self.parts}
 
 
+def relayed(found: Mapping[str, Any], code: int) -> TooledError:
+    """An error another tooled process wrote (a session's, opening), as it wrote it: its kind, code and every key."""
+
+    class RelayedError(TooledError):
+        kind, exit_code = str(found.get('error', 'error')), code
+
+        def to_json(self) -> dict[str, Any]:
+            return dict(found)
+
+    return RelayedError(str(found.get('message', '')), path=found.get('path') or ())
+
+
 class TimedOutError(TooledError):
     """``wait`` ended before any value met its conditions.
 

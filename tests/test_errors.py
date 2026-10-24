@@ -1,6 +1,14 @@
 import pytest
 
-from tooled.errors import CatalogError, MeshError, PolicyFileError, RefusedError, TooledError, UsageError
+from tooled.errors import (
+    CatalogError,
+    MeshError,
+    PolicyFileError,
+    RefusedError,
+    TooledError,
+    UsageError,
+    relayed,
+)
 
 
 @pytest.mark.parametrize(
@@ -59,3 +67,16 @@ def test_a_timeout_carries_the_last_value_seen():
     assert (error.kind, error.exit_code) == ('timeout', 7)
     assert error.to_json() == {'error': 'timeout', 'message': 'not met', 'last': {'stock': 3}}
     assert TimedOutError('not met', last=None).to_json()['last'] is None
+
+
+def test_relayed_as_another_process_wrote_it():
+    found = {'error': 'mesh', 'message': "the app's session would not open", 'path': ['app'], 'extra': 1}
+    error = relayed(found, 5)
+    assert isinstance(error, TooledError)
+    assert (error.kind, error.exit_code, error.message, error.path, error.to_json()) == (
+        'mesh',
+        5,
+        "the app's session would not open",
+        ('app',),
+        found,
+    )

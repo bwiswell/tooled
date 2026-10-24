@@ -32,6 +32,28 @@ apply to any agent with a shell tool.
   protocol (every contract, tag, slot and field it names) without reading its secrets, so a renamed contract fails
   the protocol's own tests rather than an agent's session.
 
+## A session for each agent
+
+Without a session, each tooled call loads the policy and its protocol, and opens the mesh and the app's session, for
+itself. A session holds them open, so a call costs about what starting tooled does, and the app's state lives as
+long as the session, not a call ([cli.md](cli.md), *Sessions*).
+
+- **One a run:** `tooled session run --policy player.toml -- claude -p "…"` opens a session, runs the agent with
+  `TOOLED_SESSION` naming it, so every tooled call it makes attaches, and closes the session when the agent ends,
+  however it ends. Several agents on one policy each get their own: the same tools, the same rules, a state each.
+  Values a policy injects from the environment are read from the environment `session run` started in, so each
+  agent's (its token, its name) goes there.
+- **In the agent's environment:** Claude Code's Bash calls don't keep a variable one sets for the next, so
+  `TOOLED_SESSION` belongs in the environment the agent starts with, as `session run` puts it, not in a command.
+  The permission rules above still see a line's words right after the verb.
+- **Gone is an error:** a call naming a session that has ended exits 5, saying how it ended (idle, its process gone,
+  stopped), rather than running without it.
+- **A sandbox lets the socket through:** an agent whose commands run in a sandbox needs the session's socket
+  allowed, and nothing else of the session's; the session holds what the policy injects, so the agent never reads
+  a token's file.
+- **What the state does with it is the app's:** an app whose state makes its user present (a game's commander) keeps
+  them present while the session is open, and lets them go when it closes.
+
 ## The loop
 
 1. `tooled operations` for what exists, one line each.
@@ -71,7 +93,8 @@ own bound and 5 seconds more, whatever `--timeout` it was given before the line.
 
 Set `TOOLED_LOG` in the session's environment and every tooled run appends one JSON line to it: the verb, the
 operation, the names of what was given, the exit code and error kind, the bytes printed and the seconds taken, and
-no value ([cli.md](cli.md), *The call log*). A file a turn makes it one turn's ledger.
+no value ([cli.md](cli.md), *The call log*). A file a turn makes it one turn's ledger. A call that runs in a
+session writes to its own `TOOLED_LOG`, naming the session.
 
 ## Live data
 
