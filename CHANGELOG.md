@@ -9,6 +9,33 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
+## 0.2.8 — 2026-10-24
+
+**Sessions.** A session holds a policy's world open, its mesh and its app among it, in a process of its own, for the
+calls that name it: many side by side, on one policy or several, each call printing what it would cold.
+
+### Added
+
+- **`tooled session start | run | stop | status`:** a session holds the policy as it was loaded, its catalog and
+  rules, the values it injects, the mesh, and the app's session on its state, named by a name or by its socket's
+  path, in a directory that's the user's alone. `start` says where it is once it's open (`--foreground` holds it in the
+  process, for a supervisor); `run -- COMMAND` opens one for a command, named in its `$TOOLED_SESSION`, and closes
+  it when the command ends; `stop` closes one, its state left; `status` says how one is, or every one, and how each
+  ended. A session ends when it's stopped, when the process it's `--for` ends, after `--idle` with no call (30
+  minutes by default, and never for one tied to a process), or when a handler blocks its loop.
+- **`--session NAME`, else `$TOOLED_SESSION`,** on every verb but `check` and `session`'s own: the call runs in that
+  session, on the mesh and the app it holds, writing what it would write cold, byte for byte, with the same exit code,
+  at about what starting tooled costs. A session named and not open is refused (exit 5), saying how it ended. A call's
+  options, cap, `--out`, stdin and call log are its own; the policy, the injected values and the state are the
+  session's, read once as it started, and a call naming another policy is refused. Calls run side by side, a `listen` or
+  a watch beside the rest, each ended by its client's signal as a cold one is by its own, and a line past its bound is
+  cancelled, the session going on.
+
+### Changed
+
+- **The call log:** every line has a `session` key, the session the call ran in, or `null`. A call made in a session
+  appends its line to its own `$TOOLED_LOG`.
+
 ## 0.2.7 — 2026-10-24
 
 **Command trees, run.** `tooled see` and `tooled do` run a line of the app's in its session, on a state built from

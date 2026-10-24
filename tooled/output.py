@@ -19,7 +19,6 @@ import base64
 import binascii
 import hashlib
 import json
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -189,9 +188,11 @@ def max_bytes(given: int | None) -> int:
     Raises:
         UsageError: The variable isn't a whole number of bytes, zero or more.
     """
+    from . import attached
+
     if given is not None:
         return given
-    text = os.environ.get(MAX_BYTES_ENV)
+    text = attached.environ().get(MAX_BYTES_ENV)
     if not text:
         return DEFAULT_MAX_BYTES
     try:
@@ -245,10 +246,12 @@ def write_out(path: str, text: str) -> dict[str, Any]:
     Raises:
         UsageError: It couldn't be written.
     """
-    target = Path(path).expanduser()
+    from . import attached
+
+    target = attached.path(path)
     try:
         target.write_text(text + '\n', encoding='utf-8')
     except OSError as exc:
-        msg = f'could not write {target}: {exc.strerror or exc}'
+        msg = f'could not write {Path(path).expanduser()}: {exc.strerror or exc}'
         raise UsageError(msg) from exc
     return {'written': str(target.resolve()), 'bytes': len(text.encode()) + 1}

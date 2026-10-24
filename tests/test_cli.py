@@ -79,6 +79,12 @@ class TestUsage:
             (['query', 'LookReply', '--timeout', 'nan'], 'tooled query: argument --timeout: a timeout is a number'),
             (['listen', 'Notice', '--for', 'inf'], 'tooled listen: argument --for: a duration is seconds'),
             (['nope'], "tooled: argument verb: invalid choice: 'nope'"),
+            (['check', '--session', 'seat-a'], 'tooled: unrecognized arguments: --session seat-a'),
+            (['session'], 'tooled session: the following arguments are required: action'),
+            (['session', 'start', '--idle', 'soon'], 'tooled session start: argument --idle: a duration is seconds'),
+            (['session', 'start', '--for', 'x'], 'tooled session start: argument --for: no process x is running'),
+            (['session', 'start', '--for', '0'], 'tooled session start: argument --for: no process 0 is running'),
+            (['session', 'stop', 'a', 'b'], 'tooled: unrecognized arguments: b'),
         ],
     )
     def test_is_one_json_line(self, capsys, argv, message):
@@ -1423,6 +1429,7 @@ class TestCallLog:
         assert {key: value for key, value in line.items() if key not in {'at', 'seconds'}} == {
             'verb': 'fetch',
             'route': 'wire',
+            'session': None,
             'operation': 'Station',
             'tool': None,
             'variant': None,
@@ -1736,3 +1743,41 @@ class TestGenerated:
         for extra in ([], ['--no-resolve']):
             _, out, _ = run(capsys, 'check', *extra, '--policy', policy)
             assert out['inject']['ask_id'] == {'source': 'generate uuid'}
+
+
+class TestSessionNamed:
+    """The session a call attaches to: --session, else $TOOLED_SESSION; only for a verb that attaches."""
+
+    @pytest.mark.parametrize(
+        ('argv', 'env', 'named'),
+        [
+            (['see', '--session', 'a', 'station', 's1', 'show'], None, 'a'),
+            (['see', '--session=a', 'station', 's1', 'show'], 'b', 'a'),
+            (['see', 'station', 's1', 'show'], 'b', 'b'),
+            (['see', 'station', '--session', 'a'], None, None),  # the line's words, not tooled's options
+            (['see', '--session', '', 'station'], 'b', None),  # empty: none
+            (['operations', '--policy', 'p', '--session', 'a'], None, 'a'),
+            (['call', 'see_station_show', '--args', '{}'], 'b', 'b'),
+            (['check'], 'b', None),
+            (['session', 'stop', 'a'], 'b', None),
+            (['fetch', 'Station'], 'b', 'b'),
+            (['listen', 'Notice', '--session', 'a'], None, 'a'),
+            ([], 'b', None),
+        ],
+    )
+    def test_named(self, monkeypatch, argv, env, named):
+        from tooled.cli import _session_of
+
+        if env is None:
+            monkeypatch.delenv('TOOLED_SESSION', raising=False)
+        else:
+            monkeypatch.setenv('TOOLED_SESSION', env)
+        assert _session_of(argv) == named
+
+    def test_every_verb_that_attaches_takes_it(self, capsys):
+        from tooled.sessions import ATTACHES
+
+        for verb in sorted(ATTACHES):
+            with pytest.raises(SystemExit):
+                main([verb, '--help'])
+            assert '--session NAME' in capsys.readouterr().out, verb

@@ -152,6 +152,27 @@ class TestCap:
         assert parts([{'a': 'xx', 'b': 1}, {'a': 'yyyy'}, 3]) == {'items': 3, 'bytes': {'a': 10, 'b': 1}}
 
 
+class TestInACall:
+    """In a session, the cap and the place to write come from the call, not the session's process."""
+
+    @pytest.fixture
+    def call(self, tmp_path, monkeypatch):
+        from tooled import attached
+
+        monkeypatch.setenv(MAX_BYTES_ENV, '500')
+        made = attached.Call(out=None, err=None, stdin=None, cwd=str(tmp_path), environ={MAX_BYTES_ENV: '40'})
+        token = attached.CALL.set(made)
+        yield made
+        attached.CALL.reset(token)
+
+    def test_the_call_s_cap(self, call):
+        assert max_bytes(None) == 40
+
+    def test_the_call_s_directory(self, call, tmp_path):
+        assert write_out('map.json', '{}') == {'written': str(tmp_path / 'map.json'), 'bytes': 3}
+        assert (tmp_path / 'map.json').read_text() == '{}\n'
+
+
 class TestOut:
     def test_writes_the_whole_text(self, tmp_path):
         target = tmp_path / 'map.json'

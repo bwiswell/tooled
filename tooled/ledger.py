@@ -3,14 +3,14 @@
 With ``TOOLED_LOG`` set to a path, every run that ends, done or with an error, appends one line:
 
 ```json
-{"at": "2026-10-23T22:19:04.512Z", "verb": "call", "route": "wire", "operation": "OrderResult",
+{"at": "2026-10-23T22:19:04.512Z", "verb": "call", "route": "wire", "session": null, "operation": "OrderResult",
  "tool": "invoke_order_result_jump", "variant": "jump", "arguments": ["fleet", "to"], "flags": ["--args", "--policy"],
  "exit": 0, "error": null, "path": null, "bytes": 61, "seconds": 0.84}
 ```
 
 - ``at``: when the run began, UTC; ``seconds``: how long it took.
 - ``verb``: the verb, ``null`` for one tooled doesn't have; ``route``: ``wire`` or ``tree``, for a verb on an
-  operation.
+  operation; ``session``: the session it ran in, by the name or path the call gave, ``null`` for a cold call.
 - ``operation``, ``tool``, ``variant``: what it acted on, as far as it got: a call's tool is the name it was given,
   found or not.
 - ``arguments``: the names of what was given, a call's arguments or a verb's slots; ``flags``: the options given,
@@ -53,6 +53,7 @@ class Entry:
     at: str = ''
     verb: str | None = None
     route: str | None = None
+    session: str | None = None
     operation: str | None = None
     tool: str | None = None
     variant: str | None = None
@@ -80,6 +81,12 @@ class Entry:
         self.route, self.operation = route, operation
         if variant is not None:
             self.variant = variant
+
+    def took(self, line: Mapping[str, Any]) -> None:
+        """Take what a session's line of this run says it acted on, how it ended, and what it wrote."""
+        for key in ('route', 'operation', 'tool', 'variant', 'arguments', 'error', 'path', 'bytes'):
+            if key in line:
+                setattr(self, key, line[key])
 
     def wrote(self, text: str) -> None:
         """Count ``text``, as written to stdout."""

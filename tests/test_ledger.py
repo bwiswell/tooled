@@ -10,6 +10,7 @@ KEYS = [
     'at',
     'verb',
     'route',
+    'session',
     'operation',
     'tool',
     'variant',
@@ -59,6 +60,26 @@ class TestEntry:
         entry.end(7, TimedOutError('no value met', last={'secret': 'value'}))
         assert (entry.error, entry.path) == ('timeout', None)
         assert 'secret' not in json.dumps(entry.as_json())  # the last value is never kept
+
+    def test_what_a_session_s_line_says_it_did(self):
+        entry = Entry.begin(['see', '--session', 'seat-a', 'station', 's1', 'show'], ['see'])
+        entry.session = 'seat-a'
+        took = {'at': 'later', 'verb': 'see', 'flags': ['--session'], 'seconds': 9.0, 'exit': 4}
+        took |= {'route': 'tree', 'operation': 'StationShow', 'arguments': ['station'], 'error': None, 'bytes': 120}
+        entry.took(took)
+        entry.end(0)
+        line = entry.as_json()
+        assert {key: line[key] for key in ('verb', 'route', 'session', 'operation', 'arguments', 'bytes')} == {
+            'verb': 'see',
+            'route': 'tree',
+            'session': 'seat-a',
+            'operation': 'StationShow',
+            'arguments': ['station'],
+            'bytes': 120,
+        }
+        assert (line['flags'], line['exit']) == (['--session'], 0)  # its own options, and how it ended here
+        assert line['at'] != 'later'  # its own time
+        assert line['seconds'] < 9
 
     def test_every_key_on_every_line(self):
         assert list(Entry().as_json()) == KEYS

@@ -35,11 +35,18 @@ until its count, its bound, its conditions, or a stop. Each result is handed fro
 as it comes, for the caller to write a line of; a stop (a signal, at the command line) cancels the watch, and the
 session closes as it would. The session reads again every :data:`INTERVAL` seconds, since tooled can't know when an
 app's state moves.
+
+**In a session** (:class:`Held`), the app's session is opened once and held on a loop of its own thread, and each
+line runs there as a task, guarded the same way: its handlers' output kept apart, its stdin empty (by the call's own
+streams, :mod:`tooled.attached`), and a line past its bound cancelled, the session going on. A handler that blocks
+the loop can't be cancelled, and holds every call on the session while it blocks: past a line's bound, when the loop
+doesn't answer within :data:`GRACE`, the session is wedged, and each call on it fails.
 """
 
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextlib
 import inspect
 import io
@@ -52,12 +59,13 @@ from typing import TYPE_CHECKING, Any
 
 from parsed import ReadError
 
+from . import attached
 from .catalog import Command, imported, made_app
 from .errors import CatalogError, MeshError, RefusedError, TimedOutError, UsageError
 from .policy import Op, op_of
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Generator, Mapping
+    from collections.abc import AsyncGenerator, Callable, Coroutine, Generator, Mapping
     from pathlib import Path
 
     from parsed import App, Result
@@ -214,6 +222,23 @@ def _command_of(rules: Rules, mount: Mount, cls: type) -> Command:
     raise UsageError(msg)
 
 
+class Cold:
+    """An app's session opened for one line, and closed after it: a cold call's, as :func:`ran` and :func:`watched`."""
+
+    def __init__(self, app: App, state: Any) -> None:  # state: the app's
+        self.app, self.state = app, state
+
+    def ran(self, text: str, *, bound: float | None) -> tuple[Result, str]:
+        """As :func:`ran`."""
+        return ran(self.app, self.state, text, bound=bound)
+
+    def watched(
+        self, text: str, *, each: Callable[[Result], None], bound: float | None, stop: threading.Event | None = None
+    ) -> tuple[Result | None, str, bool]:
+        """As :func:`watched`."""
+        return watched(self.app, self.state, text, each=each, bound=bound, stop=stop)
+
+
 #: How much longer than a line's own wait tooled waits on it, so parsed's timeout, with its last reply, comes first.
 GRACE = 5.0
 
@@ -262,14 +287,19 @@ def ran(app: App, state: Any, text: str, *, bound: float | None) -> tuple[Result
         worker.start()
         worker.join(bound)
     if worker.is_alive():
-        msg = (
-            f'no result for {text!r} within {bound:g}s: a handler still waiting, on a person perhaps (a command not '
-            'marked INTERACTIVE), was given up on; --timeout gives a line longer'
-        )
-        raise TimedOutError(msg, last=None)
+        raise _given_up(text, bound)
     if 'error' in done:
         raise done['error']
     return done['result'], wrote.getvalue()
+
+
+def _given_up(text: str, bound: float | None) -> TimedOutError:
+    """A line given up on at its bound."""
+    msg = (
+        f'no result for {text!r} within {bound:g}s: a handler still waiting, on a person perhaps (a command not '
+        'marked INTERACTIVE), was given up on; --timeout gives a line longer'
+    )
+    return TimedOutError(msg, last=None)
 
 
 def watched(  # noqa: PLR0913 - one watch: what it runs on, and how it ends
@@ -294,18 +324,26 @@ def watched(  # noqa: PLR0913 - one watch: what it runs on, and how it ends
         MeshError: The session wouldn't open.
         TimedOutError: ``bound`` passed with the watch still running. It carries the last result's envelope.
     """
-    watch = _Watch(app, state, text)
+    return _watching(_Watch(app, state, text), each=each, bound=bound, stop=stop)
+
+
+def _watching(
+    watch: _Watch, *, each: Callable[[Result], None], bound: float | None, stop: threading.Event | None
+) -> tuple[Result | None, str, bool]:
+    """Run ``watch``, cold or held, handing each result to ``each``: as :func:`watched` says."""
     deadline = time.monotonic() + bound if bound is not None else None
     last: Result | None = None
-    with _alone() as wrote:
-        watch.worker.start()
+    with watch.alone() as wrote:
+        watch.start()
         while (found := watch.take(stop, deadline)) is not None:
             last = found
             each(found)
     watch.reraise()
     stopped = stop is not None and stop.is_set()
     if deadline is not None and time.monotonic() > deadline and not stopped:
-        msg = f'the watch {text!r} was still running at {bound:g}s, and was given up on; --timeout gives it longer'
+        msg = (
+            f'the watch {watch.text!r} was still running at {bound:g}s, and was given up on; --timeout gives it longer'
+        )
         raise TimedOutError(msg, last=last.to_json() if last is not None else None)
     return last, wrote.getvalue(), not stopped
 
@@ -314,22 +352,41 @@ class _Watch:
     """A watch, run in a worker thread: its results queued for the caller's thread, and a way to cancel it."""
 
     def __init__(self, app: App, state: Any, text: str) -> None:  # state: the app's
+        self.text = text
         self.results: queue.Queue[Any] = queue.Queue()
         self.ended = object()
         self.loop: asyncio.AbstractEventLoop | None = None
         self.task: asyncio.Task[Any] | None = None
         self.error: BaseException | None = None
-        self.worker = threading.Thread(target=self._work, args=(app, state, text), name='tooled watch', daemon=True)
+        self.worker = threading.Thread(target=self._work, args=(app, state), name='tooled watch', daemon=True)
 
-    async def _session(self, app: App, state: Any, text: str) -> None:
+    def alone(self) -> contextlib.AbstractContextManager[io.StringIO]:
+        """The streams the watch's handlers run with: an empty stdin, and a stdout of their own."""
+        return _alone()
+
+    def start(self) -> None:
+        """Start it."""
+        self.worker.start()
+
+    def _join(self, timeout: float) -> None:
+        self.worker.join(timeout)
+
+    def _check(self) -> None:
+        """Raise, while it runs, what ends every call on its session."""
+
+    async def _streamed(self, session: Session[Any]) -> None:
         self.loop, self.task = asyncio.get_running_loop(), asyncio.current_task()
-        async with opened(app, state) as session, contextlib.aclosing(session.watch(text)) as stream:
+        async with contextlib.aclosing(session.watch(self.text)) as stream:
             async for result in stream:
                 self.results.put(result)
 
-    def _work(self, app: App, state: Any, text: str) -> None:
+    async def _session(self, app: App, state: Any) -> None:
+        async with opened(app, state) as session:
+            await self._streamed(session)
+
+    def _work(self, app: App, state: Any) -> None:
         try:
-            asyncio.run(self._session(app, state, text))
+            asyncio.run(self._session(app, state))
         except asyncio.CancelledError:
             pass  # stopped: the session has closed
         except BaseException as exc:  # noqa: BLE001 -- handed to the caller's thread, which raises it
@@ -342,8 +399,9 @@ class _Watch:
         while True:
             if (stop is not None and stop.is_set()) or (deadline is not None and time.monotonic() > deadline):
                 self._cancel()
-                self.worker.join(_CLOSING)
+                self._join(_CLOSING)
                 return None
+            self._check()
             try:
                 found = self.results.get(timeout=0.05)
             except queue.Empty:
@@ -359,6 +417,186 @@ class _Watch:
         """Raise what the worker raised, in the caller's thread."""
         if self.error is not None:
             raise self.error
+
+
+class _HeldWatch(_Watch):
+    """A watch on a held session: run as a task on its loop, its handlers' output kept by the call's own streams."""
+
+    def __init__(self, held: Held, text: str) -> None:
+        self.held, self.text, self.wrote = held, text, io.StringIO()
+        self.results = queue.Queue()
+        self.ended = object()
+        self.loop = self.task = None
+        self.error = None
+        self.future: concurrent.futures.Future[None] | None = None
+
+    def alone(self) -> contextlib.AbstractContextManager[io.StringIO]:
+        """The buffer the watch's handlers write to: the call's stdout is theirs while the task runs."""
+        return contextlib.nullcontext(self.wrote)
+
+    def start(self) -> None:
+        """Start it on the session's loop."""
+        self.future = self.held.submit(self._held())
+
+    def _join(self, timeout: float) -> None:
+        if self.future is not None:
+            concurrent.futures.wait([self.future], timeout)
+
+    def _check(self) -> None:
+        if self.held.dead is not None:
+            self._cancel()
+            raise MeshError(self.held.dead)
+
+    async def _held(self) -> None:
+        try:
+            with attached.kept(self.wrote):
+                await self._streamed(self.held.opened())
+        except asyncio.CancelledError:
+            pass  # stopped: the session stays open
+        except BaseException as exc:  # noqa: BLE001 -- handed to the caller's thread, which raises it
+            self.error = exc
+        finally:
+            self.results.put(self.ended)
+
+
+#: How often a call waiting on a held session's line looks at its stop, and at the session, in seconds.
+_POLL = 0.05
+
+
+class Held:
+    """An app's session held open on a loop of its own thread, for a session's calls (:mod:`tooled.server`).
+
+    Each line runs on that loop as a task; between calls the loop goes on, so the state's own tasks (a heartbeat)
+    run too.
+
+    Args:
+        app: The app.
+        state: The state its session opens on.
+        on_wedged: Told why, once a handler has blocked the loop past a line's bound.
+    """
+
+    def __init__(self, app: App, state: Any, *, on_wedged: Callable[[str], None] | None = None) -> None:
+        self.app, self.state = app, state
+        self.on_wedged = on_wedged
+        self.dead: str | None = None
+        self.loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(target=self.loop.run_forever, name='tooled session', daemon=True)
+        self._entered: contextlib.AbstractAsyncContextManager[Session[Any]] | None = None
+        self._session: Session[Any] | None = None
+
+    def open(self, *, timeout: float) -> None:
+        """Open the app's session on its state, on the loop.
+
+        Raises:
+            MeshError: It wouldn't open (:func:`opened`), or not within ``timeout`` seconds.
+        """
+        self._thread.start()
+
+        async def enter() -> None:
+            self._entered = opened(self.app, self.state)
+            self._session = await self._entered.__aenter__()
+
+        future = asyncio.run_coroutine_threadsafe(enter(), self.loop)
+        try:
+            future.result(timeout)
+        except concurrent.futures.TimeoutError as exc:
+            future.cancel()
+            self._halt()
+            msg = f"the app's session did not open within {timeout:g}s"
+            raise MeshError(msg) from exc
+        except BaseException:
+            self._halt()
+            raise
+
+    def opened(self) -> Session[Any]:
+        """The app's session, open."""
+        assert self._session is not None  # noqa: S101 -- lines run once it's open
+        return self._session
+
+    def close(self, *, timeout: float) -> None:
+        """Close the app's session, so its state is left, and stop the loop."""
+        try:
+            if self._entered is not None and self.dead is None:
+                asyncio.run_coroutine_threadsafe(self._entered.__aexit__(None, None, None), self.loop).result(timeout)
+        finally:
+            self._halt()
+
+    def submit[T](self, work: Coroutine[Any, Any, T]) -> concurrent.futures.Future[T]:
+        """Run ``work`` on the session's loop, in the calling context (its call's streams among it)."""
+        return asyncio.run_coroutine_threadsafe(work, self.loop)
+
+    def responsive(self, within: float) -> bool:
+        """Whether the loop runs a callback within ``within`` seconds: not, while a handler blocks it."""
+        answered = threading.Event()
+        try:
+            self.loop.call_soon_threadsafe(answered.set)
+        except RuntimeError:  # closed
+            return False
+        return answered.wait(within)
+
+    def ran(self, text: str, *, bound: float | None) -> tuple[Result, str]:
+        """``text`` run in the held session, waited on for ``bound``: as :func:`ran`'s line is.
+
+        Raises:
+            TimedOutError: No result within ``bound`` seconds; the line is cancelled, and the session goes on.
+            MeshError: The session is wedged: by this line's handler, or another's.
+            Stopped: The call's client stopped it, or went; the line is cancelled.
+        """
+        wrote = io.StringIO()
+
+        async def line() -> Result:
+            with attached.kept(wrote):
+                return await self.opened().run(text)
+
+        future = self.submit(line())
+        stop = attached.stop()
+        deadline = time.monotonic() + bound if bound is not None else None
+        while not concurrent.futures.wait([future], _POLL).done:
+            if self.dead is not None:
+                future.cancel()
+                raise MeshError(self.dead)
+            if stop.is_set():
+                future.cancel()
+                raise attached.Stopped(stop.signum)
+            if deadline is not None and time.monotonic() > deadline:
+                future.cancel()
+                if not self.responsive(GRACE):
+                    raise MeshError(self._wedge(text))
+                raise _given_up(text, bound)
+        return future.result(), wrote.getvalue()
+
+    def watched(
+        self, text: str, *, each: Callable[[Result], None], bound: float | None, stop: threading.Event | None = None
+    ) -> tuple[Result | None, str, bool]:
+        """The watch ``text`` asks for, in the held session: as :func:`watched`'s."""
+        return _watching(_HeldWatch(self, text), each=each, bound=bound, stop=stop)
+
+    def _wedge(self, text: str) -> str:
+        """Mark the session wedged by ``text``'s handler, and say so: why every call on it now fails."""
+        self.dead = (
+            f"the session's loop is blocked: a handler of {text!r} hasn't returned (a synchronous one, which can't "
+            'be cancelled), and holds every call; the session ends, to be started again'
+        )
+        if self.on_wedged is not None:
+            self.on_wedged(self.dead)
+        return self.dead
+
+    def _halt(self) -> None:
+        """Stop the loop, what's left on it cancelled first; a thread a handler holds is left to the process."""
+
+        async def drained() -> None:
+            left = [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
+            for task in left:
+                task.cancel()
+            await asyncio.gather(*left, return_exceptions=True)
+            await self.loop.shutdown_asyncgens()
+
+        with contextlib.suppress(RuntimeError):  # already closed
+            concurrent.futures.wait([asyncio.run_coroutine_threadsafe(drained(), self.loop)], _CLOSING)
+            self.loop.call_soon_threadsafe(self.loop.stop)
+        self._thread.join(_CLOSING)
+        if not self._thread.is_alive():
+            self.loop.close()
 
 
 class _Split(io.TextIOBase):

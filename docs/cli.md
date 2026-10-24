@@ -5,7 +5,8 @@ tooled VERB [OPERATION] [slot=value …] [--policy PATH] [options]
 ```
 
 Every verb takes `--policy` after the verb (else `$TOOLED_POLICY`, else `./tooled.toml`; see
-[policy.md](policy.md)). `tooled --version` names tooled and the seared and zeared it runs on.
+[policy.md](policy.md)). `tooled --version` names tooled and the seared, zeared and parsed it runs on. A call given
+`--session` (else `$TOOLED_SESSION`) runs in a session that holds the policy open ([Sessions](#sessions)).
 
 ## Verbs
 
@@ -22,6 +23,7 @@ Every verb takes `--policy` after the verb (else `$TOOLED_POLICY`, else `./toole
 | `see [options] <words…>` | a command that declares `EFFECT = READ` | parsed's envelope for the line (below) |
 | `do [options] <words…>` | any other command | parsed's envelope for the line, a question it asks first among it |
 | `call TOOL [--args JSON]` | any tool the policy shows | what the verb its name begins with prints, a listen's values as one JSON list, a command's envelope ([tools.md](tools.md), *Calling a tool*) |
+| `session start \| run \| stop \| status` | a session | where a session is, how it ended, or how it is ([Sessions](#sessions)) |
 | `tools [--format openai\|anthropic\|mcp] [--verbs VERBS] [--sizes]` | the policy | the operations it shows as tool definitions for a harness: one for each fetch, query, write, wait or listen, and one for each allowed variant of a request's union; one for each command (`see_…`, `do_…`) and chain, but an interactive one ([tools.md](tools.md)); `--verbs fetch,wait:Fleet*` keeps some verbs' tools, or some operations'; with `--sizes`, each one's bytes and estimated tokens |
 
 An operation is anything tooled lists and acts on; each is a contract in this version. An operation, a contract
@@ -186,6 +188,81 @@ that meets every `--until`; a retained contract already in that state answers at
   (`--until activty=idle`) is refused at once, not after the timeout. `--select` keeps parts of the value, and of
   `last`; a `last` over the size cap is left out, and the message says so.
 
+## Sessions
+
+A session holds the policy's world open in a process of its own: the policy as it was loaded, its catalog and
+rules, each value it injects, the mesh, and the app's session on its state. A call that attaches to it loads and
+opens none of that, so it costs about what starting `tooled` does: a `see` on a small app, or a `fetch` on a
+loopback mesh, takes about 0.08 s attached, against 0.37 s cold. Many sessions run side by side, on one policy or
+several, each with its own state, injected values and mesh.
+
+```sh
+tooled session start --policy seat.toml --name seat-a        # prints where it is, once it's open
+TOOLED_SESSION=seat-a tooled see fleets show frigate         # runs in it
+tooled session stop seat-a                                   # closes it, its state left
+tooled session run --policy seat.toml -- claude -p "…"       # a session for one command, closed when it ends
+```
+
+| Verb | What |
+|---|---|
+| `session start [--name N] [--idle D] [--for PID] [--foreground] [--timeout S]` | Opens a session, and prints, once it's ready, where it is and what it holds: `session`, `socket`, `pid`, `policy`, `mesh`, `app`, `idle`, `for`, `log`, and the `seconds` it took to open. One that doesn't open exits as a cold call would (5 for a mesh or an app's state that won't open, 2 for a policy that won't load), saying why. A name already open is refused; with none, one is made up. `--foreground` holds it in this process instead, for a supervisor (a systemd user unit, a container, a harness that keeps its own processes): it prints the same, then serves until it ends |
+| `session run [--name N] [--idle D] -- COMMAND …` | Opens a session, runs the command with `$TOOLED_SESSION` naming it, and closes the session when the command ends, exiting with the command's code. The session is tied to `session run`'s own process, so it ends with it however it ends |
+| `session stop [NAME]` | Closes a session (`NAME`, else `$TOOLED_SESSION`), and prints how it ended |
+| `session status [NAME]` | One session's status: `calls`, `in_flight`, `last_call` and `started` beside where it is; or, naming none, every session under the runtime directory, each one that has ended listed once, then cleared |
+
+**Naming one.** A session is named by a name (letters, digits, `.`, `_` and `-`, up to 64) or by its socket's path
+(holding `/`), so a harness can keep the socket where it wants. A name's socket is
+`$XDG_RUNTIME_DIR/tooled/<name>.sock` (`$TMPDIR/tooled-<uid>/` without the variable), beside its status
+(`<name>.json`) and its log (`<name>.log`); a path's are beside it. The directory must be the user's alone (mode
+0700), and the socket and files are made so.
+
+**Attaching.** Every verb but `check` and `session`'s own attaches when given `--session NAME` (a line's verb takes
+it among tooled's own options, before the line), else `$TOOLED_SESSION`; an empty value names none.
+Nothing else attaches a call: no session is found by its policy or its directory, so two agents never share one by
+accident. `check` reads the file on disk, and never attaches.
+
+- **The same output:** an attached call writes what the call would write cold, byte for byte, and exits as it would.
+  A `listen` or a watch comes line by line, as it would. The first SIGINT or SIGTERM asks the session to stop the
+  call (a `listen` or a watch ends as a signal ends it cold, and a `wait` exits 7 with the last value), and a second
+  ends the client at once.
+- **What's the call's:** its options, `--timeout`, the cap (`--max-bytes`, `$TOOLED_MAX_BYTES`), `--out` and `@path`
+  (against its working directory), its stdin where it reads it (`--args -`), and `$TOOLED_LOG`.
+- **What's the session's:** the policy, the mesh, the values it injects and the state, read once at its start, in the
+  environment of what started it. A generated value (`generate = "uuid"`) is still made for each write. A source that
+  can't be read keeps the session from starting (exit 2), where a cold call fails only once it needs the value. A
+  call naming another policy (`--policy`, or `$TOOLED_POLICY` in its environment) is refused, exit 2. Changing a
+  policy, or a token a file holds, means starting the session again.
+- **A session named and not open** is refused, exit 5, saying how it ended when it knows (`no session 'seat-a' is
+  open: it ended at …: idle for 1800s`). It's never run cold instead: whoever started the session believes its state
+  is held.
+- **Another tooled:** a call from a tooled of another version is refused, exit 2; start the session again with it.
+
+**Inside a session,** calls run side by side, a `listen` or a watch beside the calls an agent makes, each with its own
+streams; the wire's share the one mesh it holds, so a `listen` under a monitor costs the agent no session of its own. A
+session holds its mesh for as long as it's open: zeared's `auto_reconnect` in `[mesh]` keeps it through a router's
+restart, as it keeps any long-lived client. The app's session stays open between calls on a loop of its own, so a
+state's own tasks (a heartbeat) go on running, and an app that makes its user present (a game's commander, say) keeps
+them present while the session is open: that's the app's choice, in its `[app] state`. A line is guarded as it is cold:
+an empty stdin, its handlers' output kept apart, and a line past its `--timeout` cancelled (exit 7), the session going
+on. A handler that blocks the loop (a synchronous one, which can't be cancelled) holds every call on the session while
+it blocks; past a line's bound, the session is wedged: each call on it fails (exit 5), and it ends without leaving its
+state.
+
+**How a session ends,** saying why in its status file:
+- `session stop`, or SIGTERM, SIGINT or SIGHUP;
+- the process it's for ends (`--for PID`, or `session run`'s own);
+- it's idle: no call in flight and none for `--idle` (`30m`, `1h`; `0` for never). That's 30 minutes by default for
+  a session tied to no process, and never for one tied to a process, since the process bounds it;
+- it's wedged.
+
+Its calls in flight are given 5 seconds to end, then stopped as their clients would stop them; the app's session is
+closed, so its state is left, and then the mesh; and its socket is removed.
+
+**Who can attach:** the same user, by the socket's mode and, where the system tells it, the peer's. A session holds
+what the policy injects (a token, say), so a process that can reach its socket can act as the policy allows without
+reading the token's file: a harness that sandboxes its agents lets the socket through, and nothing else of the
+session's.
+
 ## Output
 
 - **Results** go to stdout as JSON, indented on a terminal or with `--pretty` (`listen`'s lines are always compact).
@@ -231,7 +308,7 @@ With `TOOLED_LOG` set to a path, every run appends one JSON line to it as it end
 harness keeps a ledger of what its agent ran without wrapping tooled:
 
 ```json
-{"at": "2026-10-23T22:19:04.512Z", "verb": "call", "route": "wire", "operation": "OrderResult",
+{"at": "2026-10-23T22:19:04.512Z", "verb": "call", "route": "wire", "session": null, "operation": "OrderResult",
  "tool": "invoke_order_result_jump", "variant": "jump", "arguments": ["fleet", "to"], "flags": ["--args", "--policy"],
  "exit": 0, "error": null, "path": null, "bytes": 61, "seconds": 0.84}
 ```
@@ -239,7 +316,8 @@ harness keeps a ledger of what its agent ran without wrapping tooled:
 | Key | What |
 |---|---|
 | `at`, `seconds` | when the run began (UTC), and how long it took |
-| `verb`, `route` | the verb (`null` for one tooled doesn't have), and `wire` for a verb on an operation |
+| `verb`, `route` | the verb (`null` for one tooled doesn't have), and `wire` or `tree` for a verb on an operation |
+| `session` | the session it ran in, as the call named it; `null` for a call made cold |
 | `operation`, `tool`, `variant` | what it acted on, as far as it got; a call's `tool` is the name it was given, found or not |
 | `arguments`, `flags` | the names of what was given (a call's arguments, a verb's slots), and the options given |
 | `exit`, `error`, `path` | the exit code, the error's kind, and where in the input it lies |
@@ -248,6 +326,8 @@ harness keeps a ledger of what its agent ran without wrapping tooled:
 - **No values:** no slot's, request's, argument's or reply's, no error's message (which can quote one), and not a
   timed-out wait's `last`. Names, kinds and sizes are enough to compare one agent's runs with another's.
 - **Every key on every line,** `null` where it doesn't apply.
+- **The caller's log:** a call attached to a session appends its line to its own `$TOOLED_LOG`, not the session's,
+  with what the session did and the call's own time.
 - **One append a line,** so runs side by side share a file. A harness that keeps a record a turn gives each its own
   (`TOOLED_LOG=turns/<stamp>/calls.jsonl`).
 - **What it can't see:** a run cut short (a crash, a kill, `--help`) leaves no line, and nor does what failed
@@ -262,6 +342,6 @@ harness keeps a ledger of what its agent ran without wrapping tooled:
 | 2 | `usage`, `policy`, `catalog` | the command, its policy file or its protocol can't be used as given |
 | 3 | `refused` | the policy refuses it |
 | 4 | `validation` | the request doesn't load as its class, or a tool call's arguments don't fit its tool; `path` names the field |
-| 5 | `mesh` | the session wouldn't open, a read or a write failed, or a write got no reply (`generated` holds its generated values) |
+| 5 | `mesh` | the session wouldn't open, a read or a write failed, or a write got no reply (`generated` holds its generated values); a session named isn't open, or is wedged |
 | 6 | `too_large` | the result is over the size cap |
 | 7 | `timeout` | `wait`: no value met the conditions in time; `last` holds the last one seen |

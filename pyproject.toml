@@ -1,6 +1,6 @@
 [project]
 name = "tooled"
-version = "0.2.7"
+version = "0.2.8"
 description = "Typed, policy-guarded access to a zeared mesh, for agents and people"
 authors = [
     { name = "Benj Wiswell", email = "benjwiswell@gmail.com" },

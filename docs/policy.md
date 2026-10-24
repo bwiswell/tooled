@@ -62,7 +62,9 @@ fields = ["ask_id"]
 
 The session tooled opens: zeared's own `SessionConfig`, loaded by zeared, strict too. `mode` and `router` are the
 usual pair for reaching a hub; `connect`, `listen`, `retry` and the rest are as zeared documents them. No flag
-overrides it, so a policy can't be pointed at another mesh from the command line.
+overrides it, so a policy can't be pointed at another mesh from the command line. A cold call opens it for
+itself; a session opens it once and holds it while it's open ([cli.md](cli.md), *Sessions*), where
+`auto_reconnect = true` keeps it through a router's restart.
 
 **A policy of commands alone needs none.** With no `[protocol] packages`, only an app's commands or trees, `[mesh]`
 may be left out: what an app's commands reach is the app's own business. Then no rule may name a wire op (`read`,
@@ -125,6 +127,9 @@ Request fields every request that declares them carries, each from a source:
 - **A generated value** is an id a server can tell a repeat by, such as an order's. It is no secret: a reply may
   echo it. `check` names its source and makes none. A write that carries one is asked once more, with the same
   value, when nothing answers (see [cli.md](cli.md)).
+- **In a session,** each source is read once, as the session starts, in the environment of what started it, and
+  one that can't be read keeps it from starting; a generated value is still made for each write. A token that
+  changes means starting the session again ([cli.md](cli.md), *Sessions*).
 
 ```toml
 [inject.order_id]               # every request that declares `order_id` carries a fresh one
@@ -278,7 +283,8 @@ state = "demo.client.app:state"   # def state(*, bound, injected): a link, the c
 injects needn't be any request's field when there's a state to take it. The session knows no terminal, so an
 `INTERACTIVE` command is refused before it runs, naming what to say instead. A state function that can't be found,
 or takes other arguments, is the policy's mistake (exit 2); one that fails, or a state that won't open, is the
-app's (exit 5, as a session that won't open is).
+app's (exit 5, as a session that won't open is). A call made cold builds the state, opens the app's session on it,
+and closes it, each time; a session ([cli.md](cli.md), *Sessions*) builds it once and holds it open until it ends.
 
 Each mount's commands become operations, led by its prefix: a group mounted at the root names its commands by class
 (`FleetMine`, `demo.client.fleet:FleetMine`), and one mounted under `relay` by its words, slashed (`relay/Run`,
