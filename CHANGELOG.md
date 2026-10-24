@@ -9,6 +9,27 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
+## 0.2.10 — *unreleased*
+
+**tooled's own command line on parsed.** Each verb is a parsed command, read by parsed's command line, so tooled's
+own reads as any app built on parsed reads its; and tooled moves to parsed `v0.2.2`.
+
+### Changed
+
+- **Breaking, in wording: usage, refusals and help are parsed's.** A refusal is parsed's, the verb's usage after it
+  (``fetch: which contract? `fetch <contract> [<slots> …] …` ``), where argparse's named the verb
+  (`tooled fetch: the following arguments are required: contract`); a value tooled reads its own way says what it
+  always has (`--timeout: a timeout is a number of seconds above zero, not 0`). Each is still `usage`, exit 2.
+  `tooled VERB --help` is the verb's help in parsed's words, and `tooled --help` lists the verbs by their words and
+  summaries, above the exit codes. What each verb does, prints and exits with is unchanged.
+- **Breaking: a long flag is given whole.** argparse took a prefix of one (`--pol` for `--policy`); parsed takes
+  none, and suggests the flag (`no command takes --pol; did you mean --policy?`).
+- **A word holding a double quote reads as given:** `see station 'a"b' show` gives the line the word, where it was
+  refused, and `call t --args='{"a": 1}'` reads whatever the value after `=` holds.
+- **`--help` and `--version` return** exit 0 rather than leave through `SystemExit`, so a program calling
+  `tooled.cli.main` gets the code back; and a run asking for help appends its line to `$TOOLED_LOG`.
+- **parsed `v0.2.2`,** from `v0.2.0`, its range `>=0.2.2,<0.3`. An app whose commands tooled reads must pin the same.
+
 ## 0.2.9 — 2026-10-24
 
 **Tools over MCP.** `tooled serve` hands a harness the policy's tools over MCP, each call carried out in a session it

@@ -1,9 +1,10 @@
 """The ``tooled`` command (``python -m tooled``).
 
-Stdlib ``argparse`` only. Every verb takes ``--policy`` (else ``$TOOLED_POLICY``, else ``./tooled.toml``) after
-the verb, so a permission rule can match a verb by its prefix (``tooled fetch``). ``--version`` names the seared,
-zeared and parsed tooled runs on, since a protocol package tooled reads must pin the same zeared, and an app the same
-parsed.
+Its command line is read by parsed: each verb is a command class (:mod:`tooled.verbs`), and this module carries it
+out. Every verb takes ``--policy`` (else ``$TOOLED_POLICY``, else ``./tooled.toml``) after the verb, so a permission
+rule can match a verb by its prefix (``tooled fetch``). ``--version`` names the seared, zeared and parsed tooled runs
+on, since a protocol package tooled reads must pin the same zeared, and an app the same parsed. ``tooled --help``
+lists the verbs, and ``tooled VERB --help`` says what one takes.
 
 **Verbs:**
 - ``check``: load the policy, its protocol and its app's commands, resolve what it injects, and summarize what it
@@ -81,7 +82,6 @@ import argparse
 import contextlib
 import json
 import logging
-import math
 import os
 import sys
 import time
@@ -103,9 +103,6 @@ if TYPE_CHECKING:
 
 #: How many of a level's names a refused path's hint lists, when none is close.
 _HINT_NAMES = 12
-
-#: A fetch's, a query's and a write's bound, in seconds, when none is given.
-_ASKED = 5.0
 
 #: How often a listen or a wait in a session looks at its call's stop, in seconds.
 _STOP_POLL = 0.05
@@ -131,407 +128,14 @@ VERBS = (
 #: The verbs that take a line: tooled's own options first, then the line's words, each as the shell gave it.
 LINES = ('see', 'do')
 
-#: tooled's own options a line's verb takes before the line, and whether each takes a value.
-_LINE_OPTIONS = {
-    '--policy': True,
-    '--select': True,
-    '--max-bytes': True,
-    '--out': True,
-    '--pretty': False,
-    '--timeout': True,
-    '--session': True,
-}
-
-#: How long a line's verb waits on its line, in seconds, when none is given: longer for a line that waits itself.
-_LINE_BOUND = 30.0
+#: The flags a line's verb takes before its line that take a value, as :class:`tooled.verbs.Lined` declares them:
+#: the words a call's session is looked for among, before the line, short of reading the arguments with parsed.
+_LINE_VALUES = frozenset({'--policy', '--select', '--max-bytes', '--out', '--session', '--timeout'})
 
 #: Verbs renamed, refused naming the new one rather than as unknown verbs.
 RENAMED = {
     'contracts': '`tooled contracts` was renamed `tooled operations` in tooled 0.2.4',
 }
-
-#: The end of ``tooled --help``: where output goes, and what each exit code means.
-EPILOG = """\
-Results go to stdout as JSON. Errors go to stderr as one JSON object, notes
-and log lines as JSON lines. A result over the size cap (--max-bytes, else
-$TOOLED_MAX_BYTES, else 28000 bytes) is refused with each part's size:
---select keeps parts, --out writes it whole.
-
-exit codes:
-  0  done (an empty result included)
-  2  usage, the policy file, or the protocol
-  3  refused by the policy
-  4  a request, or a tool call's arguments, that do not load: the field at
-     fault is in "path"
-  5  the mesh: the session would not open, a read or a write failed, or a
-     write got no reply: "generated" holds its generated values
-  6  a result over the size cap
-  7  wait: no value met the conditions in time; "last" holds the last one seen
-
-The policy is --policy PATH, else $TOOLED_POLICY, else ./tooled.toml. With
-$TOOLED_LOG set to a path, each run appends one JSON line to it: what ran,
-by name, how it ended, its bytes and seconds, and no value.
-"""
-
-
-class _Parser(argparse.ArgumentParser):
-    """argparse's parser, its errors tooled's own: one JSON line on stderr, exit 2, not argparse's usage text.
-
-    ``add_subparsers`` makes each verb's parser of the same class, so a verb's errors go the same way, named by its
-    ``prog`` (``tooled query``). ``--help`` and ``--version`` print and exit 0 through their own actions, not here.
-    """
-
-    def error(self, message: str) -> NoReturn:
-        msg = f'{self.prog}: {message}'
-        raise UsageError(msg)
-
-
-def build_parser() -> argparse.ArgumentParser:
-    """The ``tooled`` argument parser."""
-    parser = _Parser(
-        prog='tooled',
-        description='Typed, policy-guarded access to a zeared mesh, for agents and people.',
-        epilog=EPILOG,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument('--version', action='version', version=version())
-    common = _Parser(add_help=False)
-    common.add_argument('--policy', metavar='PATH', help='the policy file (else $TOOLED_POLICY, else ./tooled.toml)')
-    common.add_argument('--pretty', action='store_true', help='indent the JSON (the default on a terminal)')
-    common.add_argument('--select', type=_paths, metavar='PATHS', help='keep parts: a.b, list[].key; comma-separated')
-    common.add_argument(
-        '--max-bytes',
-        type=_bytes,
-        metavar='N',
-        help='refuse a result over N bytes (else $TOOLED_MAX_BYTES, else 28000; 0: none)',
-    )
-    saving = _Parser(add_help=False)
-    saving.add_argument('--out', metavar='FILE', help='write the whole result to FILE, uncapped, and say where')
-    attaching = _Parser(add_help=False)
-    attaching.add_argument(
-        '--session',
-        metavar='NAME',
-        help="run in this session: its name, or its socket's path (else $TOOLED_SESSION; empty: none)",
-    )
-    verbs = parser.add_subparsers(dest='verb', metavar='verb', required=True)
-    check = verbs.add_parser(
-        'check',
-        parents=[common, saving],
-        help='check the policy and its protocol, and summarize what it shows',
-        description='Load the policy and its protocol, resolve what it injects, and summarize what it shows.',
-    )
-    check.add_argument('--connect', action='store_true', help='also open the session the policy describes')
-    check.add_argument(
-        '--no-resolve',
-        action='store_true',
-        help='read no inject source: check the policy against its protocol without its secrets, as in CI',
-    )
-    check.set_defaults(run=_check)
-    operations = verbs.add_parser(
-        'operations',
-        parents=[common, saving, attaching],
-        help='list the operations the policy shows',
-        description='Every operation the policy shows, one line of each.',
-    )
-    operations.set_defaults(run=_operations)
-    describe = verbs.add_parser(
-        'describe',
-        parents=[common, saving, attaching],
-        help='describe one operation: its slots, and the schemas of what it takes and gives',
-        description='One operation whole: its slots, and the JSON Schemas of what it takes and gives.',
-    )
-    describe.add_argument('operation', help='an operation: its class name, or module:Class')
-    layers = describe.add_mutually_exclusive_group()
-    layers.add_argument('--variant', metavar='TAG', help="one variant of the request's union, by its tag")
-    layers.add_argument('--reply', action='store_true', help="the reply's whole schema, not its field list")
-    describe.set_defaults(run=_describe)
-    reads = _Parser(add_help=False)
-    reads.add_argument('contract', help='a contract: its class name, or module:Class')
-    reads.add_argument('slots', nargs='*', metavar='slot=value', help='a slot to narrow by; left out, it widens')
-    reads.add_argument('--timeout', type=_seconds, default=_ASKED, metavar='S', help='seconds to wait (default 5)')
-    fetch = verbs.add_parser(
-        'fetch',
-        parents=[common, saving, reads, attaching],
-        help="read a retained contract's values",
-        description="A retained contract's values: those the slots select, or every one.",
-    )
-    fetch.set_defaults(run=_fetch)
-    query = verbs.add_parser(
-        'query',
-        parents=[common, saving, reads, attaching],
-        help='ask a read queryable',
-        description='Ask a queryable that declares EFFECT = READ, and print its replies.',
-    )
-    query.add_argument('--request', metavar='JSON', help='the request, in its wire form: JSON, - for stdin, @path')
-    query.add_argument('--param', action='append', default=[], metavar='k=v', help='a selector parameter')
-    query.set_defaults(run=_query)
-    listen = verbs.add_parser(
-        'listen',
-        parents=[common, attaching],
-        help='stream a retained contract or a stream, one JSON line per value',
-        description=(
-            'Each value of a retained contract or a stream as it arrives, one JSON line each (--pretty has no '
-            "effect): a retained contract's current values first, then live ones."
-        ),
-    )
-    listen.add_argument('contract', help='a contract: its class name, or module:Class')
-    listen.add_argument('slots', nargs='*', metavar='slot=value', help='a slot to narrow by; left out, it widens')
-    listen.add_argument('--count', type=_count, metavar='N', help='stop after N values')
-    listen.add_argument('--for', dest='duration', type=_duration, metavar='DURATION', help='stop after 30, 30s, 5m, 1h')
-    listen.add_argument('--meta', action='store_true', help="add each value's key, origin and time")
-    listen.set_defaults(run=_listen)
-    _add_invoke(verbs, [common, saving, attaching])
-    _add_wait(verbs, [common, saving, attaching])
-    _add_tools(verbs, [common, saving, attaching])
-    _add_call(verbs, [common, saving, attaching])
-    _add_lines(verbs, [common, saving, attaching])
-    _add_session(verbs)
-    _add_serve(verbs)
-    return parser
-
-
-def _add_invoke(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # argparse's subparsers
-    """``invoke``'s parser."""
-    invoke = verbs.add_parser(
-        'invoke',
-        parents=parents,
-        help='ask a queryable that writes',
-        description=(
-            'Ask a queryable that writes (EFFECT = WRITE or ACTION, or none declared), and print its replies. A '
-            'refusal the server sends back is a reply.'
-        ),
-    )
-    invoke.add_argument('contract', help='a contract: its class name, or module:Class')
-    invoke.add_argument(
-        'slots', nargs='*', metavar='slot=value', help='a slot: a write reaches one key, so each is given or bound'
-    )
-    invoke.add_argument('--timeout', type=_seconds, default=_ASKED, metavar='S', help='seconds to wait (default 5)')
-    invoke.add_argument('--request', metavar='JSON', help='the request, in its wire form: JSON, - for stdin, @path')
-    invoke.add_argument(
-        '--dry-run',
-        action='store_true',
-        help='build the request and check it, and print it without sending; injected secrets show as <injected>',
-    )
-    invoke.add_argument(
-        '--no-retry',
-        action='store_true',
-        help='after no reply, do not ask once more (a request with a generated id is asked twice by default)',
-    )
-    invoke.set_defaults(run=_invoke)
-
-
-def _add_wait(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # argparse's subparsers
-    """``wait``'s parser."""
-    wait = verbs.add_parser(
-        'wait',
-        parents=parents,
-        help='wait for a retained contract or a stream to hold a value, and print it',
-        description=(
-            'Subscribe to a retained contract or a stream until a value meets every --until, and print it: a '
-            'retained contract already in that state answers at once. Past --timeout, exit 7 with the last value '
-            'seen.'
-        ),
-    )
-    wait.add_argument('contract', help='a contract: its class name, or module:Class')
-    wait.add_argument('slots', nargs='*', metavar='slot=value', help='a slot to narrow by; left out, it widens')
-    wait.add_argument(
-        '--until',
-        action='append',
-        required=True,
-        type=_condition,
-        metavar='PATH=VALUE',
-        help='a dotted path and the value it must equal, read as JSON if it can be (40, true), else as a string; '
-        'repeat for several, all required',
-    )
-    wait.add_argument('--timeout', type=_seconds, default=30.0, metavar='S', help='seconds to wait (default 30)')
-    wait.add_argument('--meta', action='store_true', help="add the value's key, origin and time")
-    wait.set_defaults(run=_wait)
-
-
-def _add_tools(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # argparse's subparsers
-    """``tools``'s parser."""
-    from .tools import CALLS, FORMATS
-
-    tools = verbs.add_parser(
-        'tools',
-        parents=parents,
-        help='export the operations the policy shows as tool definitions, for a harness',
-        description=(
-            'The operations the policy shows, as tool definitions a harness hands a model: one for each fetch, query, '
-            "write, wait or listen, and one for each allowed variant of a request's union, in a schema dialect a "
-            'constrained decoder holds. Sorted, and byte-stable.'
-        ),
-    )
-    tools.add_argument('--format', choices=FORMATS, default='openai', help='the form to write them in (default openai)')
-    tools.add_argument(
-        '--verbs',
-        type=_picks,
-        default=CALLS,
-        metavar='VERBS',
-        help=(
-            'only these tools, comma-separated: a verb for all of its, or verb:GLOB for those whose operation the '
-            f'glob matches (wait:Fleet*); default all of {",".join(CALLS)}'
-        ),
-    )
-    tools.add_argument('--sizes', action='store_true', help="each tool's bytes and estimated tokens, not the tools")
-    tools.set_defaults(run=_tools)
-
-
-def _add_lines(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # argparse's subparsers
-    """``see``'s and ``do``'s parsers: tooled's own options, then the line, which :func:`main` splits off first."""
-    for verb, what in (('see', 'a read: a command that declares EFFECT = READ'), ('do', 'any other command')):
-        line = verbs.add_parser(
-            verb,
-            parents=parents,
-            usage=f'tooled {verb} [options] <words…>',
-            help=f"run a line of the app's: {what}",
-            description=(
-                f"Run a line of the policy's app, {what}: tooled's own options first, then the line's words, each as "
-                'the shell gave it, or the whole line as one. The line is judged by the policy before it runs, and '
-                "parsed's envelope printed. --yes on the line answers its questions where the policy allows confirm."
-            ),
-        )
-        line.add_argument(
-            '--timeout',
-            type=_duration,
-            default=_LINE_BOUND,
-            metavar='DURATION',
-            help="how long to wait on the line: 30, 30s, 5m (default 30s; a line's own wait, its bound and 5s)",
-        )
-        line.set_defaults(run=_see if verb == 'see' else _do)
-
-
-def _add_call(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # argparse's subparsers
-    """``call``'s parser."""
-    call = verbs.add_parser(
-        'call',
-        parents=parents,
-        help='carry out one tool call, as a model wrote it',
-        description=(
-            'Carry out one call of a tool `tooled tools` exported: its arguments mapped back to the verb its name '
-            'begins with, then checked and carried out as that verb is. Errors are worded for the model.'
-        ),
-    )
-    call.add_argument('tool', help='the tool, by the name `tooled tools` gives it')
-    call.add_argument(
-        '--args', metavar='JSON', help="the call's arguments: a JSON object, - for stdin, @path (default {})"
-    )
-    call.set_defaults(run=_call)
-
-
-def _add_session(verbs: Any) -> None:  # argparse's subparsers
-    """``session``'s parsers: ``start``, ``run``, ``stop`` and ``status``."""
-    from . import sessions
-
-    session = verbs.add_parser(
-        'session',
-        help="hold the policy's world open in a session, for the calls that name it",
-        description=(
-            "A session holds the policy's world open (its catalog, its injected values, its app's session on its "
-            'state) in a process of its own, for the calls given --session (else $TOOLED_SESSION).'
-        ),
-    )
-    asks = session.add_subparsers(dest='action', metavar='action', required=True)
-    shown = _Parser(add_help=False)
-    shown.add_argument('--pretty', action='store_true', help='indent the JSON (the default on a terminal)')
-    shown.set_defaults(select=None, max_bytes=None, out=None)
-    waited = _Parser(add_help=False)
-    waited.add_argument(
-        '--timeout',
-        type=_seconds,
-        default=sessions.WAIT,
-        metavar='S',
-        help='seconds to wait on the session (default 30)',
-    )
-    opening = _Parser(add_help=False)
-    opening.add_argument('--policy', metavar='PATH', help='the policy file (else $TOOLED_POLICY, else ./tooled.toml)')
-    opening.add_argument(
-        '--name', metavar='NAME', help="its name, or its socket's path (holding /); made up when not given"
-    )
-    opening.add_argument(
-        '--idle',
-        type=_idle,
-        metavar='DURATION',
-        help='end it after this long with no call: 30m, 1h, 0 for never (default 30m; never, tied to a process)',
-    )
-    start = asks.add_parser(
-        'start',
-        parents=[opening, waited, shown],
-        help='open a session, and say where it is',
-        description='Open a session in a process of its own, wait until it is ready, and say where it is.',
-    )
-    start.add_argument('--for', dest='tied', type=_pid, metavar='PID', help='end it when this process ends')
-    start.add_argument(
-        '--foreground', action='store_true', help='hold it in this process until it ends, for a supervisor'
-    )
-    start.set_defaults(run=sessions.start)
-    run = asks.add_parser(
-        'run',
-        parents=[opening, waited],
-        usage='tooled session run [options] -- COMMAND …',
-        help='run a command in a session of its own, closed when it ends',
-        description=(
-            'Open a session, run the command with $TOOLED_SESSION naming it, and close the session when the '
-            "command ends, however it ends; the exit code is the command's."
-        ),
-    )
-    run.add_argument('command', nargs=argparse.REMAINDER, help='the command, after --')
-    run.set_defaults(run=sessions.run)
-    for action, what in (
-        ('stop', 'close a session, its state left'),
-        ('status', "say how a session is, or every one's"),
-    ):
-        asked = asks.add_parser(
-            action, parents=[waited, shown], help=what, description=what[0].upper() + what[1:] + '.'
-        )
-        asked.add_argument(
-            'name', nargs='?', metavar='NAME', help='its name, or its socket path (else $TOOLED_SESSION)'
-        )
-        asked.set_defaults(run=sessions.stop if action == 'stop' else sessions.status)
-
-
-def _add_serve(verbs: Any) -> None:  # argparse's subparsers
-    """``serve``'s parser."""
-    from . import mcp, sessions
-    from .tools import CALLS
-
-    serve = verbs.add_parser(
-        'serve',
-        help='serve the tools the policy shows over MCP, on stdio, attached to a session',
-        description=(
-            'Serve the tools the policy shows over MCP on stdin and stdout, for a harness that takes tools natively. '
-            "Each call runs in the session --session names (else $TOOLED_SESSION), beside the command line's; with "
-            'none named, in one of its own, opened from the policy and closed when serve ends.'
-        ),
-    )
-    serve.add_argument(
-        '--session',
-        metavar='NAME',
-        help="the session to attach to: its name, or its socket's path (else $TOOLED_SESSION)",
-    )
-    serve.add_argument(
-        '--verbs',
-        type=_picks,
-        metavar='VERBS',
-        help=f'only these tools, as tools --verbs picks them (wait:Fleet*); default all of {",".join(CALLS)}',
-    )
-    serve.add_argument(
-        '--policy',
-        metavar='PATH',
-        help='the policy, for a session of its own (else $TOOLED_POLICY, else ./tooled.toml)',
-    )
-    serve.add_argument('--name', metavar='NAME', help='the name of a session of its own; made up when not given')
-    serve.add_argument(
-        '--idle', type=_idle, metavar='DURATION', help='end a session of its own after this long with no call (never)'
-    )
-    serve.add_argument(
-        '--timeout',
-        type=_seconds,
-        default=sessions.WAIT,
-        metavar='S',
-        help='seconds to wait on the session (default 30)',
-    )
-    serve.set_defaults(run=mcp.serve)
 
 
 def version() -> str:
@@ -569,17 +173,24 @@ def main(argv: Sequence[str] | None = None) -> int:
 def ran(given: list[str], entry: Entry) -> int:
     """One run of the command, as :func:`main` makes it cold and a session makes it for a call: its exit code.
 
-    An error is written to stderr, and ends ``entry`` with it; no line is logged here.
+    The arguments are read by parsed (:func:`tooled.verbs.read`), and the verb's runner carries them out. Help and the
+    version are written to stdout, exit 0. An error is written to stderr, and ends ``entry`` with it; no line is
+    logged here.
     """
+    from . import verbs
     from .sessions import failed
 
     try:
         if given and given[0] in RENAMED:
             raise UsageError(RENAMED[given[0]])
-        head, line = _split_line(given)
-        args = build_parser().parse_args(head)
-        if line is not None:
-            args.line = line
+        read = verbs.read(given)
+        if read.command is None:
+            text = version() + '\n' if read.version else read.help or ''
+            sys.stdout.write(text)
+            entry.wrote(text)
+            entry.end(0)
+            return 0
+        args = _args(read)
         args.entry = entry
         entry.arguments = [slot.partition('=')[0] for slot in getattr(args, 'slots', None) or []]
         _log_as_json()
@@ -590,54 +201,94 @@ def ran(given: list[str], entry: Entry) -> int:
     return code
 
 
+def _args(read: Any) -> argparse.Namespace:  # a verbs.Given, holding a command
+    """A verb's command, read, as the namespace its runner takes: each field by its name, read on as it's used.
+
+    Paths are strings, ``--select``'s paths and ``--until``'s conditions parsed, ``--verbs``' picks split, a line's
+    verb's line put together, ``session run``'s command split into its words, and ``--dry-run`` a switch, as
+    parsed's own flag given ``invoke``.
+    """
+    from . import verbs
+
+    command = read.command
+    args = argparse.Namespace(select=None, max_bytes=None, out=None)
+    for spec in type(command).__seared_fields__:
+        setattr(args, spec.attr, getattr(command, spec.attr))
+    for name in ('policy', 'out'):
+        if getattr(args, name, None) is not None:
+            setattr(args, name, str(getattr(args, name)))
+    if args.select is not None:
+        from .output import parse_paths
+
+        args.select = parse_paths(args.select)
+    if isinstance(command, verbs.Wait):
+        from .executor import Condition
+
+        args.until = [Condition.parse(text) for text in command.until]
+    if isinstance(command, verbs.Tools | verbs.Serve):
+        from .tools import CALLS
+
+        picked = tuple(pick.strip() for pick in command.verbs.split(',')) if command.verbs is not None else None
+        args.verbs = picked if picked is not None or isinstance(command, verbs.Serve) else CALLS
+    if isinstance(command, verbs.Lined):
+        args.line = read.line
+    if isinstance(command, verbs.SessionRun):
+        args.command = read.words
+    if isinstance(command, verbs.Invoke):
+        args.dry_run = 'dry-run' in read.own
+    args.verb, args.run = verbs.verb_of(type(command)), _runner(type(command))
+    return args
+
+
+def _runner(cls: type) -> Callable[[argparse.Namespace], int]:
+    """The function that carries out a verb, by its command class."""
+    from . import mcp, sessions, verbs
+
+    runners: dict[type, Callable[[argparse.Namespace], int]] = {
+        verbs.Check: _check,
+        verbs.Operations: _operations,
+        verbs.Describe: _describe,
+        verbs.Fetch: _fetch,
+        verbs.Query: _query,
+        verbs.Listen: _listen,
+        verbs.Invoke: _invoke,
+        verbs.Wait: _wait,
+        verbs.Tools: _tools,
+        verbs.Call: _call,
+        verbs.See: _see,
+        verbs.Do: _do,
+        verbs.Serve: mcp.serve,
+        verbs.SessionStart: sessions.start,
+        verbs.SessionRun: sessions.run,
+        verbs.SessionStop: sessions.stop,
+        verbs.SessionStatus: sessions.status,
+    }
+    return runners[cls]
+
+
 def _session_of(given: list[str]) -> str | None:
     """The session a call attaches to: ``--session``'s value, else ``$TOOLED_SESSION``; ``None`` for none.
 
     Only a verb that attaches has one, and a line's verb only among tooled's own options, before its line. An empty
-    value names none.
+    value names none. The arguments are looked through here without parsed, which an attached call would otherwise
+    import only for this (:data:`_LINE_VALUES`); the session reads them whole.
     """
     from .sessions import ATTACHES, SESSION_ENV
 
     if not given or given[0] not in ATTACHES:
         return None
-    head, _ = _split_line(given)
-    named = None
-    for at, word in enumerate(head):
-        if word == '--session' and at + 1 < len(head):
-            named = head[at + 1]
-        elif word.startswith('--session='):
-            named = word.partition('=')[2]
+    named, at, lined = None, 1, given[0] in LINES
+    while at < len(given):
+        word = given[at]
+        name, eq, value = word.partition('=')
+        if word == '--' or (lined and not word.startswith('-')):
+            break  # the verb's flags end, or a line's first word begins it
+        if name == '--session':
+            named = value if eq else given[at + 1] if at + 1 < len(given) else named
+        at += 2 if lined and name in _LINE_VALUES and not eq else 1
     if named is None:
         named = os.environ.get(SESSION_ENV, '')
     return named or None
-
-
-def _split_line(given: list[str]) -> tuple[list[str], list[str] | None]:
-    """For a line's verb, the arguments argparse reads (the verb and tooled's own options) and the line's words.
-
-    tooled's options stand first, before the line's first word; from it on, every word is the line's, a flag
-    among them (``--yes``, ``--until``). ``--`` ends tooled's options, for a line that begins with one of them. For any
-    other verb, the arguments are argparse's whole, and the line ``None``.
-    """
-    if not given or given[0] not in LINES:
-        return given, None
-    head, at = [given[0]], 1
-    while at < len(given):
-        word = given[at]
-        name = word.partition('=')[0]
-        if word == '--':
-            at += 1
-            break
-        if word in {'-h', '--help'} or (name in _LINE_OPTIONS and '=' in word):
-            head.append(word)
-            at += 1
-        elif name in _LINE_OPTIONS:
-            takes = _LINE_OPTIONS[name]
-            head += given[at : at + 1 + takes]
-            at += 1 + takes
-        else:
-            break
-    return head, given[at:]
 
 
 def _log_call(entry: Entry) -> None:
@@ -798,6 +449,7 @@ def _tools(args: argparse.Namespace) -> int:
 
 def _call(args: argparse.Namespace) -> int:
     from . import calls, tools
+    from .verbs import ASKED
 
     entry = _entry(args)
     entry.tool = args.tool
@@ -810,7 +462,7 @@ def _call(args: argparse.Namespace) -> int:
     if _route(tool) == 'tree':
         return _call_line(args, rules, tool, mapped)
     slots = [f'{name}={value}' for name, value in mapped.slots.items()]
-    run = argparse.Namespace(**vars(args), contract=tool.operation.qualname, slots=slots, timeout=_ASKED, meta=False)
+    run = argparse.Namespace(**vars(args), contract=tool.operation.qualname, slots=slots, timeout=ASKED, meta=False)
     if tool.verb == 'fetch':
         return _fetch(run)
     if tool.verb in {'query', 'invoke'}:
@@ -834,6 +486,7 @@ def _call_line(args: argparse.Namespace, rules: Rules, tool: Any, mapped: Any) -
     from parsed import RenderError
 
     from .policy import Op
+    from .verbs import LINE_BOUND
 
     app = _app(rules.policy)
     command = tool.operation
@@ -850,7 +503,7 @@ def _call_line(args: argparse.Namespace, rules: Rules, tool: Any, mapped: Any) -
 
         words = [word for condition in mapped.until for word in ('--until', condition.text)]
         line += ' ' + line_of([*words, '--timeout', f'{mapped.timeout:g}s'])
-    run = argparse.Namespace(**vars(args), line=[line], timeout=_LINE_BOUND)
+    run = argparse.Namespace(**vars(args), line=line, timeout=LINE_BOUND)
     return _line(run, Op.DO if tool.verb == 'do' else Op.SEE)
 
 
@@ -873,17 +526,12 @@ def _line(args: argparse.Namespace, op: Any) -> int:  # a tree op
     4 a value refused, 7 a wait past its bound), and 1 for a handler that fails. A line still running at its bound
     is given up on, exit 7 (:func:`tooled.tree.ran`).
     """
-    from parsed.argv import line_of
-
     from . import tree
 
     if not args.line:
         msg = f"tooled {args.verb} takes a line: the words of a command, after tooled's own options"
         raise UsageError(msg)
-    try:
-        text = line_of(args.line)
-    except Exception as exc:  # parsed's ReadError: a word holding a double quote
-        raise UsageError(str(exc)) from exc
+    text = args.line
     path, loaded, catalog, rules = load(args.policy)
     if loaded.app is None:
         msg = f"tooled {args.verb} runs a line of the policy's app, and the policy names no [app]"
@@ -959,6 +607,9 @@ def _describe(args: argparse.Namespace) -> int:
     from .errors import RefusedError
     from .schemas import describe, describe_command, describe_variant
 
+    if args.variant is not None and args.reply:
+        msg = "tooled describe takes --variant or --reply, not both: a variant's request, or the reply's schema"
+        raise UsageError(msg)
     *_, catalog, rules = load(args.policy)
     operation = catalog.get(args.operation)
     label = catalog.label(operation)
@@ -1249,17 +900,6 @@ def _request(text: str, *, what: str = 'the request') -> dict[str, Any]:
     return data
 
 
-def _seconds(text: str) -> float:
-    try:
-        value = float(text)
-    except ValueError:
-        value = 0.0
-    if not math.isfinite(value) or value <= 0:
-        msg = f'a timeout is a number of seconds above zero, not {text}'
-        raise argparse.ArgumentTypeError(msg)
-    return value
-
-
 def _finish(result: Any, args: argparse.Namespace, *, sent: bool = False) -> None:  # an executor.Result
     """Print a call's replies, and its notes on stderr.
 
@@ -1449,16 +1089,6 @@ async def _relayed(given: Any, stop: asyncio.Event) -> None:  # given: a threadi
     stop.set()
 
 
-def _condition(text: str) -> Any:  # an executor.Condition
-    from .errors import UsageError
-    from .executor import Condition
-
-    try:
-        return Condition.parse(text)
-    except UsageError as exc:
-        raise argparse.ArgumentTypeError(exc.message) from exc
-
-
 class _Lines:
     """``listen``'s writer: each value, after ``--select``, as one flushed JSON line; one over the cap is left out.
 
@@ -1504,91 +1134,6 @@ class _Lines:
             if hold and not found
         ]
         return out
-
-
-def _paths(text: str) -> Any:  # output's parsed paths
-    from .errors import UsageError
-    from .output import parse_paths
-
-    try:
-        return parse_paths(text)
-    except UsageError as exc:
-        raise argparse.ArgumentTypeError(exc.message) from exc
-
-
-def _bytes(text: str) -> int:
-    try:
-        value = int(text)
-    except ValueError:
-        value = -1
-    if value < 0:
-        msg = f'a cap is a whole number of bytes, zero or more, not {text}'
-        raise argparse.ArgumentTypeError(msg)
-    return value
-
-
-def _picks(text: str) -> tuple[str, ...]:
-    from .tools import CALLS
-
-    picks = tuple(pick.strip() for pick in text.split(','))
-    unknown = [pick for pick in picks if pick.partition(':')[0] not in CALLS]
-    if unknown:
-        msg = f'each is a verb, or verb:GLOB, of {", ".join(CALLS)}; not {", ".join(map(repr, unknown))}'
-        raise argparse.ArgumentTypeError(msg)
-    return picks
-
-
-def _count(text: str) -> int:
-    try:
-        value = int(text)
-    except ValueError:
-        value = 0
-    if value <= 0:
-        msg = f'a count is a whole number above zero, not {text}'
-        raise argparse.ArgumentTypeError(msg)
-    return value
-
-
-_UNITS = {'s': 1.0, 'm': 60.0, 'h': 3600.0}
-
-
-def _duration(text: str) -> float:
-    """``30``, ``30s``, ``5m`` or ``1h``, as seconds above zero."""
-    unit = text[-1:] if text[-1:] in _UNITS else 's'
-    number = text[:-1] if text[-1:] in _UNITS else text
-    try:
-        value = float(number) * _UNITS[unit]
-    except ValueError:
-        value = 0.0
-    if not math.isfinite(value) or value <= 0:
-        msg = f'a duration is seconds above zero, or with s, m or h: 30, 30s, 5m, 1h; not {text}'
-        raise argparse.ArgumentTypeError(msg)
-    return value
-
-
-def _idle(text: str) -> float:
-    """An idle timeout: a duration, as ``--for`` takes one, or ``0`` for none."""
-    return 0.0 if text.strip() in {'0', '0s', '0m', '0h'} else _duration(text)
-
-
-def _pid(text: str) -> int:
-    """A process that's running, by its id."""
-    try:
-        value = int(text)
-    except ValueError:
-        value = 0
-    running = value > 0
-    if running:
-        try:
-            os.kill(value, 0)
-        except ProcessLookupError:
-            running = False
-        except PermissionError:
-            pass  # running, as another user
-    if not running:
-        msg = f'no process {text} is running'
-        raise argparse.ArgumentTypeError(msg)
-    return value
 
 
 class _JsonLogHandler(logging.Handler):
