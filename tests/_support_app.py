@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from typing import Self
 
 import parsed
@@ -119,6 +120,32 @@ def chained() -> parsed.App:
     app = factory()
     app.mount('_support_tree.orders', under='orders')
     app.on_chain(fleet_orders.FleetOrder, '_support_app:orders')
+    return app
+
+
+#: What lets the desk's viewer stop drawing: a test sets it, so its worker thread ends.
+RELEASED = threading.Event()
+
+
+def note_edit(command: object, ctx: parsed.Context[State]) -> str:
+    """An editor that prompts a person for the note."""
+    return input('the note: ')
+
+
+def screen_show(command: object, ctx: parsed.Context[State]) -> str:
+    """A viewer that draws until a key is pressed: here, until a test releases it."""
+    RELEASED.wait(60)
+    return 'drawn'
+
+
+def desk() -> parsed.App:
+    """An editor and a viewer, neither marked interactive, with handlers that wait on a person."""
+    from _support_tree import desk as commands
+
+    app = parsed.App('desk')
+    app.mount('_support_tree.desk')
+    app.on(commands.NoteEdit, '_support_app:note_edit')
+    app.on(commands.ScreenShow, '_support_app:screen_show')
     return app
 
 

@@ -1,13 +1,14 @@
 import re
+import time
 
 import _support_app
 import pytest
 from _support_policy import write
 
 from tooled.catalog import Catalog
-from tooled.errors import CatalogError, MeshError, RefusedError, UsageError
+from tooled.errors import CatalogError, MeshError, RefusedError, TimedOutError, UsageError
 from tooled.policy import Op, Rules, load
-from tooled.tree import app_of, judged, made_state, opened, state_of
+from tooled.tree import GRACE, app_of, bound_of, judged, made_state, opened, ran, state_of
 
 #: A policy of the fixture app, its state built from a bound slot and two injected values.
 POLICY = """
@@ -199,3 +200,57 @@ class TestJudged:
     @pytest.mark.parametrize('text', ['fleet f1 jump', 'nowhere at all', 'station s1 show --help', '--help'])
     def test_a_line_that_runs_nothing_is_parsed_s_to_answer(self, tmp_path, chained, text):
         assert judge(tmp_path, chained, EVERY, text, op=Op.SEE) is None
+
+
+class TestRan:
+    """A line runs with no stdin and a stdout of its own, in a worker waited on for its bound."""
+
+    def test_a_line_s_result(self):
+        result, wrote = ran(_support_app.factory(), None, 'station s1 show', bound=5)
+        assert (result.ok, result.reply.stock, wrote) == (True, 5, '')
+
+    def test_a_prompt_fails_at_once(self):
+        started = time.monotonic()
+        result, wrote = ran(_support_app.desk(), None, 'note edit', bound=5)
+        assert time.monotonic() - started < 2
+        assert (result.ok, result.error['error'], result.error['message']) == (
+            False,
+            'handler',
+            'EOFError: EOF when reading a line',
+        )
+        assert wrote == 'the note: '  # its prompt, kept out of the result
+
+    def test_a_handler_still_waiting_is_given_up_on(self):
+        _support_app.RELEASED.clear()
+        try:
+            with pytest.raises(TimedOutError) as exc:
+                ran(_support_app.desk(), None, 'screen show', bound=0.3)
+        finally:
+            _support_app.RELEASED.set()  # let the worker end
+        assert exc.value.message == (
+            "no result for 'screen show' within 0.3s: a handler still waiting, on a person perhaps (a command not "
+            'marked INTERACTIVE), was given up on; --timeout gives a line longer'
+        )
+        assert exc.value.last is None
+
+    def test_the_session_s_failure_comes_through(self):
+        with pytest.raises(MeshError, match='the server is down'):
+            ran(_support_app.factory(), _support_app.Unopenable(), 'station s1 show', bound=5)
+
+
+class TestBound:
+    def test_a_line_that_does_not_wait(self, tmp_path, chained):
+        line = judge(tmp_path, chained, EVERY, 'station s1 show', op=Op.SEE)
+        assert bound_of(line, 30) == 30
+        assert bound_of(None, 30) == 30  # a line parsed answers itself
+
+    def test_a_line_that_waits_gets_its_own_and_more(self, tmp_path, chained):
+        line = judge(tmp_path, chained, EVERY, 'station s1 show --until stock=5 --timeout 60s', op=Op.SEE)
+        assert bound_of(line, 30) == 60 + GRACE
+        short = judge(tmp_path, chained, EVERY, 'station s1 show --until stock=5 --timeout 2s', op=Op.SEE)
+        assert bound_of(short, 30) == 30
+
+    def test_a_watch_with_no_bound_has_none(self, tmp_path, chained):
+        line = judge(tmp_path, chained, EVERY, 'station s1 show --watch', op=Op.SEE)
+        assert line is not None
+        assert (line.wait is not None, bound_of(line, 30)) == (True, None)

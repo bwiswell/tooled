@@ -1256,6 +1256,46 @@ class TestLines:
             "tooled see runs a line of the policy's app, and the policy names no [app]",
         )
 
+    @pytest.fixture
+    def desk(self, tmp_path):
+        head = '[protocol]\n\n[app]\nfactory = "_support_app:desk"\n'
+        return str(write(tmp_path, '[[allow]]\nops = ["see", "do"]\n', head=head))
+
+    def test_a_prompt_fails_at_once(self, desk, capsys):
+        started = time.monotonic()
+        code, out, _ = run(capsys, 'do', '--policy', desk, 'note', 'edit')
+        assert time.monotonic() - started < 5
+        assert (code, out['error']['message']) == (1, 'EOFError: EOF when reading a line')
+
+    def test_a_handler_still_waiting_is_given_up_on(self, desk, capsys):
+        import _support_app
+
+        _support_app.RELEASED.clear()
+        try:
+            code, out, err = run(capsys, 'see', '--timeout', '0.3', '--policy', desk, 'screen', 'show')
+        finally:
+            _support_app.RELEASED.set()
+        assert (code, out, err['error'], err['last']) == (7, None, 'timeout', None)
+        assert err['message'].startswith("no result for 'screen show' within 0.3s")
+
+    def test_a_line_that_waits_is_given_its_own_bound(self, app, capsys):
+        argv = [
+            'see',
+            '--timeout',
+            '0.1',
+            '--policy',
+            app,
+            'station',
+            's1',
+            'show',
+            '--until',
+            'stock=99',
+            '--timeout',
+            '1s',
+        ]
+        code, out, err = run(capsys, *argv)  # parsed's own timeout comes first, with its last reply
+        assert (code, err, out['error']['error'], out['reply']['stock']) == (7, None, 'timeout', 5)
+
     def test_logged_on_the_tree(self, app, capsys, tmp_path, monkeypatch):
         log = tmp_path / 'calls.jsonl'
         monkeypatch.setenv('TOOLED_LOG', str(log))
