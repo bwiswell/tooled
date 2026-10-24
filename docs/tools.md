@@ -27,6 +27,7 @@ Each tool is one call of one verb:
 | retained, or a stream | `wait_…` | its slots, each optional; `until`, its conditions; `timeout` |
 | a stream | `listen_…` | its slots, each optional; `count`, 1 by default; `timeout` |
 | a command that declares `EFFECT = READ` | `see_…` | its arguments, parsed's (*On the tree*, below) |
+| such a command with a `REPLY` | `wait_…` | its arguments; `until`, conditions on its reply; `timeout` |
 | any other command | `do_…` | its arguments; `confirm`, for one that asks first |
 | a chain | `do_…`, once | its shared arguments, and `steps` |
 
@@ -72,6 +73,11 @@ A command the policy shows is a tool of its op's verb, `see` or `do`, named for 
   left out;
 - **`confirm`** for a command that asks before it acts: `true` answers its question yes where the policy allows
   `confirm`; left out, the question comes back unanswered and nothing is done.
+
+**A read with a `REPLY` waits too:** `wait_station_show` beside `see_station_show`, its `until` typed from the
+reply's top-level fields as a contract's wait's is (*Waiting*, above), and `timeout`. Its call is the line with
+`--until` and `--timeout`: the reply once it meets every condition, or exit 7 with the last one. A condition a line
+can't say is refused: a string that reads as another JSON value (`"40"`, `"true"`), or one holding a double quote.
 
 **A chain is one tool,** its steps never their own: its shared arguments, and `steps`, an array of the steps the
 policy shows in order, each a closed object tagged by `step` (`{"step": "jump", "system": "sol"}`), a union a

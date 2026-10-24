@@ -22,7 +22,9 @@ each property's ``x-kind`` folded into its description, and the other ``x-`` key
 takes ``confirm``, answering yes where the policy allows it. **A chain is one tool,** its steps never their own:
 ``parsed.doc.chain_schema``, its shared fields and ``steps``, an array of the steps the policy shows, each a closed
 object tagged by a ``const``. **An interactive command is never a tool,** whatever the policy says: it's for a person
-at a terminal, and its ``INSTEAD`` is what a model says.
+at a terminal, and its ``INSTEAD`` is what a model says. **A read with a ``REPLY`` waits** too, as a ``wait_…`` tool
+beside its ``see_…``: its arguments, ``until`` typed from its reply's top-level fields as a contract's wait is, and
+``timeout``.
 
 **Parameters** are the unbound slots, then the request's fields as the protocol writes them on the wire, without
 the fields the policy injects or hides and without the union's tag, or a wait's or a listen's own. A slot that
@@ -232,8 +234,10 @@ def _each(rules: Rules) -> Iterator[_Call]:
             continue
         if command.doc.chain is not None:
             chains.setdefault((command.under, command.doc.chain), []).append(command)
-        else:
-            yield _Call(command, op_of(command).value)
+            continue
+        yield _Call(command, op_of(command).value)
+        if op_of(command) is Op.SEE and command.doc.reply is not None:  # a read with a reply can wait
+            yield _Call(command, 'wait')
     for (_under, base), steps in chains.items():
         yield _Call(steps[0], 'see' if all(op_of(step) is Op.SEE for step in steps) else 'do', chain=base)
 
@@ -367,6 +371,18 @@ def _command_tool(call: _Call, rules: Rules, name: str, label: str) -> Tool:
     if asks:
         description += ' It may ask before it acts: `confirm` answers yes, where the policy allows.'
     parameters = _command_parameters(schema, _bound_wires(command, rules), label, asks=asks)
+    if call.verb == 'wait' and command.doc.reply is not None:
+        description += _DOES['wait']
+        properties = parameters['properties']
+        for own in ('until', 'timeout'):
+            if own in properties:
+                msg = f"{label}: {own!r} is both a field and a wait's own parameter; rename the field, or deny the read"
+                raise PolicyFileError(msg)
+        properties['until'] = _conditions(command.doc.reply, set(), label)
+        properties['timeout'] = dict(_TIMEOUT)
+        parameters['properties'] = _required_first(properties, [*parameters.get('required', []), 'until'])
+        parameters['required'] = [*parameters.get('required', []), 'until']
+        parameters['additionalProperties'] = parameters.pop('additionalProperties')
     return Tool(name, description, parameters, command, call.verb, None, call.chain)
 
 
@@ -469,9 +485,10 @@ def _rest(
     operation alone, and a variant's by the operation and its tag, so a field every variant shares is named once. A
     wait's are its conditions and its bound; a listen's its count and its bound.
     """
-    bound = {'type': 'number', 'description': 'how long at most, in seconds', 'default': TIMEOUT, 'exclusiveMinimum': 0}
+    bound = dict(_TIMEOUT)
     if verb == 'wait':
-        return [(label, {'until': _conditions(contract, rules, label), 'timeout': bound}, ['until'])]
+        conditions = _conditions(contract.cls, set(rules.bound(contract)), label)
+        return [(label, {'until': conditions, 'timeout': bound}, ['until'])]
     if verb == 'listen':
         count = {'type': 'integer', 'description': 'how many values to give', 'default': 1, 'minimum': 1}
         return [(label, {'count': count, 'timeout': bound}, [])]
@@ -499,14 +516,19 @@ def _said(dialect: _Dialect, props: dict[str, Any], required: list[str]) -> dict
     return out
 
 
-def _conditions(contract: Contract, rules: Rules, label: str) -> dict[str, Any]:
+#: A wait's and a listen's ``timeout`` parameter.
+_TIMEOUT = {'type': 'number', 'description': 'how long at most, in seconds', 'default': TIMEOUT, 'exclusiveMinimum': 0}
+
+
+def _conditions(reply: type, bound: set[str], label: str) -> dict[str, Any]:
     """A wait's ``until``: a property for each of the reply's top-level fields a condition can compare.
 
     Each is the field's dump schema in the dialect, by its wire name. A field that holds more than one value (an
-    object, a list, a map) or that the dialect can't say has none, and nor does a field a bound slot fixes.
+    object, a list, a map) or that the dialect can't say has none, and nor does a field a bound slot fixes (on the
+    wire, a slot of the contract's topic).
     """
-    schema = json_schema(contract.cls, mode='dump')
-    dialect, bound = _Dialect(schema.get('$defs', {}), label), rules.bound(contract)
+    schema = json_schema(reply, mode='dump')
+    dialect = _Dialect(schema.get('$defs', {}), label)
     fields: dict[str, Any] = {}
     for name, prop in schema.get('properties', {}).items():
         try:

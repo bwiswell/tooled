@@ -605,7 +605,8 @@ class TestCommandTools:
             'see_gateway_status',
             'see_relay_status',
             'see_station_show',
-        ]  # no step alone, no interactive command, no write the gateway's keys deny
+            'wait_station_show',
+        ]  # no step alone, no interactive command, no write the gateway's keys deny; a wait for a read with a reply
         assert (found['see_station_show'].verb, found['do_orders_fleet_order'].chain.__name__) == ('see', 'FleetOrder')
 
     def test_parsed_s_schema_in_the_dialect(self, tmp_path):
@@ -645,6 +646,20 @@ class TestCommandTools:
         _, found = tree_tools(tmp_path, body)
         steps = found['do_orders_fleet_order'].parameters['properties']['steps']
         assert [branch['properties']['step']['const'] for branch in steps['items']['anyOf']] == ['jump']
+
+    def test_a_read_with_a_reply_waits(self, tmp_path):
+        _, found = tree_tools(tmp_path)
+        wait = found['wait_station_show']
+        assert (wait.verb, wait.operation.name) == ('wait', 'StationShow')
+        assert list(wait.parameters['properties']) == ['station', 'until', 'timeout']
+        assert wait.parameters['required'] == ['station', 'until']
+        until = wait.parameters['properties']['until']
+        assert (list(until['properties']), until['minProperties']) == (['world', 'station', 'stock', 'closed'], 1)
+        assert until['properties']['stock'] == {'type': 'integer', 'minimum': 0, 'description': 'units in stock'}
+        assert wait.description.endswith(
+            'Waits for a value that meets every condition in `until`, up to `timeout` seconds, and gives it.'
+        )
+        assert 'wait_relay_status' not in found  # a read with no reply has nothing to wait on
 
     def test_interactive_commands_are_named_not_exported(self, tmp_path):
         rules, _ = tree_tools(tmp_path)

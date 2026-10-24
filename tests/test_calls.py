@@ -230,3 +230,25 @@ class TestCommandCalls:
     def test_what_the_tool_does_not_take(self, tree_rules):
         error = refused(tree_rules, 'see_station_show', station='s1', stock=3)
         assert error.message == "see_station_show takes no 'stock'; it takes 'station'"
+
+
+class TestCommandWaits:
+    def test_its_conditions_and_bound_beside_the_command(self, tree_rules):
+        found = mapped(
+            tree_rules, 'wait_station_show', station='s1', until={'stock': 5, 'closed': 'a storm'}, timeout=2
+        )
+        assert (found.said.station, found.timeout) == ('s1', 2.0)
+        assert [condition.text for condition in found.until] == ['stock=5', 'closed=a storm']
+
+    @pytest.mark.parametrize(
+        ('value', 'why'),
+        [('40', 'it reads as 40'), ('true', 'it reads as true'), ('say "hi"', 'it holds a double quote')],
+    )
+    def test_a_string_a_line_can_not_say(self, tree_rules, value, why):
+        error = refused(tree_rules, 'wait_station_show', station='s1', until={'closed': value})
+        assert error.path == ('until', 'closed')
+        assert error.message.endswith(f"which a line can't say as a string: {why}")
+
+    def test_its_until_typed_as_a_contract_s_is(self, tree_rules):
+        error = refused(tree_rules, 'wait_station_show', station='s1', until={'stock': 'five'})
+        assert error.message == "wait_station_show: 'until.stock' is an integer, not a string"
