@@ -36,11 +36,15 @@ fit ``[A-Za-z0-9_-]{1,64}`` and be the only one of its kind, or the export is re
 
 **Byte-stable:** the same policy and protocol print the same bytes, tools sorted by name, so a model server's
 prompt cache keeps hitting.
+
+**Found by name:** :func:`find` builds the one tool a call names, as :func:`tools` would, and no other, so a call
+needs only its own tool to be one the dialect can say.
 """
 
 from __future__ import annotations
 
 import copy
+import difflib
 import fnmatch
 import itertools
 import math
@@ -56,7 +60,7 @@ from .output import as_json
 from .schemas import branch_tag, request_schema, slot_schemas, summary_line, variant_classes, verbs
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterator, Sequence
 
     from .catalog import Contract
     from .policy import Rules
@@ -124,16 +128,13 @@ def tools(rules: Rules, picks: Sequence[str] = CALLS) -> list[Tool]:
     found: list[Tool] = []
     unsayable: dict[tuple[str, str], tuple[str, str | None]] = {}
     kept = _picked(picks, rules)
-    for contract in rules.visible_contracts():
-        classes = dict(variant_classes(contract))
-        for verb in (verb for verb in calls(contract) if _keeps(kept.get(verb, ()), contract)):
-            asked = verb in {'query', 'invoke'} and contract.request is not None and contract.variants
-            for tag in rules.allowed_variants(contract) if asked else [None]:
-                described = classes[tag] if tag is not None else (contract.request if verb == 'invoke' else None)
-                try:
-                    found.append(_tool(contract, rules, verb, tag, described))
-                except _Unsayable as exc:
-                    unsayable.setdefault((exc.where, exc.path), (exc.why, exc.field))
+    for contract, verb, tag in _each(rules):
+        if not _keeps(kept.get(verb, ()), contract):
+            continue
+        try:
+            found.append(_tool(contract, rules, verb, tag))
+        except _Unsayable as exc:
+            unsayable.setdefault((exc.where, exc.path), (exc.why, exc.field))
     if unsayable:
         raise PolicyFileError(_unsayable_message(unsayable))
     found.sort(key=lambda tool: tool.name)
@@ -142,6 +143,43 @@ def tools(rules: Rules, picks: Sequence[str] = CALLS) -> list[Tool]:
             msg = f'two tools would be named {first.name!r}: {_what(first, rules)} and {_what(second, rules)}'
             raise PolicyFileError(msg)
     return found
+
+
+def find(rules: Rules, name: str) -> Tool:
+    """The tool named ``name`` among those the policy shows, built alone.
+
+    Raises:
+        UsageError: No tool the policy shows has that name; the closest are suggested.
+        PolicyFileError: It can't be a tool, as :func:`tools` would refuse it: fields the dialect can't say, a
+            slot that's also a request field, or another tool of the same name.
+    """
+    label = rules.catalog.label
+    named = [(c, verb, tag) for c, verb, tag in _each(rules) if _name(verb, label(c), tag) == name]
+    if not named:
+        names = sorted(_name(verb, label(c), tag) for c, verb, tag in _each(rules))
+        close = difflib.get_close_matches(name, names, n=3, cutoff=0.6)
+        hint = f'; did you mean {" or ".join(map(repr, close))}?' if close else ''
+        msg = f'no tool named {name!r} among those the policy shows{hint}'
+        raise UsageError(msg)
+    found = []
+    for contract, verb, tag in named:
+        try:
+            found.append(_tool(contract, rules, verb, tag))
+        except _Unsayable as exc:
+            raise PolicyFileError(_unsayable_message({(exc.where, exc.path): (exc.why, exc.field)})) from None
+    if len(found) > 1:
+        msg = f'two tools would be named {name!r}: {_what(found[0], rules)} and {_what(found[1], rules)}'
+        raise PolicyFileError(msg)
+    return found[0]
+
+
+def _each(rules: Rules) -> Iterator[tuple[Contract, str, str | None]]:
+    """Each call a tool could make: a contract the policy shows, a verb, and an allowed variant's tag or ``None``."""
+    for contract in rules.visible_contracts():
+        for verb in calls(contract):
+            asked = verb in {'query', 'invoke'} and contract.request is not None and contract.variants
+            for tag in rules.allowed_variants(contract) if asked else [None]:
+                yield contract, verb, tag
 
 
 def _picked(picks: Sequence[str], rules: Rules) -> dict[str, list[str]]:
@@ -227,13 +265,16 @@ def sizes(found: list[Tool], form: str) -> dict[str, Any]:
 # ---- one tool ----------------------------------------------------------------------------------
 
 
-def _tool(contract: Contract, rules: Rules, verb: str, tag: str | None, described: type | None) -> Tool:
+def _tool(contract: Contract, rules: Rules, verb: str, tag: str | None) -> Tool:
     """The tool for ``verb`` on ``contract``, for the variant ``tag`` when its request has a union."""
     label = rules.catalog.label(contract)
     name = _name(verb, label, tag)
     if not NAME.fullmatch(name):
         msg = f'{label}: its tool name, {name!r}, is longer than 64 characters'
         raise PolicyFileError(msg)
+    described = dict(variant_classes(contract))[tag] if tag is not None else None
+    if described is None and verb == 'invoke':
+        described = contract.request
     description = next(
         (line for cls in (described, contract.cls) if cls is not None and (line := summary_line(cls))), label
     )

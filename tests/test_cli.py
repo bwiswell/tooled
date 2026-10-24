@@ -902,6 +902,108 @@ class TestWait:
         assert (error['message'], error['last']) == ('stopped before any Notice value met text=never: 0 seen', None)
 
 
+class TestCall:
+    """A tool call, carried out as its verb is: its output the verb's, and its errors too."""
+
+    def call(self, capsys, policy, tool, given=None):
+        argv = ['call', tool, '--policy', policy] + (['--args', json.dumps(given)] if given is not None else [])
+        return run(capsys, *argv)
+
+    def test_a_fetch(self, reads, capsys):
+        code, out, err = self.call(capsys, reads, 'fetch_station', {'station': 's2'})
+        assert (code, out, err) == (0, [{'world': 'w1', 'station': 's2', 'stock': 5}], None)
+
+    def test_a_query_with_its_variant_s_tag(self, reads, capsys):
+        code, out, _ = self.call(capsys, reads, 'query_look_reply_ping', {'player': 'ann', 'station': 's1'})
+        assert code == 0
+        assert out[0]['seen'] == "ping {'station': 's1'} at [('player', 'ann'), ('world', 'w1')] {}"
+
+    def test_a_write(self, writes, world, capsys):
+        code, out, _ = self.call(capsys, writes, 'invoke_move_result', {'player': 'ann', 'to': 'dock'})
+        assert (code, out) == (0, [{'world': 'w1', 'player': 'ann', 'ok': True}])
+        assert len(world.asked) == 1
+
+    def test_a_wait(self, reads, capsys):
+        code, out, _ = self.call(capsys, reads, 'wait_station', {'until': {'stock': 5}})
+        assert (code, out) == (0, {'world': 'w1', 'station': 's2', 'stock': 5})
+
+    def test_a_wait_past_its_timeout(self, reads, capsys):
+        code, out, err = self.call(capsys, reads, 'wait_station', {'until': {'stock': 99}, 'timeout': 0.3})
+        assert (code, out, err['error']) == (7, None, 'timeout')
+        assert err['message'] == 'no Station value met stock=99 within 0.3s: 2 seen'
+
+    def test_a_listen_gives_its_values_as_one_list(self, reads, world, capsys):
+        import threading
+
+        import _support_protocol as demo
+
+        done = threading.Event()
+
+        def publish():
+            while not done.wait(0.05):
+                demo.Notice(world='w1', player='ann', text='hello').send(session=world.session)
+
+        publisher = threading.Thread(target=publish)
+        publisher.start()
+        try:
+            code, out, err = self.call(capsys, reads, 'listen_notice', {'player': 'ann', 'count': 2, 'timeout': 20})
+        finally:
+            done.set()
+            publisher.join()
+        assert (code, err) == (0, None)
+        assert out == [{'world': 'w1', 'player': 'ann', 'text': 'hello'}] * 2
+
+    def test_a_listen_short_of_its_count(self, reads, capsys):
+        code, out, err = self.call(capsys, reads, 'listen_notice', {'timeout': 0.2})
+        assert (code, out) == (0, [])
+        assert err == {'note': '0 of the 1 values asked for came within 0.2s'}
+
+    @pytest.mark.parametrize(
+        ('tool', 'given', 'expected'),
+        [
+            ('fetch_stations', {}, (2, 'usage', None)),
+            ('fetch_station', {'stock': 3}, (4, 'validation', ['stock'])),
+            ('wait_station', {'until': {'stock': 'five'}}, (4, 'validation', ['until', 'stock'])),
+            ('query_look_reply_ping', {'player': 'ann'}, (4, 'validation', ['station'])),  # the tool requires it
+            ('query_look_reply_pong', {'times': 'two'}, (4, 'validation', ['times'])),  # seared's, from the request
+            ('query_look_reply_ping', {'station': 's1', 'token': 't'}, (3, 'refused', None)),  # injected
+            ('fetch_station', {'world': 'w2'}, (3, 'refused', None)),  # bound
+        ],
+    )
+    def test_errors_are_the_verb_s_and_the_tool_s(self, reads, capsys, tool, given, expected):
+        code, out, err = self.call(capsys, reads, tool, given)
+        assert (code, err['error'], err.get('path')) == expected
+        assert out is None
+
+    def test_a_hidden_field(self, tmp_path, world, monkeypatch, capsys):
+        monkeypatch.setenv('DEMO_TOKEN', 'tok-ann')
+        body = POLICY + '\n[[deny]]\nops = ["query"]\nfields = ["ask_id"]\n'
+        policy = str(write(tmp_path, body, head=HEAD.replace('tcp/127.0.0.1:7447', world.endpoint)))
+        given = {'player': 'ann', 'station': 's1', 'ask_id': 'a1'}
+        code, _, err = self.call(capsys, policy, 'query_look_reply_ping', given)
+        assert (code, err['message']) == (3, "'ask_id' is hidden by the policy (deny[1]); leave it out of the request")
+
+    @pytest.mark.parametrize(('text', 'message'), [('{', '--args is not JSON'), ('[]', '--args is a JSON object')])
+    def test_arguments_that_are_no_object(self, reads, capsys, text, message):
+        code, _, err = run(capsys, 'call', 'fetch_station', '--args', text, '--policy', reads)
+        assert (code, err['error']) == (2, 'usage')
+        assert err['message'].startswith(message)
+
+    def test_a_result_over_the_cap(self, reads, capsys):
+        code, _, err = run(capsys, 'call', 'fetch_station', '--max-bytes', '10', '--policy', reads)
+        assert (code, err['error']) == (6, 'too_large')
+
+    def test_the_mesh_down(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv('DEMO_TOKEN', 'tok-ann')
+        policy = str(write(tmp_path, POLICY, head=HEAD.replace('tcp/127.0.0.1:7447', f'tcp/127.0.0.1:{free_port()}')))
+        code, _, err = self.call(capsys, policy, 'fetch_station', {'station': 's1'})
+        assert (code, err['error']) == (5, 'mesh')
+
+    def test_no_arguments_are_none(self, reads, capsys):
+        code, out, _ = run(capsys, 'call', 'fetch_station', '--policy', reads)
+        assert (code, len(out)) == (0, 2)
+
+
 class TestOutput:
     def test_select_keeps_parts_of_each_reply(self, reads, capsys):
         code, out, _ = run(capsys, 'fetch', 'Station', '--select', 'station', '--policy', reads)

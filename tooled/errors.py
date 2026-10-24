@@ -8,7 +8,7 @@ and exits with the error's code. stdout carries results only.
 |---|---|
 | 2 | ``usage``, ``policy``, ``catalog``: the command, its policy file or its protocol can't be used as given |
 | 3 | ``refused``: the policy refuses the call |
-| 4 | ``validation``: the request doesn't load as its class: seared's error, with its path |
+| 4 | ``validation``: the request doesn't load (seared's error), or a call's arguments don't fit its tool |
 | 5 | ``mesh``: the session wouldn't open, the link failed, or a write got no reply (with its generated values) |
 | 6 | ``too_large``: the result is over the size cap; the error says its size and each part's |
 | 7 | ``timeout``: ``wait`` ended before any value met its conditions; the error holds the last value seen |
@@ -75,7 +75,10 @@ class RefusedError(TooledError):
 
 
 class InvalidRequestError(TooledError):
-    """The request doesn't load as its class. The message is seared's, and the path names the field at fault."""
+    """The request doesn't load as its class, or a tool call's arguments don't fit its tool.
+
+    For a request the message is seared's; for a tool call, :mod:`tooled.calls`'. The path names the field at fault.
+    """
 
     kind = 'validation'
     exit_code = 4

@@ -19,6 +19,7 @@ Every verb takes `--policy` after the verb (else `$TOOLED_POLICY`, else `./toole
 | `listen CONTRACT [slot=value …]` | a retained contract or a stream | one JSON line per value as it arrives |
 | `invoke CONTRACT [slot=value …] [--request JSON] [--dry-run]` | a queryable that writes: `EFFECT = WRITE` or `ACTION`, or none declared | its replies, in the order they arrived; with `--dry-run`, what it would send |
 | `wait CONTRACT [slot=value …] --until PATH=VALUE [--until …]` | a retained contract or a stream | the first value that meets every condition |
+| `call TOOL [--args JSON]` | any tool the policy shows | what the verb its name begins with prints, a listen's values as one JSON list ([tools.md](tools.md), *Calling a tool*) |
 | `tools [--format openai\|anthropic\|mcp] [--verbs VERBS] [--sizes]` | the policy | the operations it shows as tool definitions for a harness: one for each fetch, query, write, wait or listen, and one for each allowed variant of a request's union ([tools.md](tools.md)); `--verbs fetch,wait:Fleet*` keeps some verbs' tools, or some operations'; with `--sizes`, each one's bytes and estimated tokens |
 
 An operation is anything tooled lists and acts on; each is a contract in this version. An operation, a contract
@@ -172,7 +173,7 @@ In `listen`, a line over the cap is left out and noted at the end.
 | 0 | | done, an empty result included |
 | 2 | `usage`, `policy`, `catalog` | the command, its policy file or its protocol can't be used as given |
 | 3 | `refused` | the policy refuses it |
-| 4 | `validation` | the request doesn't load as its class; `path` names the field |
+| 4 | `validation` | the request doesn't load as its class, or a tool call's arguments don't fit its tool; `path` names the field |
 | 5 | `mesh` | the session wouldn't open, a read or a write failed, or a write got no reply (`generated` holds its generated values) |
 | 6 | `too_large` | the result is over the size cap |
 | 7 | `timeout` | `wait`: no value met the conditions in time; `last` holds the last one seen |

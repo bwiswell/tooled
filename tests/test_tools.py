@@ -11,7 +11,7 @@ from tooled.catalog import Catalog
 from tooled.errors import PolicyFileError, UsageError
 from tooled.output import as_json
 from tooled.policy import Rules, load
-from tooled.tools import FORMATS, NAME, sizes, spec, tools, untooled
+from tooled.tools import FORMATS, NAME, find, sizes, spec, tools, untooled
 
 POLICY = """
 [bind]
@@ -465,6 +465,31 @@ class TestHidden:
         body = POLICY + '\n[[deny]]\nops = ["query"]\nfields = ["ask_id"]\n'
         found = exported(tmp_path, catalog, body)
         assert list(found['query_look_reply_ping'].parameters['properties']) == ['station', 'player']
+
+
+class TestFind:
+    def test_the_tool_tools_gives(self, tmp_path, catalog):
+        rules = Rules(load(write(tmp_path, POLICY)), catalog)
+        everything = {tool.name: tool for tool in tools(rules)}
+        for name in ('fetch_station', 'query_look_reply_pong', 'invoke_move_result', 'wait_notice', 'listen_trace'):
+            assert find(rules, name) == everything[name]
+
+    def test_a_name_none_has(self, tmp_path, catalog):
+        rules = Rules(load(write(tmp_path, POLICY)), catalog)
+        with pytest.raises(UsageError) as exc:
+            find(rules, 'fetch_stations')
+        assert exc.value.message == (
+            "no tool named 'fetch_stations' among those the policy shows; did you mean 'fetch_station' or "
+            "'fetch_status' or 'wait_station'?"
+        )
+        with pytest.raises(UsageError, match="no tool named 'query_look_reply_dev_peek' among"):  # denied: no tool
+            find(rules, 'query_look_reply_dev_peek')
+
+    def test_only_its_own_tool_need_be_said(self, tmp_path):
+        rules = Rules(load(write(tmp_path, EVERYTHING)), Catalog.of([RouteResult, PlanResult]))
+        assert find(rules, 'invoke_plan_result_go').name == 'invoke_plan_result_go'
+        with pytest.raises(PolicyFileError, match="RouteResult: field 'then\\[\\]' is a union"):
+            find(rules, 'invoke_route_result_go')
 
 
 class TestNames:
