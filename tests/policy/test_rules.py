@@ -3,6 +3,7 @@ from typing import ClassVar
 import pytest
 import zeared
 from _support_policy import HEAD, write
+from _support_tree import game
 
 from tooled.catalog import Catalog
 from tooled.errors import PolicyFileError, RefusedError
@@ -243,7 +244,7 @@ class TestReferences:
                 ('deny', 0, 'fields', 0),
                 "hides 'station', which LookReply variant 'ping' requires.*; deny LookReply variant 'ping' instead",
             ),
-            ('[bind]\nplanet = "p1"\n', ('bind', 'planet'), 'no contract has as a slot'),
+            ('[bind]\nplanet = "p1"\n', ('bind', 'planet'), 'no contract or command has as a slot'),
             ('[inject.tokn]\nenv = "X"\n', ('inject', 'tokn'), 'no request declares'),
         ],
     )
@@ -370,3 +371,128 @@ class TestFixed:
         docks = Catalog.of([Dock])
         r = Rules(load(write(tmp_path, f'[[allow]]\nops = ["read"]\nkeys = {keys}\n')), docks)
         assert r.fixed(docks.get('Dock')) == fixed
+
+
+@pytest.fixture(scope='module')
+def app_catalog():
+    return Catalog.load(['_support_protocol'], factory='_support_app:factory')
+
+
+def tree_rules(tmp_path, app_catalog, body):
+    return Rules(load(write(tmp_path, body)), app_catalog)
+
+
+class TestTree:
+    def test_each_command_takes_see_or_do(self, app_catalog):
+        ops = {command.name: op_of(command) for command in app_catalog.commands}
+        assert ops['StationShow'] is Op.SEE
+        assert ops['relay/Status'] is Op.SEE
+        assert ops['PlayerMove'] is Op.DO
+        assert ops['StationDock'] is Op.DO
+        assert ops['FleetMine'] is Op.DO  # no EFFECT: never a read
+
+    def test_shown_by_its_keys(self, tmp_path, app_catalog):
+        r = tree_rules(
+            tmp_path, app_catalog, '[[allow]]\nops = ["see"]\n\n[[allow]]\nops = ["do"]\nkeys = ["relay/**"]\n'
+        )
+        assert [o.name for o in r.visible_operations()] == [
+            'StationMap',
+            'StationShow',
+            'gateway/Status',
+            'relay/Run',
+            'relay/Status',
+        ]
+        assert r.visible_contracts() == []  # a tree rule never shows a contract
+
+    def test_by_mount_with_globs(self, tmp_path, app_catalog):
+        body = (
+            '[[allow]]\nops = ["see", "do"]\noperations = ["gateway/*"]\n\n'
+            '[[deny]]\nops = ["do"]\noperations = ["*/Run"]\n'
+        )
+        assert [o.name for o in tree_rules(tmp_path, app_catalog, body).visible_operations()] == ['gateway/Status']
+
+    def test_a_deny_covering_every_key_hides(self, tmp_path, app_catalog):
+        body = '[[allow]]\nops = ["do"]\n\n[[deny]]\nops = ["do"]\nkeys = ["fleet/*/mine", "mine/with/*"]\n'
+        assert 'FleetMine' not in [o.name for o in tree_rules(tmp_path, app_catalog, body).visible_operations()]
+        body = '[[allow]]\nops = ["do"]\n\n[[deny]]\nops = ["do"]\nkeys = ["fleet/*/mine"]\n'  # one phrase of two
+        assert 'FleetMine' in [o.name for o in tree_rules(tmp_path, app_catalog, body).visible_operations()]
+
+    def test_a_call_at_its_key(self, tmp_path, app_catalog):
+        body = '[[allow]]\nops = ["do"]\nkeys = ["fleet/**"]\n\n[[deny]]\nops = ["do"]\nkeys = ["fleet/f9/**"]\n'
+        r = tree_rules(tmp_path, app_catalog, body)
+        mine = app_catalog.get('FleetMine')
+        r.check(mine, 'fleet/f1/mine')
+        with pytest.raises(RefusedError, match=r'do on FleetMine at fleet/f9/mine is denied by deny\[0\]'):
+            r.check(mine, 'fleet/f9/mine')
+        with pytest.raises(RefusedError, match='no allow rule covers do on FleetMine at mine/with/f1'):
+            r.check(mine, 'mine/with/f1')
+
+    def test_answering_yes_needs_confirm(self, tmp_path, app_catalog):
+        dock = app_catalog.get('StationDock')
+        r = tree_rules(tmp_path, app_catalog, '[[allow]]\nops = ["do"]\n')
+        r.check(dock, 'dock/vesta')
+        with pytest.raises(RefusedError, match='no allow rule covers confirm on StationDock at dock/vesta'):
+            r.check(dock, 'dock/vesta', confirm=True)
+        body = '[[allow]]\nops = ["do", "confirm"]\n\n[[deny]]\nops = ["confirm"]\nkeys = ["dock/ceres"]\n'
+        r = tree_rules(tmp_path, app_catalog, body)
+        r.check(dock, 'dock/vesta', confirm=True)
+        with pytest.raises(RefusedError, match=r'confirm on StationDock at dock/ceres is denied by deny\[0\]'):
+            r.check(dock, 'dock/ceres', confirm=True)
+
+    def test_a_bound_slot_narrows_its_keys(self, tmp_path, app_catalog):
+        r = tree_rules(
+            tmp_path, app_catalog, '[bind]\nfleet = "f1"\n\n[[allow]]\nops = ["do"]\nkeys = ["fleet/f1/**"]\n'
+        )
+        mine = app_catalog.get('FleetMine')
+        assert r.shapes(mine) == ('fleet/f1/mine', 'mine/with/f1')
+        assert r.key(mine, game.FleetMine(fleet='f1')) == 'fleet/f1/mine'
+        with pytest.raises(RefusedError) as exc:
+            r.key(mine, game.FleetMine(fleet='f2'))
+        assert (exc.value.message, exc.value.path) == ("the policy binds 'fleet' to 'f1'", ('fleet',))
+
+    def test_the_one_value_an_allow_rule_fixes(self, tmp_path, app_catalog):
+        r = tree_rules(tmp_path, app_catalog, '[[allow]]\nops = ["see"]\nkeys = ["station/s1/show"]\n')
+        assert r.fixed(app_catalog.get('StationShow')) == {'station': 's1'}
+
+    @pytest.mark.parametrize('value', ['a/b', 'a*', 'a$b', 'a?', '#a'])
+    def test_a_key_holds_no_separator_or_wildcard(self, tmp_path, app_catalog, value):
+        r = tree_rules(tmp_path, app_catalog, '[[allow]]\nops = ["do"]\n')
+        with pytest.raises(RefusedError) as exc:
+            r.key(app_catalog.get('FleetMine'), game.FleetMine(fleet=value))
+        assert exc.value.message.startswith(f"FleetMine: slot 'fleet' holds {value!r}, and a key can't hold ")
+        assert exc.value.message.endswith('read the slot as a name, whose resolver maps it to a key')
+        assert exc.value.path == ('fleet',)
+
+    def test_a_name_s_kind_says_which_resolver(self, tmp_path, app_catalog):
+        r = tree_rules(tmp_path, app_catalog, '[[allow]]\nops = ["do"]\n')
+        with pytest.raises(RefusedError) as exc:
+            r.key(app_catalog.get('StationDock'), game.StationDock(station="Vruba'a Belt/1"))
+        assert exc.value.message == (
+            "StationDock: slot 'station' holds \"Vruba'a Belt/1\", and a key can't hold '/': map it to a key in the "
+            "resolver of 'station'"
+        )
+
+    def test_a_key_under_a_prefix(self, tmp_path, app_catalog):
+        from _support_tree import service
+
+        r = tree_rules(tmp_path, app_catalog, '[[allow]]\nops = ["do"]\n')
+        assert r.key(app_catalog.get('relay/Run'), service.Run()) == 'relay/run'  # parsed's key, led by the prefix
+        assert r.key(app_catalog.get('gateway/Run'), service.Run()) == 'gateway/run'
+
+    @pytest.mark.parametrize(
+        ('body', 'message'),
+        [
+            (
+                '[[allow]]\nops = ["see"]\noperations = ["Station"]\n',
+                "Station is a contract, which the tree's ops never",
+            ),
+            ('[[allow]]\nops = ["read"]\noperations = ["StationShow"]\n', "StationShow is a command, which the wire's"),
+        ],
+    )
+    def test_a_name_must_be_its_route_s(self, tmp_path, app_catalog, body, message):
+        with pytest.raises(PolicyFileError, match=message) as exc:
+            tree_rules(tmp_path, app_catalog, body)
+        assert exc.value.path == ('allow', 0, 'operations', 0)
+
+    def test_a_command_s_slot_may_be_bound(self, tmp_path, app_catalog):
+        tree_rules(tmp_path, app_catalog, '[bind]\nstation = "s1"\n')  # Station's slot too, and StationShow's

@@ -283,3 +283,24 @@ class TestCommandSources:
         with pytest.raises(PolicyFileError) as exc:
             load(write(tmp_path, '[app]\n'))
         assert exc.value.path == ('app', 'factory')
+
+
+class TestTreeOps:
+    def test_see_do_and_confirm_load(self, tmp_path):
+        policy = load(write(tmp_path, '[[allow]]\nops = ["see", "do", "confirm"]\nkeys = ["relay/**"]\n'))
+        assert policy.allow[0].ops == [Op.SEE, Op.DO, Op.CONFIRM]
+
+    def test_a_rule_is_one_route_s(self, tmp_path):
+        with pytest.raises(PolicyFileError) as exc:
+            load(write(tmp_path, '[[deny]]\nops = ["read", "see"]\n'))
+        assert exc.value.message == (
+            "a rule's ops are the wire's or the tree's, so its keys are read in one space; this one has 'read' and "
+            "'see': split it in two"
+        )
+        assert exc.value.path == ('deny', 0, 'ops')
+
+    @pytest.mark.parametrize(('key', 'value'), [('variants', '["ping"]'), ('fields', '["note"]')])
+    def test_a_tree_rule_has_no_request(self, tmp_path, key, value):
+        with pytest.raises(PolicyFileError, match="is about a contract's request, which the tree's ops never") as exc:
+            load(write(tmp_path, f'[[deny]]\nops = ["do"]\n{key} = {value}\n'))
+        assert exc.value.path == ('deny', 0, key)

@@ -203,6 +203,7 @@ class TestCommands:
         assert list(found) == [
             'FleetMine',
             'PlayerMove',
+            'StationDock',
             'StationMap',
             'StationShow',
             'gateway/Run',
@@ -233,7 +234,7 @@ class TestCommands:
         assert (shown.interactive, shown.instead) == (True, app_catalog.get('StationShow').cls)
 
     def test_beside_the_contracts_and_named_alike(self, app_catalog):
-        assert (len(app_catalog.contracts), len(app_catalog.commands)) == (8, 8)
+        assert (len(app_catalog.contracts), len(app_catalog.commands)) == (8, 9)
         assert (
             app_catalog.label(app_catalog.get('Status')) == 'Status'
         )  # the contract: a command's is led by its prefix

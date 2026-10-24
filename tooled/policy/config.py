@@ -39,11 +39,12 @@ app whose mounts hold them, each under its mount's prefix; or, for a policy that
 names packages read as trees at the root. A policy names one or the other, and at least one of them or a protocol
 package.
 
-A rule's ``ops`` say what's done (``read``, ``query``, ``invoke``…), and its ``operations`` what it's done to: globs
-over the names ``tooled operations`` lists. Nothing is allowed until a rule allows it. A deny rule with ``fields``
-denies no call, only the optional request fields it names, wherever a call gives one. Where the file is found:
-``--policy``, else ``$TOOLED_POLICY``, else ``./tooled.toml``. A relative path inside it (an inject source's file) is
-read from the file's own directory.
+A rule's ``ops`` say what's done (``read``, ``query``, ``invoke``… on the wire; ``see``, ``do`` and ``confirm`` on the
+tree), and its ``operations`` what it's done to: globs over the names ``tooled operations`` lists. A rule's ops are
+one route's, since its keys are matched against a contract's topics or a command's keys, never both. Nothing is
+allowed until a rule allows it. A deny rule with ``fields`` denies no call, only the optional request fields it
+names, wherever a call gives one. Where the file is found: ``--policy``, else ``$TOOLED_POLICY``, else
+``./tooled.toml``. A relative path inside it (an inject source's file) is read from the file's own directory.
 """
 
 from __future__ import annotations
@@ -73,13 +74,21 @@ class Generator(enum.StrEnum):
 
 
 class Op(enum.StrEnum):
-    """What a rule allows or denies: what's done, one op per kind of contract."""
+    """What a rule allows or denies: what's done, an op per kind of contract on the wire, and of command on the tree."""
 
     READ = 'read'  # fetch and listen: a retained class, a stream, a presence feed
     QUERY = 'query'  # a queryable that declares EFFECT = READ
     INVOKE = 'invoke'  # any other queryable: WRITE, ACTION, or no EFFECT at all
     PUBLISH = 'publish'  # a raw send
     UNRETAIN = 'unretain'  # clearing a retained value
+    SEE = 'see'  # running a command that declares EFFECT = READ
+    DO = 'do'  # running any other command: WRITE, ACTION, or no EFFECT at all
+    CONFIRM = 'confirm'  # answering yes when a command asks before it acts
+
+
+#: The ops on the tree, a command's; the rest are the wire's. A rule's ops are one route's, so its keys are read in one
+#: space: a contract's topics, or a command's keys.
+TREE_OPS = frozenset({Op.SEE, Op.DO, Op.CONFIRM})
 
 
 @s.seared(unknown='raise')
@@ -277,6 +286,18 @@ def _check_rule(rule: Rule, side: str, where: tuple[str, int]) -> None:
             keyexpr.includes(key, key)
         except KeyExprError as exc:
             raise PolicyFileError(str(exc), path=(*where, 'keys', at)) from exc
+    tree = [op for op in rule.ops if op in TREE_OPS]
+    if tree and len(tree) < len(rule.ops):
+        wire = [op.value for op in rule.ops if op not in TREE_OPS]
+        msg = (
+            f"a rule's ops are the wire's or the tree's, so its keys are read in one space; this one has {wire[0]!r} "
+            f'and {tree[0].value!r}: split it in two'
+        )
+        raise PolicyFileError(msg, path=(*where, 'ops'))
+    for key in ('variants', 'fields'):
+        if tree and getattr(rule, key) is not None:
+            msg = f"`{key}` is about a contract's request, which the tree's ops never reach; leave it out"
+            raise PolicyFileError(msg, path=(*where, key))
     if rule.fields is not None and side == 'allow':
         msg = '`fields` hides request fields, which only a deny rule does; move it to a [[deny]] rule'
         raise PolicyFileError(msg, path=(*where, 'fields'))

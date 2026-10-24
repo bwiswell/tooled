@@ -240,8 +240,8 @@ class Catalog:
 
     @property
     def slot_names(self) -> frozenset[str]:
-        """Every slot any contract's templates have."""
-        return frozenset(name for c in self.contracts for name in c.slot_names)
+        """Every slot any contract's templates or any command's phrases have."""
+        return frozenset(name for o in (*self.contracts, *self.commands) for name in o.slot_names)
 
     @property
     def request_fields(self) -> frozenset[str]:

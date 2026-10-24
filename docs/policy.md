@@ -87,8 +87,9 @@ naming both, and `module:Class` picks one.
 
 ## `[bind]`
 
-Slot values every key renders with. A bound slot is fixed: a call that gives it another value is refused, and
-`describe` and `operations` show it filled. Each value is one concrete chunk of a key: no `/`, and no wildcard.
+Slot values every key renders with: a contract's topics, and a command's keys. A bound slot is fixed: a call that
+gives it another value is refused, and `describe` and `operations` show it filled. Each value is one concrete chunk
+of a key: no `/`, and no wildcard.
 
 Binding is a guardrail and a convenience. Where a server checks a token against a slot, binding that slot saves
 giving it each time; a policy that wants other values of a slot (another player's public state, say) leaves it
@@ -134,11 +135,11 @@ key = "token"
 
 | Key | Default | Meaning |
 |---|---|---|
-| `ops` | required | what's done: `read`, `query`, `invoke`, `publish`, `unretain`. This version acts on `read`, `query` and `invoke`; `publish` and `unretain` load, so a policy written now carries forward |
-| `operations` | `["*"]` | what it's done to: globs over the names `tooled operations` lists, or `module:Class`. It was `contracts` before 0.2.4; that key is refused, naming this one |
-| `keys` | `["**"]` | Zenoh key expressions (`*` one chunk, `**` any number, `$*` within a chunk) |
-| `variants` | none | globs over the tags of a request's root union; none covers the whole contract |
-| `fields` | none | a deny rule's only: globs over the optional fields at a request's root, which it hides; none covers the whole call |
+| `ops` | required | what's done. On the wire: `read`, `query`, `invoke`, `publish`, `unretain`; this version acts on `read`, `query` and `invoke`, and `publish` and `unretain` load, so a policy written now carries forward. On the tree: `see`, `do`, `confirm` (*On the tree*, below). A rule's ops are one route's |
+| `operations` | `["*"]` | what it's done to: globs over the names `tooled operations` lists, or `module:Class`; a mounted command's are led by its prefix (`relay/*`). It was `contracts` before 0.2.4; that key is refused, naming this one |
+| `keys` | `["**"]` | Zenoh key expressions (`*` one chunk, `**` any number, `$*` within a chunk), over a contract's topics or a command's keys |
+| `variants` | none | the wire's only: globs over the tags of a request's root union; none covers the whole contract |
+| `fields` | none | a deny rule's only, on the wire: globs over the optional fields at a request's root, which it hides; none covers the whole call |
 
 **Nothing is allowed until a rule allows it, and deny wins.** A rule covers a contract when its `ops` name the
 contract's op and one of its `operations` globs matches the contract's name. Then its keys decide, with Zenoh's own
@@ -186,8 +187,49 @@ rule, it covers what its `ops`, `operations` and `keys` reach; the tools and `de
 where its keys cover every topic, and a call at a key they reach is refused either way. `fields` on an allow rule
 is refused: a field is hidden, never allowed one by one.
 
-**Names must name something.** A contract name, a variant tag, a hidden field, a bound slot or an injected field
-written without a glob must exist in the protocol, so a typo is refused at load. A glob may match nothing.
+### On the tree
+
+A command (*`[app]`*, below) takes one of the tree's ops, as a contract takes one of the wire's:
+
+| Op | Covers |
+|---|---|
+| `see` | running a command that declares `EFFECT = READ` |
+| `do` | running any other command: `WRITE`, `ACTION`, or no `EFFECT` at all, so the default fails safe |
+| `confirm` | answering yes when a command asks before it acts; the call needs its `see` or `do` too, at the same key |
+
+**`see` runs a read.** It isn't about what a listing shows: `operations` and `describe` show what any rule allows,
+whatever its ops, as on the wire.
+
+- **Keys are a command's keys:** its phrases' (`fleet/{fleet}/mine`), each led by its mount's prefix (`relay/run`).
+  A command is shown when an allow rule's keys intersect one of them, and a call is allowed when an allow rule's
+  keys include the key the call's line comes to (`fleet/f1/mine`) and no deny rule's intersect it. A phrase's slot
+  of several words, or the rest of the line, is no part of a key, and nor is a flag: a rule over `fleet/*/sell`
+  holds whatever is sold.
+- **`[bind]` narrows a command's slot** by its name, as a topic's: `fleet = "f1"` makes `fleet/{fleet}/mine` read
+  `fleet/f1/mine`, and a line naming another fleet is refused.
+- **A key holds no separator or wildcard.** A slot's value holding `/`, `*`, `$`, `?` or `#` would make the key a
+  pattern, or longer than its phrase, so the call is refused, naming the slot, and the kind whose resolver should
+  map the value to a key (`map it to a key in the resolver of 'station'`).
+- **One route a rule:** a rule's ops are the wire's or the tree's, not both, so its keys are read in one space. A
+  name written without a glob must be one its ops reach (a contract for the wire's, a command for the tree's), and
+  `variants` and `fields`, which are about a contract's request, are refused on a tree rule.
+
+```toml
+[[allow]]                       # every read, and the relay's commands
+ops = ["see"]
+
+[[allow]]
+ops = ["do", "confirm"]
+operations = ["relay/*"]
+
+[[deny]]                        # never the gateway's
+ops = ["see", "do", "confirm"]
+keys = ["gateway/**"]
+```
+
+**Names must name something.** A contract or command name, a variant tag, a hidden field, a bound slot or an
+injected field written without a glob must exist in the protocol or the app, so a typo is refused at load. A glob
+may match nothing.
 
 ## `[app]`
 

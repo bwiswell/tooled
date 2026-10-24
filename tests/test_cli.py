@@ -132,11 +132,26 @@ class TestCheck:
         assert {key: out[key] for key in ('packages', 'app', 'commands', 'operations', 'hidden')} == {
             'packages': ['_support_protocol'],
             'app': '_support_app:factory',
-            'commands': 8,
-            'operations': 16,
-            'hidden': 16,  # no rule reaches a command until the tree's ops
+            'commands': 9,
+            'operations': 17,
+            'hidden': 17,  # no rule allows a tree op
         }
         assert 'trees' not in out
+
+    def test_tree_rules_show_commands_by_op(self, tmp_path, capsys):
+        body = (
+            '[app]\nfactory = "_support_app:factory"\n\n'
+            '[[allow]]\nops = ["see"]\nkeys = ["station/s1/**", "*/status"]\n\n'
+            '[[allow]]\nops = ["do"]\noperations = ["relay/*"]\n'
+        )
+        code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', str(write(tmp_path, body)))
+        assert code == 0
+        assert out['visible'] == {
+            'see': ['StationMap', 'StationShow', 'gateway/Status', 'relay/Status'],
+            'do': ['relay/Run'],
+        }
+        assert out['fixed'] == {'StationMap': {'station': 's1'}, 'StationShow': {'station': 's1'}}
+        assert out['hidden'] == 17 - 5
 
     def test_trees_with_no_app(self, tmp_path, capsys):
         head = HEAD.replace('packages = ["_support_protocol"]\n', 'trees = ["_support_tree.service"]\n')
