@@ -3,7 +3,7 @@ from _support_policy import write
 
 from tooled.calls import arguments
 from tooled.catalog import Catalog
-from tooled.errors import InvalidRequestError
+from tooled.errors import InvalidRequestError, RefusedError
 from tooled.executor import Condition
 from tooled.policy import Rules, load
 from tooled.tools import TIMEOUT, find
@@ -178,3 +178,55 @@ class TestEnums:
         assert mapped(rules, 'wait_sky', until={'mood': 'stormy'}).until[0].value == 'stormy'
         error = refused(rules, 'wait_sky', until={'mood': 'windy'})
         assert error.message == 'wait_sky: \'until.mood\' is one of "calm", "stormy"; not "windy"'
+
+
+TREE = """
+[protocol]
+
+[app]
+factory = "_support_app:chained"
+
+[bind]
+fleet = "f1"
+
+[[allow]]
+ops = ["see", "do", "confirm"]
+"""
+
+
+@pytest.fixture
+def tree_rules(tmp_path):
+    return Rules(load(write(tmp_path, head=TREE)), Catalog.load([], factory='_support_app:chained'))
+
+
+class TestCommandCalls:
+    def test_loaded_into_the_command(self, tree_rules):
+        found = mapped(tree_rules, 'see_station_show', station='s1')
+        assert (type(found.said).__name__, found.said.station, found.yes) == ('StationShow', 's1', False)
+
+    def test_a_bound_slot_filled(self, tree_rules):
+        assert mapped(tree_rules, 'do_fleet_mine').said.fleet == 'f1'
+        assert mapped(tree_rules, 'do_fleet_mine', fleet='f1').said.fleet == 'f1'  # its own value passes
+        with pytest.raises(RefusedError, match="the policy binds 'fleet' to 'f1'"):
+            mapped(tree_rules, 'do_fleet_mine', fleet='f2')
+
+    def test_confirm_is_the_line_s_yes(self, tree_rules):
+        assert mapped(tree_rules, 'do_station_dock', station='vesta', confirm=True).yes is True
+        error = refused(tree_rules, 'do_station_dock', station='vesta', confirm='yes')
+        assert (error.message, error.path) == ("do_station_dock: 'confirm' is a boolean, not a string", ('confirm',))
+
+    def test_a_chain_s_steps(self, tree_rules):
+        steps = [{'step': 'jump', 'system': 'sol'}, {'step': 'dock', 'station': 'vesta'}]
+        found = mapped(tree_rules, 'do_orders_fleet_order', steps=steps)
+        assert [(type(step).__name__, step.fleet) for step in found.said] == [('FleetJump', 'f1'), ('FleetDock', 'f1')]
+
+    def test_what_the_command_refuses_names_its_path(self, tree_rules):
+        error = refused(tree_rules, 'do_orders_fleet_order', steps=[{'step': 'warp'}])
+        assert error.path == ('steps', 0, 'step')
+        assert error.message.startswith('do_orders_fleet_order: FleetOrder.steps[0].step: no step')
+        error = refused(tree_rules, 'see_station_show', station=5)
+        assert (error.path, error.message.startswith('see_station_show: StationShow.station')) == (('station',), True)
+
+    def test_what_the_tool_does_not_take(self, tree_rules):
+        error = refused(tree_rules, 'see_station_show', station='s1', stock=3)
+        assert error.message == "see_station_show takes no 'stock'; it takes 'station'"

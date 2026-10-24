@@ -1345,6 +1345,37 @@ class TestLines:
         assert proc.returncode == 0, err
         assert json.loads((got + out).splitlines()[0])['reply'] == {'tick': 1}
 
+    def test_a_command_s_tool_call(self, app, capsys):
+        code, out, _ = run(capsys, 'call', 'see_station_show', '--args', '{"station": "Vesta Ring"}', '--policy', app)
+        assert (code, out['line'], out['reply']['station']) == (0, 'station "Vesta Ring" show', 'Vesta Ring')
+
+    def test_a_chain_s_tool_call(self, app, capsys):
+        given = json.dumps(
+            {'fleet': 'f1', 'steps': [{'step': 'jump', 'system': 'sol'}, {'step': 'dock', 'station': 'vesta'}]}
+        )
+        code, out, _ = run(capsys, 'call', 'do_orders_fleet_order', '--args', given, '--policy', app)
+        assert (code, out['line'], out['text']) == (
+            0,
+            'orders fleet f1 jump sol then dock vesta',
+            'FleetJump then FleetDock',
+        )
+
+    def test_confirm_where_the_policy_allows_it_and_not(self, app, capsys):
+        code, out, _ = run(
+            capsys, 'call', 'do_station_dock', '--args', '{"station": "vesta", "confirm": true}', '--policy', app
+        )
+        assert (code, out['done']) == (0, True)
+        code, out, err = run(
+            capsys, 'call', 'do_station_dock', '--args', '{"station": "ceres", "confirm": true}', '--policy', app
+        )
+        assert (code, out, err['error']) == (3, None, 'refused')
+
+    def test_tools_name_the_interactive_ones_left_out(self, app, capsys):
+        code, out, err = run(capsys, 'tools', '--policy', app)
+        assert code == 0
+        assert 'see_station_map' not in {tool['function']['name'] for tool in out}
+        assert err == {'note': 'no tool for an interactive command, for a person at a terminal: StationMap'}
+
     def test_logged_on_the_tree(self, app, capsys, tmp_path, monkeypatch):
         log = tmp_path / 'calls.jsonl'
         monkeypatch.setenv('TOOLED_LOG', str(log))
