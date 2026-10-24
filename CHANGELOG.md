@@ -27,6 +27,10 @@ lines as it lands, and the entry is dated when that version is released.
   where the policy allows `confirm`, and is refused elsewhere. A line that doesn't read, or asks for help, is
   parsed's to answer.
 
+- **A guard for unmarked interactive commands:** a line runs with an empty stdin, so a handler that prompts fails at
+  once, and a stdout of its own, its writes kept out of the result and noted. One still running at `--timeout` (30s
+  by default) is given up on, exit 7; a line's own wait is given its bound and 5 seconds more.
+
 ### Changed
 
 - **A command's `verbs`** in `operations` and `describe` are its op's, `see` or `do`, now that they run.

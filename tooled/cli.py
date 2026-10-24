@@ -102,7 +102,17 @@ VERBS = ('check', 'operations', 'describe', 'fetch', 'query', 'listen', 'invoke'
 LINES = ('see', 'do')
 
 #: tooled's own options a line's verb takes before the line, and whether each takes a value.
-_LINE_OPTIONS = {'--policy': True, '--select': True, '--max-bytes': True, '--out': True, '--pretty': False}
+_LINE_OPTIONS = {
+    '--policy': True,
+    '--select': True,
+    '--max-bytes': True,
+    '--out': True,
+    '--pretty': False,
+    '--timeout': True,
+}
+
+#: How long a line's verb waits on its line, in seconds, when none is given: longer for a line that waits itself.
+_LINE_BOUND = 30.0
 
 #: Verbs renamed, refused naming the new one rather than as unknown verbs.
 RENAMED = {
@@ -341,6 +351,13 @@ def _add_lines(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # a
                 'the shell gave it, or the whole line as one. The line is judged by the policy before it runs, and '
                 "parsed's envelope printed. --yes on the line answers its questions where the policy allows confirm."
             ),
+        )
+        line.add_argument(
+            '--timeout',
+            type=_duration,
+            default=_LINE_BOUND,
+            metavar='DURATION',
+            help="how long to wait on the line: 30, 30s, 5m (default 30s; a line's own wait, its bound and 5s)",
         )
         line.set_defaults(run=_see if verb == 'see' else _do)
 
@@ -627,10 +644,9 @@ def _line(args: argparse.Namespace, op: Any) -> int:  # a tree op
     """Judge the line by the policy, then run it in the app's session, and print parsed's envelope.
 
     Its exit code is the envelope's: 0, or its error kind's, as tooled's are (2 a line that doesn't read, 3 refused,
-    4 a value refused, 7 a wait past its bound), and 1 for a handler that fails.
+    4 a value refused, 7 a wait past its bound), and 1 for a handler that fails. A line still running at its bound
+    is given up on, exit 7 (:func:`tooled.tree.ran`).
     """
-    import asyncio
-
     from parsed.argv import line_of
 
     from . import tree
@@ -653,13 +669,10 @@ def _line(args: argparse.Namespace, op: Any) -> int:  # a tree op
         entry.acted_on(catalog.label(judged.commands[0]), route='tree')
         entry.arguments = list(judged.given)
     state = tree.state_of(loaded, path)
-
-    async def run() -> Any:  # parsed's Result
-        async with tree.opened(app, state) as session:
-            return await session.run(text)
-
-    result = asyncio.run(run())
+    result, wrote = tree.ran(app, state, text, bound=tree.bound_of(judged, args.timeout))
     emit(result.to_json(), args)
+    if wrote:
+        _notes([f"the line's handler wrote {len(wrote)} characters to stdout, kept out of the result"])
     return result.code
 
 

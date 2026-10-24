@@ -22,27 +22,39 @@ only reads, ``do`` anything else), to what the policy shows, and to its key: saf
 ``confirm`` too where the line gives ``--yes`` on a step that asks first. parsed's own ``--yes`` would answer it
 whatever tooled said, so a ``--yes`` the policy doesn't allow refuses the line. A line that doesn't read, or asks
 for help, runs nothing: it isn't judged, and parsed answers it as it would.
+
+**A line runs guarded** (:func:`ran`): an app may leave an editor or a viewer unmarked (``INTERACTIVE`` is optional),
+and such a handler would wait on a person who isn't there. So it runs with no stdin (an empty one: a prompt reads
+nothing, and fails at once) and a stdout of its own (stdout holds tooled's result; what a handler writes there is
+kept out of it, and said), in a worker thread tooled waits on for its bound, ``--timeout``; past it, the line is
+given up on, exit 7, and the worker is left to end with the process. A line that waits on its own (``--until``) is
+given its own bound and a few seconds more, so parsed's timeout, with its last reply, comes first.
 """
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import inspect
+import io
+import sys
+import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from parsed import ReadError
 
 from .catalog import Command, imported, made_app
-from .errors import CatalogError, MeshError, RefusedError, UsageError
+from .errors import CatalogError, MeshError, RefusedError, TimedOutError, UsageError
 from .policy import Op, op_of
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Mapping
+    from collections.abc import AsyncGenerator, Generator, Mapping
     from pathlib import Path
 
-    from parsed import App
+    from parsed import App, Result
     from parsed.app import Mount, Session
+    from parsed.wait import Wait
 
     from .policy import Policy, Rules
 
@@ -132,6 +144,7 @@ class Line:
         keys: Each step's key, as the policy judged it.
         given: The fields the line gives, by name, its first step's.
         yes: Whether it gives ``--yes``, which the policy allowed.
+        wait: Its wait, when it gives ``--until`` (or ``--watch``) on a read that can wait; ``None`` otherwise.
     """
 
     text: str
@@ -139,6 +152,7 @@ class Line:
     keys: tuple[str, ...]
     given: tuple[str, ...]
     yes: bool
+    wait: Wait | None = None
 
 
 def judged(app: App, rules: Rules, text: str, *, op: Op) -> Line | None:
@@ -180,7 +194,7 @@ def judged(app: App, rules: Rules, text: str, *, op: Op) -> Line | None:
                 raise
         commands.append(command)
         keys.append(key)
-    return Line(text, tuple(commands), tuple(keys), tuple(routed.reading.given), yes)
+    return Line(text, tuple(commands), tuple(keys), tuple(routed.reading.given), yes, routed.reading.wait)
 
 
 def _command_of(rules: Rules, mount: Mount, cls: type) -> Command:
@@ -190,3 +204,70 @@ def _command_of(rules: Rules, mount: Mount, cls: type) -> Command:
             return command
     msg = f"{cls.__name__} under {mount.under!r} is no command of the policy's app"  # the catalog read this app
     raise UsageError(msg)
+
+
+#: How much longer than a line's own wait tooled waits on it, so parsed's timeout, with its last reply, comes first.
+GRACE = 5.0
+
+
+def bound_of(line: Line | None, timeout: float) -> float | None:
+    """How long tooled waits on a line: ``timeout``, or longer for a line that waits; ``None`` for a watch unbound."""
+    wait = line.wait if line is not None else None
+    if wait is None:
+        return timeout
+    if wait.timeout is None:
+        return None
+    return max(timeout, wait.timeout + GRACE)
+
+
+def ran(app: App, state: Any, text: str, *, bound: float | None) -> tuple[Result, str]:  # state: the app's
+    """``text`` run in ``app``'s session on ``state``, alone, in a worker thread waited on for ``bound``.
+
+    Returns:
+        What came of it, and what its handlers wrote to stdout, which isn't the result's.
+
+    Raises:
+        MeshError: The session wouldn't open (:func:`opened`).
+        TimedOutError: No result within ``bound`` seconds: a handler still waiting, on a person perhaps. The worker
+            is left behind, to end with the process.
+    """
+    done: dict[str, Any] = {}
+
+    async def session() -> Result:
+        async with opened(app, state) as open_session:
+            return await open_session.run(text)
+
+    def work() -> None:
+        try:
+            done['result'] = asyncio.run(session())
+        except BaseException as exc:  # noqa: BLE001 -- handed to the caller's thread, which raises it
+            done['error'] = exc
+
+    worker = threading.Thread(target=work, name='tooled line', daemon=True)
+    with _alone() as wrote:
+        worker.start()
+        worker.join(bound)
+    if worker.is_alive():
+        msg = (
+            f'no result for {text!r} within {bound:g}s: a handler still waiting, on a person perhaps (a command not '
+            'marked INTERACTIVE), was given up on; --timeout gives a line longer'
+        )
+        raise TimedOutError(msg, last=None)
+    if 'error' in done:
+        raise done['error']
+    return done['result'], wrote.getvalue()
+
+
+@contextlib.contextmanager
+def _alone() -> Generator[io.StringIO]:
+    """An empty stdin and a stdout of its own, while the block runs.
+
+    A prompt reads nothing, and fails at once; what a handler writes is kept apart from tooled's result.
+    """
+    held = sys.stdin, sys.stdout
+    wrote = io.StringIO()
+    sys.stdin, sys.stdout = io.StringIO(''), wrote
+    try:
+        yield wrote
+    finally:
+        sys.stdin, sys.stdout = held
