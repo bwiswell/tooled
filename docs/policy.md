@@ -280,7 +280,9 @@ mount. A command's keys are its phrases' (parsed's `CommandDoc.keys`), led the s
 declares none.
 
 A policy gives commands by `[app]` or by `[protocol] trees`, not both, and it needs one of those or a protocol
-package. `check` names the app or the trees, and counts the commands it read.
+package. `check` names the app or the trees, and counts the commands it read. Under `unmarked` it names each shown
+command that declares neither an `EFFECT` nor `INTERACTIVE`: such a command counts as a write, and might wait on a
+person who isn't there, so a profile may rather deny it.
 
 ## Not in this version
 

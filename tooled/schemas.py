@@ -10,6 +10,12 @@ Every schema is seared's own (``seared.doc.json_schema`` and ``field_schema``), 
 - **A slot's** is its payload field's schema, when the slot is also a field; a string otherwise. A bound slot
   shows its value instead, since it can't be given.
 
+**Commands** list and describe beside contracts, each row and document saying its route (``wire`` or ``tree``) and
+its effect. A command's listing gives the phrase it's said by, led by its mount's prefix; its ``describe``, its
+phrases and keys, slots, flags, whether it asks first, the contracts it overlaps, its arguments' schema (parsed's,
+closed, the bound slots taken out) and its reply. An interactive command is marked, with the command an agent says
+instead. No verb of this version runs a command, so its ``verbs`` are none.
+
 **``describe`` is layered,** so even a large contract describes in a few kilobytes. By default the reply shows as a
 field list (each top-level field's name, type, doc and constraints), and a request's root union folds to its tag
 list, its branches left out. ``--reply`` prints the reply's whole schema, and ``--variant TAG`` one variant's; the
@@ -25,9 +31,10 @@ import copy
 import dataclasses
 from typing import TYPE_CHECKING, Any
 
+from parsed.doc import json_schema as command_schema
 from seared.doc import field_schema, introspect, is_seared_class, json_schema
 
-from .catalog import Kind, wire_names
+from .catalog import Command, Kind, wire_names
 from .errors import RefusedError, UsageError
 from .policy import Op, op_of
 
@@ -60,18 +67,22 @@ def summary_line(cls: type) -> str:
 
 
 def listing(rules: Rules) -> list[dict[str, Any]]:
-    """What ``operations`` prints: every operation the policy shows, in order, one line of each."""
-    return [
-        {
-            'name': rules.catalog.label(contract),
-            'kind': contract.kind.value,
-            'verbs': list(verbs(contract)),
-            'topic': topic(contract, rules),
-            'slots': [slot for slot in contract.slot_names if slot not in rules.bound(contract)],
-            'summary': summary_line(contract.cls),
-        }
-        for contract in rules.visible_contracts()
-    ]
+    """What ``operations`` prints: every operation the policy shows, contracts and commands, one line of each."""
+    out = []
+    for operation in rules.visible_operations():
+        slots = [slot for slot in operation.slot_names if slot not in rules.bound(operation)]
+        effect = operation.effect.value if operation.effect is not None else None
+        row: dict[str, Any] = {'name': rules.catalog.label(operation)}
+        if isinstance(operation, Command):
+            row.update(route='tree', verbs=[], effect=effect, phrase=phrase(operation), slots=slots)
+            row['summary'] = summary_line(operation.cls)
+            if operation.doc.interactive:
+                row.update(interactive=True, instead=instead(operation, rules))
+        else:
+            row.update(route='wire', kind=operation.kind.value, verbs=list(verbs(operation)), effect=effect)
+            row.update(topic=topic(operation, rules), slots=slots, summary=summary_line(operation.cls))
+        out.append(row)
+    return out
 
 
 def describe(contract: Contract, rules: Rules, *, reply: bool = False) -> dict[str, Any]:
@@ -88,6 +99,7 @@ def describe(contract: Contract, rules: Rules, *, reply: bool = False) -> dict[s
         'name': rules.catalog.label(contract),
         'qualname': contract.qualname,
         'summary': summary_line(contract.cls),
+        'route': 'wire',
         'kind': contract.kind.value,
         'op': op_of(contract).value,
         'verbs': list(verbs(contract)),
@@ -111,9 +123,78 @@ def describe(contract: Contract, rules: Rules, *, reply: bool = False) -> dict[s
     else:
         doc['reply'] = field_list(contract.cls)
         more['reply'] = f"tooled describe {label} --reply: the reply's whole schema"
+    overlaps = [rules.catalog.label(link.command) for link in rules.links if link.contract is contract]
+    if overlaps:
+        doc['overlaps'] = overlaps
     if more:
         doc['more'] = more
     return doc
+
+
+def describe_command(command: Command, rules: Rules, *, reply: bool = False) -> dict[str, Any]:
+    """What ``describe`` prints for one command: what it is, how it's said, and what it takes and gives.
+
+    Args:
+        command: The command.
+        rules: The policy's rules, which bind slots.
+        reply: Print its reply's whole dump schema, rather than its field list.
+
+    Raises:
+        UsageError: ``reply``, for a command that declares no ``REPLY``.
+    """
+    label, doc = rules.catalog.label(command), command.doc
+    bound = rules.bound(command)
+    arguments = command_schema(command.cls)
+    properties = arguments.get('properties', {})
+    slots = {
+        slot.name: {'bound': bound[slot.name]} if slot.name in bound else properties.get(slot.field, {})
+        for slot in doc.slots
+    }
+    drop_fields(arguments, [slot.field for slot in doc.slots if slot.name in bound])
+    out: dict[str, Any] = {
+        'name': label,
+        'qualname': command.qualname,
+        'summary': summary_line(command.cls),
+        'route': 'tree',
+        'op': op_of(command).value,
+        'verbs': [],
+        'effect': command.effect.value if command.effect is not None else None,
+        'phrases': [phrase(command, said) for said in (doc.phrase, *doc.extra_phrases)],
+        'keys': list(command.keys),
+        'slots': slots,
+        'flags': [{'name': f'--{flag.name}', 'field': flag.field, 'switch': flag.switch} for flag in doc.flags],
+        'asks': doc.asks,
+        'interactive': doc.interactive,
+        'instead': instead(command, rules) if doc.instead is not None else None,
+        'overlaps': [rules.catalog.label(link.contract) for link in rules.links if link.command is command],
+        'arguments': arguments,
+    }
+    if reply and doc.reply is None:
+        msg = f'{label} declares no REPLY, so it gives no reply to describe'
+        raise UsageError(msg)
+    if doc.reply is None:
+        out['reply'] = None
+    elif reply:
+        out['reply'] = json_schema(doc.reply, mode='dump')
+    else:
+        out['reply'] = field_list(doc.reply)
+        out['more'] = {'reply': f"tooled describe {label} --reply: the reply's whole schema"}
+    return out
+
+
+def phrase(command: Command, said: str | None = None) -> str:
+    """How ``command`` is said: its phrase (or ``said``, another of its phrases), led by its mount's prefix."""
+    return ' '.join(part for part in (command.under, said if said is not None else command.doc.phrase) if part)
+
+
+def instead(command: Command, rules: Rules) -> str | None:
+    """The command an agent says in ``command``'s place, by its label: the one in the same mount, if it has one."""
+    cls = command.doc.instead
+    if cls is None:
+        return None
+    found = [other for other in rules.catalog.commands if other.cls is cls]
+    same = [other for other in found if other.under == command.under]
+    return rules.catalog.label((same or found)[0]) if found else cls.__name__
 
 
 def describe_variant(contract: Contract, tag: str, rules: Rules) -> dict[str, Any]:

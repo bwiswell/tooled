@@ -1,9 +1,9 @@
 # Tools for a harness
 
 `tooled tools` prints the operations a policy shows as tool definitions: what a harness hands a model, so the model
-can ask for a call by name with typed arguments; `tooled call` carries out each call it asks for. It's for a model that calls tools rather than a shell, a local one
-on llama.cpp or Ollama say. An agent with a shell, Claude Code among them, uses the verbs themselves
-([agents.md](agents.md)).
+can ask for a call by name with typed arguments; `tooled call` carries out each call it asks for. It's for a model
+that calls tools rather than a shell, a local one on llama.cpp or Ollama say. An agent with a shell, Claude Code
+among them, uses the verbs themselves ([agents.md](agents.md)).
 
 ```sh
 tooled tools --format openai --policy agents/player.toml --out tools.json

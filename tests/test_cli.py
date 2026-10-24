@@ -1093,6 +1093,56 @@ class TestCall:
         assert (code, len(out)) == (0, 2)
 
 
+class TestCommandsListed:
+    """Commands list and describe beside contracts, each with its route; nothing runs one yet."""
+
+    @pytest.fixture
+    def tree(self, tmp_path):
+        body = (
+            '[app]\nfactory = "_support_app:factory"\n\n'
+            '[[allow]]\nops = ["see", "do"]\n\n[[deny]]\nops = ["do"]\nkeys = ["gateway/**"]\n'
+        )
+        return str(write(tmp_path, body))
+
+    def test_operations_lists_them(self, tree, capsys):
+        code, out, _ = run(capsys, 'operations', '--policy', tree)
+        assert code == 0
+        assert [(row['name'], row['route']) for row in out] == [
+            ('FleetMine', 'tree'),
+            ('PlayerMove', 'tree'),
+            ('StationDock', 'tree'),
+            ('StationMap', 'tree'),
+            ('StationShow', 'tree'),
+            ('gateway/Status', 'tree'),
+            ('relay/Run', 'tree'),
+            ('relay/Status', 'tree'),
+        ]
+
+    def test_describe_takes_one(self, tree, capsys):
+        code, out, _ = run(capsys, 'describe', 'relay/Run', '--policy', tree)
+        assert (code, out['route'], out['phrases'], out['keys']) == (0, 'tree', ['relay run'], ['relay/run'])
+
+    @pytest.mark.parametrize(
+        ('argv', 'message'),
+        [
+            (['StationDock', '--variant', 'x'], "StationDock is a command, whose arguments hold no union's variants"),
+            (['StationDock', '--reply'], 'StationDock declares no REPLY, so it gives no reply to describe'),
+        ],
+    )
+    def test_what_describe_can_not_say_of_one(self, tree, capsys, argv, message):
+        code, _, err = run(capsys, 'describe', *argv, '--policy', tree)
+        assert (code, err['error']) == (2, 'usage')
+        assert err['message'].startswith(message)
+
+    def test_one_the_policy_does_not_show(self, tree, capsys):
+        code, _, err = run(capsys, 'describe', 'gateway/Run', '--policy', tree)
+        assert (code, err['message']) == (3, 'the policy does not show gateway/Run')
+
+    def test_check_names_the_unmarked(self, tree, capsys):
+        code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', tree)
+        assert (code, out['unmarked']) == (0, ['FleetMine'])
+
+
 class TestCallLog:
     """With TOOLED_LOG set, each run appends one line: what it did, by name, and how it ended; never a value."""
 

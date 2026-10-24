@@ -37,6 +37,13 @@ from packages read as trees.
   not taken is refused naming the other. A deny that denies a contract wholly by name carries over to its commands;
   `check` lists the overlaps, and the denies by keys that can't carry.
 
+- **Commands listed and described:** `operations` lists commands beside contracts, every row with its `route`
+  (`wire` or `tree`) and `effect`, a command's with its phrase, and an interactive one's with the command to say
+  instead. `describe` takes a command: its op, phrases and keys, slots, flags, asking first, the contracts it
+  overlaps, its arguments' schema (parsed's, bound slots out) and its reply; a contract's document gains `route`,
+  and the commands that overlap it. `check` names, under `unmarked`, the shown commands that declare neither
+  `EFFECT` nor `INTERACTIVE`.
+
 ### Changed
 
 - **`[mesh]` is optional** for a policy of commands alone, with no protocol packages; such a policy refuses a rule
