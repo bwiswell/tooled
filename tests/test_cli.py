@@ -1370,6 +1370,14 @@ class TestLines:
         )
         assert (code, out, err['error']) == (3, None, 'refused')
 
+    def test_a_wait_s_tool_call(self, app, capsys):
+        given = '{"station": "s1", "until": {"stock": 5}}'
+        code, out, _ = run(capsys, 'call', 'wait_station_show', '--args', given, '--policy', app)
+        assert (code, out['line'], out['met']) == (0, 'station s1 show --until stock=5 --timeout 30s', True)
+        given = '{"station": "s1", "until": {"closed": "a storm"}, "timeout": 0.2}'
+        code, out, _ = run(capsys, 'call', 'wait_station_show', '--args', given, '--policy', app)
+        assert (code, out['met'], out['error']['error'], out['reply']['stock']) == (7, False, 'timeout', 5)
+
     def test_tools_name_the_interactive_ones_left_out(self, app, capsys):
         code, out, err = run(capsys, 'tools', '--policy', app)
         assert code == 0

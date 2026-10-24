@@ -614,11 +614,11 @@ def _call(args: argparse.Namespace) -> int:
     entry.tool = args.tool
     *_, rules = load(args.policy)
     tool = tools.find(rules, args.tool)
-    entry.acted_on(rules.catalog.label(tool.operation), variant=tool.variant, route=_route(tool.verb))
+    entry.acted_on(rules.catalog.label(tool.operation), variant=tool.variant, route=_route(tool))
     given = _request(args.args, what='--args') if args.args is not None else {}
     entry.arguments = list(given)
     mapped = calls.arguments(tool, given, rules)
-    if tool.verb in tools.TREE:
+    if _route(tool) == 'tree':
         return _call_line(args, rules, tool, mapped)
     slots = [f'{name}={value}' for name, value in mapped.slots.items()]
     run = argparse.Namespace(**vars(args), contract=tool.operation.qualname, slots=slots, timeout=_ASKED, meta=False)
@@ -633,11 +633,11 @@ def _call(args: argparse.Namespace) -> int:
     return _listened(run, count=mapped.count or 1, duration=mapped.timeout or tools.TIMEOUT)
 
 
-def _route(verb: str) -> str:
-    """The route a verb takes."""
-    from .tools import TREE
+def _route(tool: Any) -> str:  # a Tool
+    """The route a tool takes: the tree's for a command's, the wire's for a contract's."""
+    from .catalog import Command
 
-    return 'tree' if verb in TREE else 'wire'
+    return 'tree' if isinstance(tool.operation, Command) else 'wire'
 
 
 def _call_line(args: argparse.Namespace, rules: Rules, tool: Any, mapped: Any) -> int:  # a Tool; its Arguments
@@ -657,8 +657,13 @@ def _call_line(args: argparse.Namespace, rules: Rules, tool: Any, mapped: Any) -
         raise UsageError(msg) from exc
     if mapped.yes:
         line += ' --yes'
+    if mapped.until:  # a read's wait: its conditions and its bound, as the line's own flags
+        from parsed.argv import line_of
+
+        words = [word for condition in mapped.until for word in ('--until', condition.text)]
+        line += ' ' + line_of([*words, '--timeout', f'{mapped.timeout:g}s'])
     run = argparse.Namespace(**vars(args), line=[line], timeout=_LINE_BOUND)
-    return _line(run, Op.SEE if tool.verb == 'see' else Op.DO)
+    return _line(run, Op.DO if tool.verb == 'do' else Op.SEE)
 
 
 def _see(args: argparse.Namespace) -> int:

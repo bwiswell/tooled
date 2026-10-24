@@ -11,7 +11,9 @@ are the verb's own, by other names:
 - **a listen's** ``count`` and ``timeout`` say when it stops;
 - **a command's** arguments are its fields: loaded into the command (``load_chain`` for a chain's, its steps among
   them), the bound slots' values added, to be said as a line (``app.render``) and run as ``see`` or ``do`` runs one;
-  ``confirm: true`` is the line's ``--yes``.
+  ``confirm: true`` is the line's ``--yes``. A read's wait takes ``until`` and ``timeout`` beside them, said as the
+  line's ``--until`` and ``--timeout``; a condition a line can't say (a string that reads as another JSON value, or
+  one holding a double quote) is refused.
 
 **What's checked here** is what the tool says and the verb can't: every required parameter given, none it doesn't
 take, a slot one value of its type, a condition on a field the wait can compare and a value of that field's type
@@ -39,7 +41,7 @@ from .catalog import Command, Contract, top_fields
 from .errors import InvalidRequestError, RefusedError
 from .executor import Condition
 from .schemas import tag_keys
-from .tools import TIMEOUT, TREE
+from .tools import TIMEOUT
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -98,7 +100,7 @@ def arguments(tool: Tool, given: Mapping[str, Any], rules: Rules) -> Arguments:
     if missing:
         msg = f'{tool.name} needs {_listed(missing)}'
         raise InvalidRequestError(msg, path=(missing[0],))
-    if tool.verb in TREE:
+    if isinstance(tool.operation, Command):
         return _command_arguments(tool, given, rules)
     slotted = set(tool.operation.slot_names)
     bound = rules.bound(tool.operation)
@@ -182,6 +184,13 @@ def _command_arguments(tool: Tool, given: Mapping[str, Any], rules: Rules) -> Ar
             raise InvalidRequestError(msg, path=(name,))
     yes = values.pop('confirm', False) if 'confirm' in params else False
     _check(tool, ('confirm',), yes, {'type': 'boolean'})
+    until: tuple[Condition, ...] = ()
+    timeout: float | None = None
+    if tool.verb == 'wait':
+        until = _conditions(tool, values.pop('until'), params['until'])
+        timeout = _seconds(values.pop('timeout', TIMEOUT))
+        for condition in until:
+            _sayable(tool, condition)
     owner = tool.chain if tool.chain is not None else command.cls
     wires = {spec.attr: spec.wire_key or spec.attr for spec in introspect(owner).fields}
     fields = {slot.name: slot.field for slot in command.doc.slots}
@@ -195,7 +204,27 @@ def _command_arguments(tool: Tool, given: Mapping[str, Any], rules: Rules) -> Ar
     except seared.ValidationError as exc:
         msg = f'{tool.name}: {exc}'
         raise InvalidRequestError(msg, path=exc.path) from exc
-    return Arguments(said=said, yes=bool(yes))
+    return Arguments(said=said, yes=bool(yes), until=until, timeout=timeout)
+
+
+def _sayable(tool: Tool, condition: Condition) -> None:
+    """Refuse a condition a line can't say: a string a line reads as another JSON value, or one with a double quote.
+
+    Raises:
+        InvalidRequestError: It's one; ``path`` names it.
+    """
+    value = condition.value
+    if not isinstance(value, str):
+        return
+    try:
+        read = json.loads(value)
+    except ValueError:
+        read = value
+    if not isinstance(read, str) or '"' in value:
+        name = condition.path[0]
+        why = 'holds a double quote' if '"' in value else f'reads as {json.dumps(read)}'
+        msg = f"{tool.name}: 'until.{name}' is {json.dumps(value)}, which a line can't say as a string: it {why}"
+        raise InvalidRequestError(msg, path=('until', name))
 
 
 def _slot(tool: Tool, name: str, value: Any, schema: Mapping[str, Any]) -> str:
