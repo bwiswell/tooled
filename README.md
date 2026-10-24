@@ -31,8 +31,8 @@ refuses two sources for one package); an app whose command trees it reads must p
 uv tool, with the protocol beside it:
 
 ```sh
-uv tool install "git+https://github.com/bwiswell/tooled@v0.2.9" --with <protocol-package>
-tooled --version            # tooled 0.2.9 (seared 0.4.4, zeared 0.4.4, parsed 0.2.0)
+uv tool install "git+https://github.com/bwiswell/tooled@v0.2.10" --with <protocol-package>
+tooled --version            # tooled 0.2.10 (seared 0.4.4, zeared 0.4.4, parsed 0.2.2)
 ```
 
 `--with` takes whatever names the protocol: a path to its checkout, a git URL, or a package name. From a checkout of
@@ -137,7 +137,7 @@ nothing outside the repo is needed.
 
 ## Status
 
-0.2.9 reads and writes a mesh: `check`, `operations`, `describe`, `fetch`, `query`, `listen`, `invoke` (with
+0.2.10 reads and writes a mesh: `check`, `operations`, `describe`, `fetch`, `query`, `listen`, `invoke` (with
 `--dry-run`, generated ids, and one retry after a lost reply) and `wait`, under a strict policy file with bound
 slots, injected fields (from paths that may hold variables) and generated ones, and allow and deny rules over
 ops, operations, keys, union variants and hidden request fields. It runs an app's parsed command trees beside the
@@ -146,6 +146,7 @@ contracts: `see` and `do` run a line in the app's session, on a state the policy
 harness, `tools` exports what a policy shows as tool definitions, contracts and commands alike, `call` carries out
 a model's call of one, and `TOOLED_LOG` keeps a line a run. A session (`tooled session start`, or `session run`
 around an agent's run) holds the policy, its mesh and its app open for the calls that name it, many side by side,
-and `tooled serve` hands a harness the same tools over MCP, attached to one. `--select` and `--until` paths are
-checked before the call, and every error, a malformed argument's included, is one JSON line on stderr. Not yet:
-publishing and unretaining, and per-protocol extensions.
+and `tooled serve` hands a harness the same tools over MCP, attached to one. tooled's own verbs are parsed commands,
+so its command line, refusals and help read as any parsed app's. `--select` and `--until` paths are checked before
+the call, and every error, a malformed argument's included, is one JSON line on stderr. Not yet: publishing and
+unretaining, and per-protocol extensions.

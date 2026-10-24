@@ -9,7 +9,7 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
-## 0.2.10 — *unreleased*
+## 0.2.10 — 2026-10-24
 
 **tooled's own command line on parsed.** Each verb is a parsed command, read by parsed's command line, so tooled's
 own reads as any app built on parsed reads its; and tooled moves to parsed `v0.2.2`.
