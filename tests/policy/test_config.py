@@ -111,7 +111,7 @@ class TestLoad:
         assert exc.value.path == ('mesh', 'routr')
 
     @pytest.mark.parametrize('table', ['mesh', 'protocol'])
-    def test_mesh_and_protocol_are_required(self, tmp_path, table):
+    def test_the_protocol_and_its_packages_mesh_are_required(self, tmp_path, table):
         head = HEAD.split('[protocol]')[0] if table == 'protocol' else '[protocol]\npackages = ["_support_protocol"]\n'
         with pytest.raises(PolicyFileError) as exc:
             load(write(tmp_path, head=head))
@@ -304,3 +304,35 @@ class TestTreeOps:
         with pytest.raises(PolicyFileError, match="is about a contract's request, which the tree's ops never") as exc:
             load(write(tmp_path, f'[[deny]]\nops = ["do"]\n{key} = {value}\n'))
         assert exc.value.path == ('deny', 0, key)
+
+
+#: The head of a policy of commands alone: no mesh, no protocol packages, the fixture app.
+COMMANDS_ONLY = '[protocol]\n\n[app]\nfactory = "_support_app:factory"\n'
+
+
+class TestWithoutAMesh:
+    def test_commands_alone_need_none(self, tmp_path):
+        policy = load(write(tmp_path, '[[allow]]\nops = ["see", "do", "confirm"]\n', head=COMMANDS_ONLY))
+        assert policy.mesh is None
+
+    def test_trees_alone_need_none(self, tmp_path):
+        assert load(write(tmp_path, head='[protocol]\ntrees = ["_support_tree.game"]\n')).mesh is None
+
+    def test_a_protocol_s_contracts_need_one(self, tmp_path):
+        with pytest.raises(PolicyFileError) as exc:
+            load(write(tmp_path, head='[protocol]\npackages = ["_support_protocol"]\n'))
+        assert (
+            exc.value.message == "`[mesh]` is missing, and a protocol's contracts are reached through it: name the mesh"
+        )
+        assert exc.value.path == ('mesh',)
+
+    @pytest.mark.parametrize('op', ['read', 'query', 'invoke', 'publish', 'unretain'])
+    def test_a_wire_op_reaches_no_wire(self, tmp_path, op):
+        body = f'[[allow]]\nops = ["see"]\n\n[[deny]]\nops = ["{op}"]\n'
+        with pytest.raises(PolicyFileError) as exc:
+            load(write(tmp_path, body, head=COMMANDS_ONLY))
+        assert exc.value.message == (
+            f"'{op}' is a wire op, and a policy with no [mesh] reaches no wire: use the tree's ops (see, do, confirm), "
+            'or name the mesh'
+        )
+        assert exc.value.path == ('deny', 0, 'ops')

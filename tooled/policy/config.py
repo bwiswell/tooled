@@ -4,7 +4,7 @@ A TOML file, loaded strict (``unknown='raise'`` throughout), so a misspelt key a
 silently weakening a rule:
 
 ```toml
-[mesh]                  # zeared's own SessionConfig: the one mesh this policy reaches
+[mesh]                  # zeared's own SessionConfig: the one mesh this policy reaches; none for commands alone
 mode = "client"
 router = "tcp/127.0.0.1:7447"
 
@@ -156,7 +156,11 @@ class AppConfig(s.Seared):
 class Policy(s.Seared):
     """A whole policy file."""
 
-    mesh: SessionConfig = s.T(SessionConfig, required=True, doc='the one mesh this policy reaches')
+    mesh: SessionConfig | None = s.T(
+        SessionConfig,
+        default=None,
+        doc="the one mesh this policy reaches: a protocol's contracts need it, commands don't",
+    )
     protocol: Protocol = s.T(Protocol, required=True, doc='the protocol it reads')
     app: AppConfig | None = s.T(AppConfig, default=None, doc='the app whose command trees it reads')
     bind: dict[str, str] = s.Str(keyed=True, default_factory=dict, doc='slot values every key renders with')
@@ -249,8 +253,9 @@ def _refuse_unread(raw: dict[str, object]) -> None:
 
 
 def _check(policy: Policy) -> None:
-    """What the classes can't say: operations to read, rules with ops and real keys, bound chunks, single sources."""
+    """What the classes can't say: operations, a mesh where needed, rules with ops and real keys, chunks, sources."""
     _check_sources(policy)
+    _check_mesh(policy)
     for side in ('allow', 'deny'):
         for index, rule in enumerate(getattr(policy, side)):
             _check_rule(rule, side, (side, index))
@@ -274,6 +279,24 @@ def _check_sources(policy: Policy) -> None:
     if app is not None and not _FACTORY.fullmatch(app.factory):
         msg = f'`[app] factory` is pkg.module:function, not {app.factory!r}'
         raise PolicyFileError(msg, path=('app', 'factory'))
+
+
+def _check_mesh(policy: Policy) -> None:
+    """A mesh for the wire: a protocol's contracts need one, and with none, no rule names a wire op."""
+    if policy.mesh is not None:
+        return
+    if policy.protocol.packages:
+        msg = "`[mesh]` is missing, and a protocol's contracts are reached through it: name the mesh"
+        raise PolicyFileError(msg, path=('mesh',))
+    for side in ('allow', 'deny'):
+        for index, rule in enumerate(getattr(policy, side)):
+            wire = [op.value for op in rule.ops if op not in TREE_OPS]
+            if wire:
+                msg = (
+                    f"{wire[0]!r} is a wire op, and a policy with no [mesh] reaches no wire: use the tree's ops "
+                    '(see, do, confirm), or name the mesh'
+                )
+                raise PolicyFileError(msg, path=(side, index, 'ops'))
 
 
 def _check_rule(rule: Rule, side: str, where: tuple[str, int]) -> None:

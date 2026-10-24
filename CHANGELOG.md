@@ -33,6 +33,9 @@ from packages read as trees.
 
 ### Changed
 
+- **`[mesh]` is optional** for a policy of commands alone, with no protocol packages; such a policy refuses a rule
+  with a wire op, and `check` shows `"mesh": null` (`--connect` is a usage error). A policy with protocol packages
+  still needs its mesh.
 - **A rule is one route's:** its ops are the wire's or the tree's, so its keys are read in one space; one mixing
   them is refused, as are `variants` and `fields` on a tree rule, and a name without a glob its ops can't reach.
 - **`[protocol] packages` is optional** where `[app]` or `[protocol] trees` gives the policy commands. A policy that
