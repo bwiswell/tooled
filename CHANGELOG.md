@@ -51,6 +51,8 @@ each out as its line.
 - **parsed `v0.1.8`,** one patch wide as before: an app whose commands tooled reads must pin the same.
 - **`check --connect`** opens the app's session where there's an `[app]`, so a policy of commands alone may take
   it; only a policy with neither a mesh nor an app is a usage error.
+- **Breaking,** for a program that imports the package: a `Tool`'s `contract` is its `operation`, a contract or a
+  command, beside `chain`, a chain's base for a chain's tool.
 
 ## 0.2.6 — 2026-10-23
 
