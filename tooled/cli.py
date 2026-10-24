@@ -669,11 +669,56 @@ def _line(args: argparse.Namespace, op: Any) -> int:  # a tree op
         entry.acted_on(catalog.label(judged.commands[0]), route='tree')
         entry.arguments = list(judged.given)
     state = tree.state_of(loaded, path)
-    result, wrote = tree.ran(app, state, text, bound=tree.bound_of(judged, args.timeout))
+    bound = tree.bound_of(judged, args.timeout)
+    if judged is not None and judged.wait is not None and judged.wait.watch:
+        return _watched(args, app, state, text, bound=bound)
+    result, wrote = tree.ran(app, state, text, bound=bound)
     emit(result.to_json(), args)
-    if wrote:
-        _notes([f"the line's handler wrote {len(wrote)} characters to stdout, kept out of the result"])
+    _notes(_wrote(wrote))
     return result.code
+
+
+def _watched(args: argparse.Namespace, app: Any, state: Any, text: str, *, bound: float | None) -> int:
+    """A line that watches: each envelope as a line of JSON as it comes, until the watch ends, or a signal.
+
+    Each is written as ``listen`` writes a value, after ``--select``, one over the cap left out and noted. The exit
+    code is the last envelope's, or 0 when a signal stopped it.
+    """
+    import threading
+
+    from . import tree
+
+    args.meta = False
+    line = _Lines(args)
+    stop = threading.Event()
+    with _signalled(stop):
+        last, wrote, ended = tree.watched(
+            app, state, text, each=lambda result: line(result.to_json()), bound=bound, stop=stop
+        )
+    _notes([*line.notes(), *_wrote(wrote)])
+    return last.code if ended and last is not None else 0
+
+
+def _wrote(wrote: str) -> list[str]:
+    """The note for what a line's handlers wrote to stdout, kept out of the result: none, if they wrote nothing."""
+    return [f"the line's handler wrote {len(wrote)} characters to stdout, kept out of the result"] if wrote else []
+
+
+@contextlib.contextmanager
+def _signalled(stop: Any) -> Generator[None]:  # a threading.Event
+    """``stop`` set on SIGINT or SIGTERM while the block runs, on the main thread; elsewhere, the program's own."""
+    import signal
+    import threading
+
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    held = {signum: signal.signal(signum, lambda *_: stop.set()) for signum in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        yield
+    finally:
+        for signum, handler in held.items():
+            signal.signal(signum, handler)
 
 
 def _describe(args: argparse.Namespace) -> int:

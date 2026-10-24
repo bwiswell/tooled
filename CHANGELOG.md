@@ -31,6 +31,11 @@ lines as it lands, and the entry is dated when that version is released.
   once, and a stdout of its own, its writes kept out of the result and noted. One still running at `--timeout` (30s
   by default) is given up on, exit 7; a line's own wait is given its bound and 5 seconds more.
 
+- **Waits and watches on `see`:** a read's `--until` and `--timeout` are the line's, passed to parsed, with tooled
+  waiting the line's bound and 5 seconds more. `--watch` streams the envelope as a line of JSON now and each time
+  the reply changes, after `--select` and under the cap as `listen`'s lines are, until its count, bound or
+  conditions, or SIGINT or SIGTERM, which end it cleanly with exit 0.
+
 ### Changed
 
 - **A command's `verbs`** in `operations` and `describe` are its op's, `see` or `do`, now that they run.
