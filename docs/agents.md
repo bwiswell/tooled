@@ -54,6 +54,24 @@ long as the session, not a call ([cli.md](cli.md), *Sessions*).
 - **What the state does with it is the app's:** an app whose state makes its user present (a game's commander) keeps
   them present while the session is open, and lets them go when it closes.
 
+## Tools over MCP, beside the shell
+
+Claude Code takes tools natively over MCP, so `tooled serve` hands it the policy's tools as its own
+([tools.md](tools.md), *Serving over MCP*), its arguments JSON with no shell quoting to get wrong. Attached to the
+agent's session, they share it with the agent's command-line calls: one state, one mesh, the wire's tools and the
+tree's alike.
+
+```json
+{"mcpServers": {"tooled": {"command": "tooled", "args": ["serve", "--session", "seat-a", "--verbs", "see,do,wait"]}}}
+```
+
+- **Name the session in the server's arguments** (or its `env`), not only in the agent's environment: a harness may
+  start an MCP server with less of its own environment than it gives its shell.
+- **Open the session first,** with `tooled session start --name seat-a` or around the agent's run; `serve` refuses
+  one that isn't open. With no session named, it opens one of its own, which the agent's shell then can't reach.
+- **Picks matter here as much as anywhere:** every tool listed sits in the agent's window unless its harness defers
+  them, so `--verbs` keeps the ones its seat needs.
+
 ## The loop
 
 1. `tooled operations` for what exists, one line each.

@@ -32,7 +32,7 @@ uv tool, with the protocol beside it:
 
 ```sh
 uv tool install "git+https://github.com/bwiswell/tooled@v0.2.8" --with <protocol-package>
-tooled --version            # tooled 0.2.8 (seared 0.4.4, zeared 0.4.4, parsed 0.1.8)
+tooled --version            # tooled 0.2.8 (seared 0.4.4, zeared 0.4.4, parsed 0.2.0)
 ```
 
 `--with` takes whatever names the protocol: a path to its checkout, a git URL, or a package name. From a checkout of

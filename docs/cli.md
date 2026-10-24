@@ -24,6 +24,7 @@ Every verb takes `--policy` after the verb (else `$TOOLED_POLICY`, else `./toole
 | `do [options] <words…>` | any other command | parsed's envelope for the line, a question it asks first among it |
 | `call TOOL [--args JSON]` | any tool the policy shows | what the verb its name begins with prints, a listen's values as one JSON list, a command's envelope ([tools.md](tools.md), *Calling a tool*) |
 | `session start \| run \| stop \| status` | a session | where a session is, how it ended, or how it is ([Sessions](#sessions)) |
+| `serve [--session NAME] [--verbs VERBS]` | a session | MCP's messages on stdout, answering a harness's on stdin: the tools a policy shows, carried out in the session ([tools.md](tools.md), *Serving over MCP*) |
 | `tools [--format openai\|anthropic\|mcp] [--verbs VERBS] [--sizes]` | the policy | the operations it shows as tool definitions for a harness: one for each fetch, query, write, wait or listen, and one for each allowed variant of a request's union; one for each command (`see_…`, `do_…`) and chain, but an interactive one ([tools.md](tools.md)); `--verbs fetch,wait:Fleet*` keeps some verbs' tools, or some operations'; with `--sizes`, each one's bytes and estimated tokens |
 
 An operation is anything tooled lists and acts on; each is a contract in this version. An operation, a contract
@@ -236,6 +237,9 @@ accident. `check` reads the file on disk, and never attaches.
   open: it ended at …: idle for 1800s`). It's never run cold instead: whoever started the session believes its state
   is held.
 - **Another tooled:** a call from a tooled of another version is refused, exit 2; start the session again with it.
+
+**Over MCP:** `tooled serve --session NAME` is a client of a session too, so a harness's MCP tools and its agent's
+command-line calls share one ([tools.md](tools.md), *Serving over MCP*).
 
 **Inside a session,** calls run side by side, a `listen` or a watch beside the calls an agent makes, each with its own
 streams; the wire's share the one mesh it holds, so a `listen` under a monitor costs the agent no session of its own. A
