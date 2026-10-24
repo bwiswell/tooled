@@ -9,9 +9,12 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
-## 0.2.7 — unreleased
+## 0.2.7 — 2026-10-24
 
-**Command trees, run.** The app's state, built from the policy.
+**Command trees, run.** `tooled see` and `tooled do` run a line of the app's in its session, on a state built from
+the policy, judged step by step before it runs and guarded against a person who isn't there; a read waits and
+watches with its own flags. Commands and chains are tools, a read with a reply waits as one, and `call` carries
+each out as its line.
 
 ### Added
 
