@@ -5,7 +5,7 @@ from _support_policy import HEAD, write
 from zeared import Mode
 
 from tooled.errors import PolicyFileError
-from tooled.policy.config import DEFAULT_NAME, POLICY_ENV, Op, find, load
+from tooled.policy.config import DEFAULT_NAME, POLICY_ENV, Op, Route, find, load
 
 
 class TestFind:
@@ -336,3 +336,16 @@ class TestWithoutAMesh:
             'or name the mesh'
         )
         assert exc.value.path == ('deny', 0, 'ops')
+
+
+class TestRoute:
+    def test_the_tree_by_default(self, tmp_path):
+        assert load(write(tmp_path)).protocol.route is Route.TREE
+
+    def test_the_wire(self, tmp_path):
+        assert load(write(tmp_path, head=HEAD + 'route = "wire"\n')).protocol.route is Route.WIRE
+
+    def test_a_route_that_is_neither(self, tmp_path):
+        with pytest.raises(PolicyFileError) as exc:
+            load(write(tmp_path, head=HEAD + 'route = "both"\n'))
+        assert exc.value.path == ('protocol', 'route')

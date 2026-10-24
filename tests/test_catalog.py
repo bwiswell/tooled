@@ -295,3 +295,14 @@ class TestCommandSources:
 def test_parsed_s_effects_are_zeared_s_value_for_value():
     """A command and a contract are judged on one scale: parsed keeps its own copy of zeared's vocabulary."""
     assert [member.value for member in parsed.Effect] == [member.value for member in zeared.Effect]
+
+
+class TestLinks:
+    def test_a_command_on_a_contract_s_request_or_reply(self, app_catalog):
+        assert [(link.command.name, link.contract.name, link.by) for link in app_catalog.links] == [
+            ('PlayerMove', 'MoveResult', ('request',)),
+            ('StationShow', 'Station', ('reply',)),
+        ]
+
+    def test_none_without_the_protocol(self):
+        assert Catalog.load([], factory='_support_app:factory').links == ()

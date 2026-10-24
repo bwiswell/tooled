@@ -496,3 +496,85 @@ class TestTree:
 
     def test_a_command_s_slot_may_be_bound(self, tmp_path, app_catalog):
         tree_rules(tmp_path, app_catalog, '[bind]\nstation = "s1"\n')  # Station's slot too, and StationShow's
+
+
+#: Both routes allowed everywhere: what the route decides between.
+BOTH = '[[allow]]\nops = ["read", "query", "invoke"]\n\n[[allow]]\nops = ["see", "do"]\n'
+
+
+def shown_names(r):
+    return [o.name for o in r.visible_operations()]
+
+
+class TestRoutes:
+    def test_the_tree_where_both_would_show(self, tmp_path, app_catalog):
+        r = tree_rules(tmp_path, app_catalog, BOTH)
+        names = shown_names(r)
+        assert {'StationShow', 'PlayerMove'} <= set(names)
+        assert not {'Station', 'MoveResult'} & set(names)
+        assert r.instead(app_catalog.get('Station')) == [app_catalog.get('StationShow')]
+
+    def test_the_wire_when_the_profile_says(self, tmp_path, app_catalog):
+        r = Rules(load(write(tmp_path, BOTH, head=HEAD + 'route = "wire"\n')), app_catalog)
+        names = shown_names(r)
+        assert {'Station', 'MoveResult'} <= set(names)
+        assert not {'StationShow', 'PlayerMove'} & set(names)
+
+    def test_one_side_shown_stays_shown(self, tmp_path, app_catalog):
+        r = tree_rules(tmp_path, app_catalog, '[[allow]]\nops = ["read"]\n')  # no tree rule: nothing to take instead
+        assert 'Station' in shown_names(r)
+
+    def test_an_allow_naming_a_side_takes_it(self, tmp_path, app_catalog):
+        r = tree_rules(tmp_path, app_catalog, BOTH + '\n[[allow]]\nops = ["read"]\noperations = ["Station"]\n')
+        assert 'Station' in shown_names(r)
+        assert 'StationShow' not in shown_names(r)
+        assert 'PlayerMove' in shown_names(r)  # the other overlap keeps the route
+        body = BOTH + '\n[[allow]]\nops = ["do"]\noperations = ["PlayerMove"]\n'
+        r = Rules(load(write(tmp_path, body, head=HEAD + 'route = "wire"\n')), app_catalog)
+        assert ('PlayerMove' in shown_names(r), 'MoveResult' in shown_names(r)) == (True, False)
+
+    def test_a_glob_names_no_side(self, tmp_path, app_catalog):
+        r = tree_rules(tmp_path, app_catalog, BOTH + '\n[[allow]]\nops = ["read"]\noperations = ["Stat*"]\n')
+        assert 'Station' not in shown_names(r)
+
+    def test_naming_both_sides_is_refused(self, tmp_path, app_catalog):
+        body = (
+            '[[allow]]\nops = ["read"]\noperations = ["Station"]\n\n'
+            '[[allow]]\nops = ["see"]\noperations = ["StationShow"]\n'
+        )
+        with pytest.raises(PolicyFileError) as exc:
+            tree_rules(tmp_path, app_catalog, body)
+        assert exc.value.message == (
+            'allow rules name both StationShow and Station, which do the same thing, and a profile shows one: name '
+            'one, or neither and let [protocol] route pick'
+        )
+        assert exc.value.path == ('allow', 1, 'operations', 0)
+
+
+class TestCarryOver:
+    def test_a_deny_by_name_carries_to_its_commands(self, tmp_path, app_catalog):
+        r = tree_rules(tmp_path, app_catalog, BOTH + '\n[[deny]]\nops = ["read"]\noperations = ["Station"]\n')
+        show = app_catalog.get('StationShow')
+        assert r.carried(show) == (0, app_catalog.get('Station'))
+        assert not r.visible(show)
+        with pytest.raises(RefusedError) as exc:
+            r.check(show, 'station/s1/show')
+        assert exc.value.message == 'see on StationShow is denied by deny[0], which denies Station, its contract'
+        assert r.uncarried() == []
+
+    @pytest.mark.parametrize(
+        'deny',
+        [
+            '[[deny]]\nops = ["read"]\nkeys = ["demo/**"]\n',  # by keys alone
+            '[[deny]]\nops = ["read"]\noperations = ["*"]\n',  # `*` names nothing
+            '[[deny]]\nops = ["read"]\noperations = ["Station"]\nkeys = ["demo/w1/station/secret"]\n',  # in part
+        ],
+    )
+    def test_a_deny_that_can_not_carry(self, tmp_path, app_catalog, deny):
+        r = tree_rules(tmp_path, app_catalog, BOTH + '\n' + deny)
+        show = app_catalog.get('StationShow')
+        assert r.carried(show) is None
+        assert r.visible(show)
+        assert [(index, link.command.name, link.contract.name) for index, link in r.uncarried()] == [
+            (0, 'StationShow', 'Station')
+        ]

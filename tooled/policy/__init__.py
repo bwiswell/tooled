@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .config import Generator, Op, Policy, find, load
+from .config import Generator, Op, Policy, Route, find, load
 from .rules import Rules, op_of
 from .sources import Injected, describe, generated, resolve
 
@@ -11,6 +11,7 @@ __all__ = [
     'Injected',
     'Op',
     'Policy',
+    'Route',
     'Rules',
     'describe',
     'find',
