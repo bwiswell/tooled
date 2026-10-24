@@ -514,6 +514,15 @@ class TestChecksBeforeTheSession:
         got, out, err = run(capsys, *argv, '--policy', dead)
         assert (got, out, err['error']) == (code, None, kind)
 
+    def test_a_hidden_field_refused(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv('DEMO_TOKEN', 'tok-ann')
+        head = HEAD.replace('tcp/127.0.0.1:7447', f'tcp/127.0.0.1:{free_port()}')
+        policy = str(write(tmp_path, READS + '\n[[deny]]\nops = ["query"]\nfields = ["ask_id"]\n', head=head))
+        request = '{"kind": "ping", "station": "s1", "ask_id": "a1"}'
+        code, out, err = run(capsys, 'query', 'LookReply', 'player=ann', '--request', request, '--policy', policy)
+        assert (code, out, err['error']) == (3, None, 'refused')
+        assert err['message'] == "'ask_id' is hidden by the policy (deny[1]); leave it out of the request"
+
     def test_a_fetch_refused(self, tmp_path, capsys):
         head = HEAD.replace('tcp/127.0.0.1:7447', f'tcp/127.0.0.1:{free_port()}')
         policy = str(write(tmp_path, '[[allow]]\nops = ["read"]\nkeys = ["demo/w1/**"]\n', head=head))

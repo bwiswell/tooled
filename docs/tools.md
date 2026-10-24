@@ -92,7 +92,8 @@ one or two. A pattern with no glob in it must name an operation, so a typo is re
 ```
 
 - **Parameters:** the unbound slots, then the request's fields as the protocol writes them on the wire, without
-  what the policy injects (`token`) and without the union's tag (`kind`). A flat union's variant sits beside the
+  what the policy injects (`token`) or hides ([policy.md](policy.md), *Fields*) and without the union's tag
+  (`kind`). A flat union's variant sits beside the
   request's own fields; a nested one's sits under its payload key, as on the wire.
 - **The description** is a docstring's first line: a variant's, for a variant's tool; a write's request's; else
   the contract's, which says what a read gives. A wait's and a listen's then say what they do.
@@ -112,14 +113,24 @@ the model can only write arguments of the right shape:
 
 **A union can't be said in it,** except at a request's root, where it becomes one tool per variant. A field that
 holds one anywhere else (a list of chained orders, say) is refused, and the export with it, naming every such field
-at once:
+at once, and what leaves it out:
 
 ```json
-{"error": "policy", "message": "2 fields can't be said in a tool's schema; deny them in the policy: DryRunReply 'tries[]' (a union), OrderResult 'then[]' (a union)"}
+{"error": "policy", "message": "2 fields can't be said in a tool's schema; hide or deny them in the policy: DryRunReply 'tries[]' (a union; hide 'tries'), OrderResult 'then[]' (a union; hide 'then')"}
 ```
 
-Deny the operation, or the variants, in the profile the tools are for. tooled still checks every call against the
-policy and loads its request with seared; the schema only helps the model write a call that will pass.
+An optional field at the request's root can be hidden, in the profile the tools are for, and the operation keeps
+its tools without it:
+
+```toml
+[[deny]]                        # a small model's orders: one at a time, nothing tried first
+ops = ["query", "invoke"]
+fields = ["then", "tries"]
+```
+
+Anything else, a required field or one inside another, takes denying the operation, or the variants. tooled still
+checks every call against the policy and loads its request with seared; the schema only helps the model write a
+call that will pass.
 
 **Other refusals:** a slot that shares its name with another parameter, a request field or a wait's `until`, say
 (bind the slot, and the other is the one parameter); a request with two unions at its root; a name over 64

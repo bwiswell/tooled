@@ -145,6 +145,16 @@ class TestRequest:
         assert not validator.is_valid({'kind': 'ping', 'station': 's1', 'token': 't'})  # injected: not given
         assert not validator.is_valid({'kind': 'ping', 'station': 's1', 'extra': 1})
 
+    def test_hidden_fields_are_taken_out(self, tmp_path, catalog):
+        body = POLICY + '\n[[deny]]\nops = ["query", "invoke"]\nfields = ["*_id", "times"]\n'
+        hiding = Rules(load(write(tmp_path, body)), catalog)
+        schema = request_schema(catalog.get('MoveResult'), hiding)
+        assert schema is not None
+        assert list(schema['properties']) == ['to']
+        assert 'ask_id' not in describe(catalog.get('LookReply'), hiding)['request']['properties']
+        assert describe_variant(catalog.get('LookReply'), 'pong', hiding)['schema']['properties'] == {}
+        assert describe_variant(catalog.get('LookReply'), 'ping', hiding)['schema']['required'] == ['station']
+
     def test_no_request_no_schema(self, rules, catalog):
         assert request_schema(catalog.get('Station'), rules) is None
         assert injected(catalog.get('Station'), rules) == []

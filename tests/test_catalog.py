@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import pytest
 from zeared import Effect
 
-from tooled.catalog import Catalog, Kind, read, render, union_tags, wire_names
+from tooled.catalog import Catalog, Kind, read, render, top_fields, union_tags, wire_names
 from tooled.errors import CatalogError, UsageError
 
 
@@ -167,3 +167,12 @@ class TestHelpers:
     def test_union_tags_and_wire_names_of_a_non_seared_class_are_empty(self):
         assert union_tags(int) == ()
         assert wire_names(int) == ()
+        assert top_fields(int) == {}
+
+    def test_top_fields_own_then_each_flat_variant_s(self, catalog):
+        assert top_fields(catalog.contract('LookReply').request) == {
+            None: {'token': True, 'ask_id': False},  # the tag, kind, is no field
+            'ping': {'station': True},
+            'pong': {'times': False},
+            'dev-peek': {'depth': False},
+        }

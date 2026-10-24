@@ -17,14 +17,15 @@ the tool, so each tool is flat: the request's own fields beside the variant's, o
 key when the union nests it. A presence feed has no verb yet, so no tool.
 
 **Parameters** are the unbound slots, then the request's fields as the protocol writes them on the wire, without
-the fields the policy injects and without the union's tag, or a wait's or a listen's own. A slot that shares its
-name with another parameter is refused, since one parameter can't be both: binding the slot settles it.
+the fields the policy injects or hides and without the union's tag, or a wait's or a listen's own. A slot that
+shares its name with another parameter is refused, since one parameter can't be both: binding the slot settles it.
 
 **The dialect** is the subset of JSON Schema a constrained decoder holds (llama.cpp's grammar converter, say):
 references inlined; every object with ``properties`` closed by ``additionalProperties: false``; required
 properties first; no ``$schema``, ``title`` or ``$defs``. A field whose schema still holds a union (``allOf``,
 ``anyOf``, ``oneOf``, ``if``/``then``, ``not``) once its references are inlined can't be said in it, so the export
-is refused, naming the field. seared still checks every call; the schema only helps the model write one.
+is refused, naming the field, and the field at the request's root a policy could hide to leave it out. seared
+still checks every call; the schema only helps the model write one.
 
 **Descriptions** are a docstring's first line: a variant's, for a variant's tool; a write's request's; else the
 contract's, which says what a read gives; a wait's and a listen's then say what they do.
@@ -121,7 +122,7 @@ def tools(rules: Rules, picks: Sequence[str] = CALLS) -> list[Tool]:
             or comes twice.
     """
     found: list[Tool] = []
-    unsayable: dict[tuple[str, str], str] = {}
+    unsayable: dict[tuple[str, str], tuple[str, str | None]] = {}
     kept = _picked(picks, rules)
     for contract in rules.visible_contracts():
         classes = dict(variant_classes(contract))
@@ -132,7 +133,7 @@ def tools(rules: Rules, picks: Sequence[str] = CALLS) -> list[Tool]:
                 try:
                     found.append(_tool(contract, rules, verb, tag, described))
                 except _Unsayable as exc:
-                    unsayable.setdefault((exc.where, exc.path), exc.why)
+                    unsayable.setdefault((exc.where, exc.path), (exc.why, exc.field))
     if unsayable:
         raise PolicyFileError(_unsayable_message(unsayable))
     found.sort(key=lambda tool: tool.name)
@@ -166,13 +167,20 @@ def _keeps(globs: Sequence[str], contract: Contract) -> bool:
     return any(fnmatch.fnmatchcase(contract.name, g) or fnmatch.fnmatchcase(contract.qualname, g) for g in globs)
 
 
-def _unsayable_message(unsayable: dict[tuple[str, str], str]) -> str:
-    """The refusal for the fields a tool's schema can't say: each where it is, and why."""
+def _unsayable_message(unsayable: dict[tuple[str, str], tuple[str, str | None]]) -> str:
+    """The refusal for the fields a tool's schema can't say: each where it is, why, and what leaves it out.
+
+    An optional field at the request's root can be hidden; anything else, its operation or variant denied.
+    """
     if len(unsayable) == 1:
-        (((where, path), why),) = unsayable.items()
-        return f"{where}: field {path!r} is {why}, which a tool's schema can't say; deny it in the policy"
-    listed = ', '.join(f'{where} {path!r} ({why})' for (where, path), why in unsayable.items())
-    return f"{len(unsayable)} fields can't be said in a tool's schema; deny them in the policy: {listed}"
+        (((where, path), (why, field)),) = unsayable.items()
+        fix = f'hide {field!r} in the policy, or deny {where}' if field else f'deny {where} in the policy'
+        return f"{where}: field {path!r} is {why}, which a tool's schema can't say; {fix}"
+    listed = ', '.join(
+        f'{where} {path!r} ({why}; ' + (f'hide {field!r})' if field else f'deny {where})')
+        for (where, path), (why, field) in unsayable.items()
+    )
+    return f"{len(unsayable)} fields can't be said in a tool's schema; hide or deny them in the policy: {listed}"
 
 
 def calls(contract: Contract) -> list[str]:
@@ -278,17 +286,28 @@ def _rest(
     if verb == 'listen':
         count = {'type': 'integer', 'description': 'how many values to give', 'default': 1, 'minimum': 1}
         return [(label, {'count': count, 'timeout': bound}, [])]
-    request = request_schema(contract, rules) if verb != 'fetch' else None
+    request = request_schema(contract, rules, tag) if verb != 'fetch' else None
     if request is None:
         return []
     defs = request.get('$defs', {})
     parts = [(label, request.get('properties', {}), request.get('required', []))]
     if tag is not None:
-        parts.append((f'{label} variant {tag!r}', *_branch(request, tag, label)))
-    return [
-        (where, {name: _Dialect(defs, where).portable(prop, name) for name, prop in props.items()}, needed)
-        for where, props, needed in parts
-    ]
+        props, needed = _branch(request, tag, label)
+        hidden = rules.hidden(contract, tag)
+        parts.append((f'{label} variant {tag!r}', {n: p for n, p in props.items() if n not in hidden}, needed))
+    return [(where, _said(_Dialect(defs, where), props, needed), needed) for where, props, needed in parts]
+
+
+def _said(dialect: _Dialect, props: dict[str, Any], required: list[str]) -> dict[str, Any]:
+    """Request fields in the dialect, each by its wire name; a field it can't say names itself, if it's optional."""
+    out = {}
+    for name, prop in props.items():
+        try:
+            out[name] = dialect.portable(prop, name)
+        except _Unsayable as exc:
+            exc.field = None if name in required else name
+            raise
+    return out
 
 
 def _conditions(contract: Contract, rules: Rules, label: str) -> dict[str, Any]:
@@ -392,11 +411,12 @@ class _Dialect:
 
 
 class _Unsayable(Exception):  # noqa: N818 -- not reported as it is: tools() gathers every one into one refusal
-    """A field a tool's schema can't say: where it is, its path, and why."""
+    """A field a tool's schema can't say: where it is, its path, why, and the optional root field it's in, if any."""
 
     def __init__(self, where: str, path: str, why: str) -> None:
         super().__init__(where, path, why)
         self.where, self.path, self.why = where, path, why
+        self.field: str | None = None
 
 
 def _required_first(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:

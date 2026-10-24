@@ -429,6 +429,18 @@ class TestVariantFirst:
         with pytest.raises(RefusedError, match='at demo/w1/move/bo is denied'):  # though the request lacks `to`
             executor.prepare(move, writes, values, request={}, injected={'token': 't'})
 
+    def test_a_hidden_field_is_refused_whatever_the_rest(self, tmp_path, catalog):
+        ops = 'ops = ["query", "invoke"]\n'
+        body = f'[[allow]]\n{ops}\n[[deny]]\n{ops}fields = ["move_id", "times"]\n'
+        hiding = Rules(load(write(tmp_path, body)), catalog)
+        move, look = catalog.get('MoveResult'), catalog.get('LookReply')
+        with pytest.raises(RefusedError, match="'move_id' is hidden by the policy"):  # though `to` doesn't load
+            self.prepare(move, hiding, {'to': 5, 'move_id': 'm1'})
+        with pytest.raises(RefusedError, match="'times' is hidden by the policy"):  # a variant's field
+            self.prepare(look, hiding, {'kind': 'pong', 'times': 'twice'})
+        assert self.prepare(move, hiding, {'to': 'dock'}).request.move_id is None
+        assert self.prepare(look, hiding, {'kind': 'pong'}).request.probe.times == 1
+
     def test_a_fallback_variant_is_checked_once_loaded(self, rules, catalog):
         look = dataclasses.replace(catalog.get('LookReply'), request=FallbackLook)
         with pytest.raises(RefusedError, match="variant 'dev-peek' is denied"):  # poke falls back to dev-peek

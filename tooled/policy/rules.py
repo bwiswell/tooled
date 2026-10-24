@@ -13,6 +13,12 @@ Each contract takes one op (:func:`op_of`). A rule matches a contract when its `
 
 **Deny wins.** **Variants:** a rule with ``variants`` covers only the request-union tags its globs match. A deny
 rule with variants refuses those tags, not the contract; an allow rule with variants allows only those tags.
+
+**Fields:** a deny rule with ``fields`` refuses no call, only the request fields its globs match: the optional
+fields at the request's root, its own and (for a call that carries one) a flat union variant's. Such a field is
+hidden: a call that gives it is refused, before the request loads, and the tools and ``describe`` leave it out. A
+required field can't be left out, so a glob passes over it, and a name without a glob that names one is refused.
+With ``variants`` too, only those variants' calls are covered.
 """
 
 from __future__ import annotations
@@ -22,12 +28,12 @@ from typing import TYPE_CHECKING
 
 from zeared import Effect, keyexpr
 
-from ..catalog import SLOT, Contract, Kind, render
+from ..catalog import SLOT, Contract, Kind, render, top_fields
 from ..errors import PolicyFileError, RefusedError, UsageError
 from .config import Op
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Collection, Sequence
 
     from ..catalog import Catalog
     from .config import Policy, Rule
@@ -54,8 +60,8 @@ class Rules:
         catalog: The contracts of its protocol.
 
     Raises:
-        PolicyFileError: A rule names an operation or a variant the protocol doesn't have, a bound slot is no
-            contract's, or an injected field is no request's.
+        PolicyFileError: A rule names an operation, a variant or a field the protocol doesn't have, or hides a
+            field a request requires; a bound slot is no contract's, or an injected field is no request's.
     """
 
     def __init__(self, policy: Policy, catalog: Catalog) -> None:
@@ -86,6 +92,7 @@ class Rules:
         hidden = any(
             _covers(rule, op, contract)
             and rule.variants is None
+            and rule.fields is None
             and all(any(keyexpr.includes(key, shape) for key in rule.keys) for shape in shapes)
             for rule in self.policy.deny
         )
@@ -109,6 +116,7 @@ class Rules:
             denied = any(
                 _covers(rule, op, contract)
                 and rule.variants is not None
+                and rule.fields is None
                 and _tag(rule, tag)
                 and all(any(keyexpr.includes(key, shape) for key in rule.keys) for shape in shapes)
                 for rule in self.policy.deny
@@ -117,30 +125,52 @@ class Rules:
                 out.append(tag)
         return tuple(out)
 
+    def hidden(self, contract: Contract, tag: str | None = None) -> tuple[str, ...]:
+        """The request fields the policy hides on ``contract``, in a call carrying the variant ``tag``.
+
+        They're the optional fields at the request's root, its own and ``tag``'s, that a deny rule's ``fields``
+        match on every topic: a rule with ``variants`` hides them only when it names ``tag``.
+        """
+        op, shapes = op_of(contract), self.shapes(contract)
+        hiding = [
+            rule
+            for rule in self.policy.deny
+            if rule.fields is not None
+            and _covers(rule, op, contract)
+            and (rule.variants is None or (tag is not None and _tag(rule, tag)))
+            and all(any(keyexpr.includes(key, shape) for key in rule.keys) for shape in shapes)
+        ]
+        return tuple(name for name in _optional(contract, tag) if any(_field(rule, name) for rule in hiding))
+
     # ---- what's allowed ------------------------------------------------------------------------
 
-    def check(self, contract: Contract, selector: str, *, variant: str | None = None) -> None:
+    def check(
+        self, contract: Contract, selector: str, *, variant: str | None = None, fields: Collection[str] = ()
+    ) -> None:
         """Whether the policy allows a call on ``contract`` that renders ``selector``.
 
         Args:
             contract: The contract called.
             selector: The key expression the call reaches.
             variant: The tag of the request's union the call carries, if it carries one.
+            fields: The fields at the root of the request the call gives, as given.
 
         Raises:
-            RefusedError: A deny rule's keys intersect the selector (for its variant, if it names variants), or no
-                allow rule's keys include it. Then, when a slot left open is one an allow rule's keys fix, the
-                message names it, since filling it is what the call needs, and the value too, when the allow
-                rules that reach the selector all fix it to one.
+            RefusedError: A deny rule's keys intersect the selector (for its variant, if it names variants), or
+                hide a field the call gives; or no allow rule's keys include it. Then, when a slot left open is one
+                an allow rule's keys fix, the message names it, since filling it is what the call needs, and the
+                value too, when the allow rules that reach the selector all fix it to one.
         """
         op, label = op_of(contract), self.catalog.label(contract)
         for index, rule in enumerate(self.policy.deny):
             if not _covers(rule, op, contract) or not any(keyexpr.intersects(key, selector) for key in rule.keys):
                 continue
-            if rule.variants is None:
+            if rule.fields is not None:
+                _refuse_hidden(rule, index, contract, variant, fields)
+            elif rule.variants is None:
                 msg = f'{op} on {label} at {selector} is denied by deny[{index}]; narrow the slots if it reaches more'
                 raise RefusedError(msg)
-            if variant is not None and _tag(rule, variant):
+            elif variant is not None and _tag(rule, variant):
                 msg = f'{op} on {label} with variant {variant!r} is denied by deny[{index}]'
                 raise RefusedError(msg)
         allows = [
@@ -197,13 +227,38 @@ class Rules:
                 except UsageError as exc:
                     raise PolicyFileError(exc.message, path=(*where, 'operations', at)) from exc
             matched |= {o.qualname: o for o in found if isinstance(o, Contract)}
-        if rule.variants is None:
-            return
-        tags = {tag for contract in matched.values() for tag in contract.variants}
-        for at, pattern in enumerate(rule.variants):
-            if not (_GLOB & set(pattern)) and pattern not in tags:
-                msg = f'variant {pattern!r} is no tag of the contracts this rule names'
-                raise PolicyFileError(msg, path=(*where, 'variants', at))
+        if rule.variants is not None:
+            tags = {tag for contract in matched.values() for tag in contract.variants}
+            for at, pattern in enumerate(rule.variants):
+                if not (_GLOB & set(pattern)) and pattern not in tags:
+                    msg = f'variant {pattern!r} is no tag of the contracts this rule names'
+                    raise PolicyFileError(msg, path=(*where, 'variants', at))
+        if rule.fields is not None:
+            self._check_fields(rule, [c for c in matched.values() if op_of(c) in rule.ops], where)
+
+    def _check_fields(self, rule: Rule, covered: Sequence[Contract], where: tuple[str | int, ...]) -> None:
+        """A deny rule's ``fields``: a name without a glob is a field of a request it covers, and an optional one.
+
+        It's read where the rule reaches: the request's own fields, and those of each variant it covers.
+        """
+        found = [
+            (contract, tag, fields)
+            for contract in covered
+            if contract.request is not None
+            for tag, fields in top_fields(contract.request).items()
+            if tag is None or rule.variants is None or _tag(rule, tag)
+        ]
+        for at, name in enumerate(rule.fields or ()):
+            if _GLOB & set(name):
+                continue
+            if not any(name in fields for *_, fields in found):
+                msg = f'field {name!r} is no field at the root of a request this rule covers'
+                raise PolicyFileError(msg, path=(*where, 'fields', at))
+            for contract, tag, fields in found:
+                if fields.get(name):
+                    whose = self.catalog.label(contract) + (f' variant {tag!r}' if tag is not None else '')
+                    msg = f"hides {name!r}, which {whose} requires, so a call can't leave it out; deny {whose} instead"
+                    raise PolicyFileError(msg, path=(*where, 'fields', at))
 
 
 def _fill_hint(contract: Contract, selector: str, allows: Sequence[Rule]) -> str:
@@ -275,6 +330,40 @@ def _open_slots(contract: Contract, selector: str) -> list[tuple[str, int, bool]
             if slot is not None and (chunks[at:] == ['*', '**'] if multi and at == tail else chunks[at] == '*')
         ]
     return []
+
+
+def _refuse_hidden(rule: Rule, index: int, contract: Contract, variant: str | None, given: Collection[str]) -> None:
+    """Refuse a call whose request gives a field ``rule`` hides: an optional one at its root that ``rule`` names.
+
+    Raises:
+        RefusedError: It gives one, or more; each is named.
+    """
+    if rule.variants is not None and (variant is None or not _tag(rule, variant)):
+        return
+    optional = _optional(contract, variant)
+    named = [name for name in given if name in optional and _field(rule, name)]
+    if not named:
+        return
+    if len(named) == 1:
+        msg = f'{named[0]!r} is hidden by the policy (deny[{index}]); leave it out of the request'
+    else:
+        listed = ', '.join(repr(name) for name in named[:-1]) + f' and {named[-1]!r}'
+        msg = f'{listed} are hidden by the policy (deny[{index}]); leave them out of the request'
+    raise RefusedError(msg)
+
+
+def _optional(contract: Contract, tag: str | None) -> list[str]:
+    """The optional fields at the root of ``contract``'s request, its own and then ``tag``'s, in order."""
+    if contract.request is None:
+        return []
+    found = top_fields(contract.request)
+    own, variant = found.get(None, {}), found.get(tag, {}) if tag is not None else {}
+    return [name for name, required in (*own.items(), *variant.items()) if not required]
+
+
+def _field(rule: Rule, name: str) -> bool:
+    """Whether a glob of ``rule``'s fields matches ``name``."""
+    return rule.fields is not None and any(fnmatch.fnmatchcase(name, glob) for glob in rule.fields)
 
 
 def _wild(chunk: str) -> bool:

@@ -28,10 +28,15 @@ keys = ["demo/w1/**"]
 ops = ["invoke"]
 operations = ["MoveResult"]
 variants = ["dev-*"]
+
+[[deny]]                # hidden: out of tools and describe, refused in a call
+ops = ["query"]
+fields = ["ask_id"]
 ```
 
 A rule's ``ops`` say what's done (``read``, ``query``, ``invoke``…), and its ``operations`` what it's done to: globs
-over the names ``tooled operations`` lists. Nothing is allowed until a rule allows it. Where the file is found:
+over the names ``tooled operations`` lists. Nothing is allowed until a rule allows it. A deny rule with ``fields``
+denies no call, only the optional request fields it names, wherever a call gives one. Where the file is found:
 ``--policy``, else ``$TOOLED_POLICY``, else ``./tooled.toml``. A relative path inside it (an inject source's file) is
 read from the file's own directory.
 """
@@ -102,6 +107,11 @@ class Rule(s.Seared):
     variants: list[str] | None = s.Str(
         many=True, default=None, doc="globs over the tags of a request's unions; none covers the whole contract"
     )
+    fields: list[str] | None = s.Str(
+        many=True,
+        default=None,
+        doc="on a deny rule, globs over a request's optional top-level fields, which it hides; none covers the call",
+    )
 
 
 @s.seared(unknown='raise')
@@ -162,8 +172,8 @@ def load(path: Path) -> Policy:
 
     Raises:
         PolicyFileError: It isn't TOML, or doesn't load: an unknown key (a renamed one named), a wrong type, a
-            missing table, a rule with no ops, a key that isn't a key expression, a bound value that isn't one
-            chunk, or an inject source that isn't exactly one source.
+            missing table, a rule with no ops, ``fields`` on an allow rule or naming none, a key that isn't a key
+            expression, a bound value that isn't one chunk, or an inject source that isn't exactly one source.
     """
     try:
         raw = tomllib.loads(path.read_text(encoding='utf-8'))
@@ -206,21 +216,31 @@ def _check(policy: Policy) -> None:
         raise PolicyFileError(msg, path=('protocol', 'packages'))
     for side in ('allow', 'deny'):
         for index, rule in enumerate(getattr(policy, side)):
-            where = (side, index)
-            if not rule.ops:
-                msg = 'a rule must name at least one op'
-                raise PolicyFileError(msg, path=(*where, 'ops'))
-            for at, key in enumerate(rule.keys):
-                try:
-                    keyexpr.includes(key, key)
-                except KeyExprError as exc:
-                    raise PolicyFileError(str(exc), path=(*where, 'keys', at)) from exc
+            _check_rule(rule, side, (side, index))
     for slot, value in policy.bind.items():
         if not value or '/' in value or not keyexpr.is_concrete(value):
             msg = f'a bound slot is one chunk with no wildcard, not {value!r}'
             raise PolicyFileError(msg, path=('bind', slot))
     for name, source in policy.inject.items():
         _check_source(source, ('inject', name))
+
+
+def _check_rule(rule: Rule, side: str, where: tuple[str, int]) -> None:
+    """One rule: an op at least, real key expressions, and ``fields`` only on a deny rule, naming one at least."""
+    if not rule.ops:
+        msg = 'a rule must name at least one op'
+        raise PolicyFileError(msg, path=(*where, 'ops'))
+    for at, key in enumerate(rule.keys):
+        try:
+            keyexpr.includes(key, key)
+        except KeyExprError as exc:
+            raise PolicyFileError(str(exc), path=(*where, 'keys', at)) from exc
+    if rule.fields is not None and side == 'allow':
+        msg = '`fields` hides request fields, which only a deny rule does; move it to a [[deny]] rule'
+        raise PolicyFileError(msg, path=(*where, 'fields'))
+    if rule.fields == []:
+        msg = '`fields` names no field, so the rule would hide nothing; name one, or leave `fields` out'
+        raise PolicyFileError(msg, path=(*where, 'fields'))
 
 
 def _check_source(source: Source, where: tuple[str, ...]) -> None:

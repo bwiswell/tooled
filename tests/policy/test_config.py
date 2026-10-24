@@ -62,6 +62,10 @@ class TestLoad:
                 ops = ["query"]
                 operations = ["LookReply"]
                 variants = ["dev-*"]
+
+                [[deny]]
+                ops = ["invoke"]
+                fields = ["move_id"]
                 """,
             )
         )
@@ -75,7 +79,9 @@ class TestLoad:
         assert allow.operations == ['*']
         assert allow.keys == ['demo/w1/**']
         assert allow.variants is None
+        assert allow.fields is None
         assert policy.deny[0].variants == ['dev-*']
+        assert policy.deny[1].fields == ['move_id']
 
     def test_an_empty_policy_allows_nothing(self, tmp_path):
         policy = load(write(tmp_path))
@@ -143,6 +149,16 @@ class TestChecks:
         with pytest.raises(PolicyFileError, match='at least one op') as exc:
             load(write(tmp_path, '[[deny]]\nops = []\n'))
         assert exc.value.path == ('deny', 0, 'ops')
+
+    def test_fields_on_an_allow_rule(self, tmp_path):
+        with pytest.raises(PolicyFileError, match='only a deny rule does; move it to a') as exc:
+            load(write(tmp_path, '[[allow]]\nops = ["invoke"]\nfields = ["move_id"]\n'))
+        assert exc.value.path == ('allow', 0, 'fields')
+
+    def test_fields_that_name_none(self, tmp_path):
+        with pytest.raises(PolicyFileError, match='names no field, so the rule would hide nothing') as exc:
+            load(write(tmp_path, '[[deny]]\nops = ["invoke"]\nfields = []\n'))
+        assert exc.value.path == ('deny', 0, 'fields')
 
     def test_a_key_that_is_no_key_expression(self, tmp_path):
         with pytest.raises(PolicyFileError, match='empty chunks') as exc:
