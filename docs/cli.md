@@ -19,6 +19,8 @@ Every verb takes `--policy` after the verb (else `$TOOLED_POLICY`, else `./toole
 | `listen CONTRACT [slot=value …]` | a retained contract or a stream | one JSON line per value as it arrives |
 | `invoke CONTRACT [slot=value …] [--request JSON] [--dry-run]` | a queryable that writes: `EFFECT = WRITE` or `ACTION`, or none declared | its replies, in the order they arrived; with `--dry-run`, what it would send |
 | `wait CONTRACT [slot=value …] --until PATH=VALUE [--until …]` | a retained contract or a stream | the first value that meets every condition |
+| `see [options] <words…>` | a command that declares `EFFECT = READ` | parsed's envelope for the line (below) |
+| `do [options] <words…>` | any other command | parsed's envelope for the line, a question it asks first among it |
 | `call TOOL [--args JSON]` | any tool the policy shows | what the verb its name begins with prints, a listen's values as one JSON list ([tools.md](tools.md), *Calling a tool*) |
 | `tools [--format openai\|anthropic\|mcp] [--verbs VERBS] [--sizes]` | the policy | the operations it shows as tool definitions for a harness: one for each fetch, query, write, wait or listen, and one for each allowed variant of a request's union ([tools.md](tools.md)); `--verbs fetch,wait:Fleet*` keeps some verbs' tools, or some operations'; with `--sizes`, each one's bytes and estimated tokens |
 
@@ -68,7 +70,34 @@ A command's document, beside its `route` (`tree`), op (`see` or `do`) and effect
 - `reply`: its `REPLY` as a field list, or `null` for none; `--reply` gives its whole dump schema. `--variant` is a
   contract's.
 
-No verb of this version runs a command, so a command's `verbs` are none.
+A command's verb is its op's: `see` for a read, `do` for any other.
+
+### `see` and `do`
+
+The tree's verbs run a line of the policy's app (`[app]`, in [policy.md](policy.md)): `see` a read, `do` anything
+else, each verb its op. tooled's own options stand first (`--policy`, `--select`, `--max-bytes`, `--out`,
+`--pretty`; `--` ends them); from the line's first word on, every word is the line's, a flag among them. The words
+are joined as parsed's own command line joins them: a word with a space quoted, a single argument the whole line.
+
+```sh
+tooled see fleets show frigate
+tooled do fleet frigate jump vraelon then dock vraelon-station
+tooled do move "Cla'allis Belt"           # one word: no shell quoting to get wrong past the shell's own
+```
+
+- **The line is judged before it runs,** against the app alone, so a refused line never opens its session. Each of
+  its steps (one, or a chain's, joined by `then`) must be a command the verb runs (`see does not run FleetMine,
+  which is no read; what does: do`), one the policy shows, at a key it allows and can hold.
+- **Asking first:** a command that asks before it acts comes back with its question in `asks`, nothing done (exit
+  0). `--yes` on the line answers it where the policy allows `confirm` at that key; elsewhere the line is refused,
+  saying to leave `--yes` out, since parsed would answer it whatever tooled said.
+- **Then it runs,** in the app's session on the state the policy builds, and prints parsed's envelope: `command`,
+  `line`, `ok`, `done`, `asks`, `met`, `waited`, `reply`, `text` and `error`, under the size cap and `--select`
+  (`--select reply.stock`). The exit code is the envelope's: 0; 2 for a line that doesn't read, with suggestions; 3
+  refused (an `INTERACTIVE` command, with no person at a terminal, naming what to say instead); 4 a value refused;
+  7 a wait past its bound; 1 a handler that failed.
+- **A line that runs nothing,** one that doesn't read or asks for `--help`, isn't judged: parsed answers it. Its
+  help and listings are the app's, and may name commands the policy doesn't show; running one is still refused.
 
 ### `query`
 

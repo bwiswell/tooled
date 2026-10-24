@@ -1157,6 +1157,120 @@ class TestCommandsListed:
         assert (code, out['unmarked']) == (0, ['FleetMine'])
 
 
+class TestLines:
+    """`see` and `do`: a line of the app's, judged by the policy, run in its session, parsed's envelope printed."""
+
+    @pytest.fixture
+    def app(self, tmp_path):
+        head = '[protocol]\n\n[app]\nfactory = "_support_app:chained"\n'
+        body = '[[allow]]\nops = ["see", "do"]\n\n[[allow]]\nops = ["confirm"]\nkeys = ["dock/vesta"]\n'
+        return str(write(tmp_path, body, head=head))
+
+    def line(self, capsys, policy, verb, *words):
+        return run(capsys, verb, '--policy', policy, *words)
+
+    def test_a_read(self, app, capsys):
+        code, out, err = self.line(capsys, app, 'see', 'station', 's1', 'show')
+        assert (code, err) == (0, None)
+        assert (out['ok'], out['command'], out['reply']) == (
+            True,
+            'station {station} show',
+            {
+                'world': 'w1',
+                'station': 's1',
+                'stock': 5,
+            },
+        )
+
+    def test_a_line_as_one_argument(self, app, capsys):
+        code, out, _ = self.line(capsys, app, 'do', 'fleet f1 mine')
+        assert (code, out['text']) == (0, 'f1 mining')
+
+    def test_a_chain(self, app, capsys):
+        code, out, _ = self.line(capsys, app, 'do', 'orders', 'fleet', 'f1', 'jump', 'sol', 'then', 'dock', 'vesta')
+        assert (code, out['text']) == (0, 'FleetJump then FleetDock')
+
+    def test_a_question_comes_back_unanswered(self, app, capsys):
+        code, out, _ = self.line(capsys, app, 'do', 'dock', 'ceres')
+        assert (code, out['done'], out['asks']) == (0, False, 'Dock at ceres for 10 credits?')
+
+    def test_yes_where_confirm_is_allowed(self, app, capsys):
+        code, out, _ = self.line(capsys, app, 'do', '--yes', 'dock', 'vesta')
+        assert (code, out['done'], out['text']) == (0, True, 'docked at vesta')
+
+    def test_yes_where_it_is_not(self, app, capsys):
+        code, out, err = self.line(capsys, app, 'do', 'dock', 'ceres', '--yes')
+        assert (code, out, err['error']) == (3, None, 'refused')
+        assert err['message'].endswith('leave --yes out, and its question comes back unanswered, nothing done')
+
+    @pytest.mark.parametrize(
+        ('verb', 'words', 'expected'),
+        [
+            ('see', ['fleet', 'f1', 'jump'], (2, 'usage')),  # it doesn't read: parsed's envelope, with suggestions
+            ('see', ['station', 's1', 'map'], (3, 'refused')),  # interactive, with no terminal
+            ('do', ['relay', 'run'], (1, 'handler')),  # its handler fails
+        ],
+    )
+    def test_the_envelope_s_exit_codes(self, app, capsys, verb, words, expected):
+        got, out, _ = self.line(capsys, app, verb, *words)
+        assert (got, out['ok'], out['error']['error']) == (expected[0], False, expected[1])
+
+    def test_the_wrong_verb(self, app, capsys):
+        code, out, err = self.line(capsys, app, 'see', 'fleet', 'f1', 'mine')
+        assert (code, out, err['message']) == (2, None, 'see does not run FleetMine, which is no read; what does: do')
+
+    def test_help_runs_nothing(self, app, capsys):
+        code, out, _ = self.line(capsys, app, 'see', 'station', 's1', 'show', '--help')
+        assert (code, out['done']) == (0, False)
+        assert out['text'].startswith('station <station> show')
+
+    def test_select_and_tooled_s_options_before_the_line(self, app, capsys):
+        code, out, _ = run(capsys, 'see', '--select', 'reply.stock', '--policy', app, 'station', 's1', 'show')
+        assert (code, out) == (0, {'reply': {'stock': 5}})
+
+    def test_a_line_that_begins_like_one_of_tooled_s_options(self, app, capsys):
+        code, out, _ = run(capsys, 'see', '--policy', app, '--', '--help')
+        assert (code, out['done']) == (0, False)  # the line's --help: parsed's listing
+
+    def test_every_word_after_the_first_is_the_line_s(self, app, capsys):
+        code, out, _ = run(capsys, 'see', '--policy', app, 'station', 's1', 'show', '--pretty')
+        assert (code, out['ok'], out['error']['error']) == (2, False, 'usage')  # --pretty is no flag of the line's
+
+    @pytest.mark.parametrize(
+        ('argv', 'message'),
+        [
+            (['see'], "tooled see takes a line: the words of a command, after tooled's own options"),
+            (['do', 'move', 'a"b', 'c'], 'holds a double quote'),
+        ],
+    )
+    def test_usage(self, app, capsys, argv, message):
+        code, _, err = run(capsys, argv[0], '--policy', app, *argv[1:])
+        assert (code, err['error']) == (2, 'usage')
+        assert message in err['message']
+
+    def test_a_policy_with_no_app(self, tmp_path, capsys):
+        policy = str(write(tmp_path, head='[protocol]\ntrees = ["_support_tree.game"]\n'))
+        code, _, err = run(capsys, 'see', '--policy', policy, 'station', 's1', 'show')
+        assert (code, err['message']) == (
+            2,
+            "tooled see runs a line of the policy's app, and the policy names no [app]",
+        )
+
+    def test_logged_on_the_tree(self, app, capsys, tmp_path, monkeypatch):
+        log = tmp_path / 'calls.jsonl'
+        monkeypatch.setenv('TOOLED_LOG', str(log))
+        self.line(capsys, app, 'see', 'station', 's1', 'show')
+        line = json.loads(log.read_text())
+        assert {key: line[key] for key in ('verb', 'route', 'operation', 'arguments', 'exit')} == {
+            'verb': 'see',
+            'route': 'tree',
+            'operation': 'StationShow',
+            'arguments': ['station'],
+            'exit': 0,
+        }
+        assert 's1' not in log.read_text()
+
+
 class TestCallLog:
     """With TOOLED_LOG set, each run appends one line: what it did, by name, and how it ended; never a value."""
 

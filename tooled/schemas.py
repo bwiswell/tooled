@@ -14,7 +14,7 @@ Every schema is seared's own (``seared.doc.json_schema`` and ``field_schema``), 
 its effect. A command's listing gives the phrase it's said by, led by its mount's prefix; its ``describe``, its
 phrases and keys, slots, flags, whether it asks first, the contracts it overlaps, its arguments' schema (parsed's,
 closed, the bound slots taken out) and its reply. An interactive command is marked, with the command an agent says
-instead. No verb of this version runs a command, so its ``verbs`` are none.
+instead. A command's verb is its op's: ``see`` for a read, ``do`` for any other.
 
 **``describe`` is layered,** so even a large contract describes in a few kilobytes. By default the reply shows as a
 field list (each top-level field's name, type, doc and constraints), and a request's root union folds to its tag
@@ -74,7 +74,8 @@ def listing(rules: Rules) -> list[dict[str, Any]]:
         effect = operation.effect.value if operation.effect is not None else None
         row: dict[str, Any] = {'name': rules.catalog.label(operation)}
         if isinstance(operation, Command):
-            row.update(route='tree', verbs=[], effect=effect, phrase=phrase(operation), slots=slots)
+            row.update(route='tree', verbs=[op_of(operation).value], effect=effect, phrase=phrase(operation))
+            row['slots'] = slots
             row['summary'] = summary_line(operation.cls)
             if operation.doc.interactive:
                 row.update(interactive=True, instead=instead(operation, rules))
@@ -157,7 +158,7 @@ def describe_command(command: Command, rules: Rules, *, reply: bool = False) -> 
         'summary': summary_line(command.cls),
         'route': 'tree',
         'op': op_of(command).value,
-        'verbs': [],
+        'verbs': [op_of(command).value],
         'effect': command.effect.value if command.effect is not None else None,
         'phrases': [phrase(command, said) for said in (doc.phrase, *doc.extra_phrases)],
         'keys': list(command.keys),

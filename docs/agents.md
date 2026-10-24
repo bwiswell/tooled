@@ -20,6 +20,12 @@ apply to any agent with a shell tool.
   time. Such a rule matches only with the contract right after `invoke`; a command with an option before the
   contract doesn't match, and asks.
 
+  On the tree, the two verbs split reads from everything else, so two rules cover an app: `"Bash(tooled see *)"`
+  allowed, `"Bash(tooled do *)"` left to ask, or allowed a command at a time (`"Bash(tooled do fleet * mine)"`).
+  `see` refuses anything but a read, whatever the policy says, so the first rule holds even if a profile is wrong.
+  tooled's own options go before the line, or in the environment (`TOOLED_POLICY`), so a rule sees the line's
+  words right after the verb.
+
   The policy is the guardrail an agent can't forget; the permission rules are the user's own say on each verb.
 - **Check it first.** `tooled check --connect` says what the policy shows and whether the mesh answers.
 - **Check it in CI, too.** `tooled check --no-resolve --policy agents/player.toml` loads a policy against the
