@@ -174,6 +174,7 @@ class TestHidden:
         with pytest.raises(RefusedError) as exc:
             r.check(move, 'demo/w1/move/ann', fields=['to', 'move_id'])
         assert exc.value.message == "'move_id' is hidden by the policy (deny[0]); leave it out of the request"
+        assert exc.value.path == ('move_id',)
 
     def test_every_one_it_gives_is_named(self, tmp_path, catalog):
         r = rules(tmp_path, catalog, self.ALLOW + '[[deny]]\nops = ["query"]\nfields = ["*"]\n')

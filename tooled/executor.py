@@ -113,7 +113,7 @@ def slot_values(contract: Contract, rules: Rules, given: Mapping[str, str]) -> d
             raise UsageError(msg)
         if name in bound and value != bound[name]:
             msg = f'the policy binds {name!r} to {bound[name]!r}'
-            raise RefusedError(msg)
+            raise RefusedError(msg, path=(name,))
         if not value or ('/' in value and not slots[name].multi) or value.startswith('/') or value.endswith('/'):
             msg = f'slot {name!r} takes one chunk, not {value!r}'
             raise UsageError(msg)
@@ -639,7 +639,7 @@ def build_request(cls: type[Seared], given: Mapping[str, Any], injected: Mapping
     for name in injected:
         if name in given:
             msg = f'{name!r} is injected by the policy; leave it out of the request'
-            raise RefusedError(msg)
+            raise RefusedError(msg, path=(name,))
     try:
         return cls.load({**given, **injected}, unknown='raise')
     except seared.ValidationError as exc:

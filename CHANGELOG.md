@@ -33,11 +33,20 @@ tools rather than a shell.
   the tool says is checked first, each refusal a `validation` error (exit 4) naming the parameter, worded for the
   model: a required one missing, one it doesn't take, a slot or a condition of the wrong type, a value its field
   doesn't list. Any tool the policy shows can be called, not only those an export's `--verbs` kept.
+- **The call log, `TOOLED_LOG`:** set to a path, every run appends one JSON line as it ends: when, the verb, the
+  operation, tool and variant, the names of the arguments, slots and options given, the exit code, the error's kind
+  and path, the bytes on stdout and the seconds taken. It keeps no value and no error message. Every key is on every
+  line, and runs side by side share a file. A log tooled can't write is a note; the run's exit code stands.
 - **Hidden request fields:** a deny rule's `fields`, globs over a request's optional top-level fields, its own or a
   flat union variant's. A hidden field is left out of the tools and `describe`, and a call that gives one is
   refused (exit 3) before the request loads; the rule denies nothing else. A required field can't be hidden: a
   glob passes over it, and a name without a glob that names one is refused at load, as is `fields` on an allow
   rule. With `variants`, only those variants' calls are covered.
+
+### Changed
+
+- **A refused field's `path`:** the policy's refusal of a request field it injects or hides, or of a bound slot
+  given another value, names that field in the error's `path`, as a validation error does.
 
 ## 0.2.4 — 2026-10-22
 

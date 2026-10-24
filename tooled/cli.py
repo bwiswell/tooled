@@ -53,6 +53,10 @@ the size of each part; ``--out FILE`` writes it whole. A failure goes to stderr 
 kind, "message": …, "path": […]}``, and the exit code says which kind (see :mod:`tooled.errors`). A note on
 stderr (``{"note": …}``) says what a read left out, and a library's log line goes there as JSON too (``{"log":
 level, …}``).
+
+**The call log.** With ``TOOLED_LOG`` set to a path, each run appends one JSON line to it when it ends: the verb,
+what it acted on, the names of what was given, the exit code and error kind, the bytes on stdout and the seconds
+taken, and no value (:mod:`tooled.ledger`).
 """
 
 from __future__ import annotations
@@ -74,6 +78,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from .catalog import Catalog, Contract
+    from .ledger import Entry
     from .policy import Policy, Rules
 
 
@@ -82,6 +87,9 @@ _HINT_NAMES = 12
 
 #: A fetch's, a query's and a write's bound, in seconds, when none is given.
 _ASKED = 5.0
+
+#: The verbs, as the parser has them.
+VERBS = ('check', 'operations', 'describe', 'fetch', 'query', 'listen', 'invoke', 'wait', 'tools', 'call')
 
 #: Verbs renamed, refused naming the new one rather than as unknown verbs.
 RENAMED = {
@@ -106,7 +114,9 @@ exit codes:
   6  a result over the size cap
   7  wait: no value met the conditions in time; "last" holds the last one seen
 
-The policy is --policy PATH, else $TOOLED_POLICY, else ./tooled.toml.
+The policy is --policy PATH, else $TOOLED_POLICY, else ./tooled.toml. With
+$TOOLED_LOG set to a path, each run appends one JSON line to it: what ran,
+by name, how it ended, its bytes and seconds, and no value.
 """
 
 
@@ -341,16 +351,43 @@ def main(argv: Sequence[str] | None = None) -> int:
     Returns:
         The exit code.
     """
+    from .ledger import Entry
+
+    given = list(sys.argv[1:] if argv is None else argv)
+    entry = Entry.begin(given, VERBS)
     try:
-        given = sys.argv[1:] if argv is None else argv
         if given and given[0] in RENAMED:
             raise UsageError(RENAMED[given[0]])
         args = build_parser().parse_args(given)
+        args.entry = entry
+        entry.arguments = [slot.partition('=')[0] for slot in getattr(args, 'slots', None) or []]
         _log_as_json()
-        return args.run(args)
+        code = args.run(args)
     except TooledError as exc:
         sys.stderr.write(json.dumps(exc.to_json()) + '\n')
+        entry.end(exc.exit_code, exc)
+        _log_call(entry)
         return exc.exit_code
+    entry.end(code)
+    _log_call(entry)
+    return code
+
+
+def _log_call(entry: Entry) -> None:
+    """Append the run's line to the call log, if there is one; a failure to is a note, not the run's."""
+    from .ledger import append
+
+    note = append(entry)
+    if note:
+        _notes([note])
+
+
+def _entry(args: argparse.Namespace) -> Entry:
+    """The run's call-log entry; a throwaway when a runner is called without :func:`main`."""
+    from .ledger import Entry
+
+    entry = getattr(args, 'entry', None)
+    return entry if entry is not None else Entry()
 
 
 def emit(result: Any, args: argparse.Namespace) -> None:  # any JSON-ready value
@@ -369,6 +406,7 @@ def emit(result: Any, args: argparse.Namespace) -> None:  # any JSON-ready value
     else:
         check_size(text, result, cap=max_bytes(args.max_bytes))
     sys.stdout.write(text + '\n')
+    _entry(args).wrote(text + '\n')
 
 
 def load(given: str | None) -> tuple[Path, Policy, Catalog, Rules]:
@@ -446,9 +484,13 @@ def _tools(args: argparse.Namespace) -> int:
 def _call(args: argparse.Namespace) -> int:
     from . import calls, tools
 
+    entry = _entry(args)
+    entry.tool = args.tool
     *_, rules = load(args.policy)
     tool = tools.find(rules, args.tool)
+    entry.acted_on(rules.catalog.label(tool.contract), variant=tool.variant)
     given = _request(args.args, what='--args') if args.args is not None else {}
+    entry.arguments = list(given)
     mapped = calls.arguments(tool, given, rules)
     slots = [f'{name}={value}' for name, value in mapped.slots.items()]
     run = argparse.Namespace(**vars(args), contract=tool.contract.qualname, slots=slots, timeout=_ASKED, meta=False)
@@ -469,6 +511,7 @@ def _describe(args: argparse.Namespace) -> int:
 
     *_, catalog, rules = load(args.policy)
     contract = catalog.contract(args.operation)
+    _entry(args).acted_on(catalog.label(contract))
     if not rules.visible(contract):
         msg = f'the policy does not show {catalog.label(contract)}'
         raise RefusedError(msg)
@@ -483,7 +526,7 @@ def _fetch(args: argparse.Namespace) -> int:
     from . import executor
 
     _, loaded, catalog, rules = load(args.policy)
-    contract = _readable(catalog, rules, args.contract, 'fetch')
+    contract = _readable(args, catalog, rules, 'fetch')
     _judge(contract, catalog, args)
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
     executor.check_fetch(contract, rules, values)  # before the session: a refusal never waits on the mesh
@@ -500,13 +543,14 @@ def _query(args: argparse.Namespace) -> int:
     from . import executor
 
     path, loaded, catalog, rules = load(args.policy)
-    contract = _readable(catalog, rules, args.contract, 'query')
+    contract = _readable(args, catalog, rules, 'query')
     _judge(contract, catalog, args)
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
     params = _pairs(args.param, 'param')
     request = _request(args.request) if args.request is not None else None
     injected = _injected(path, loaded, contract, rules)
-    executor.prepare(contract, rules, values, request=request, injected=injected)  # before the session, as fetch's
+    call = executor.prepare(contract, rules, values, request=request, injected=injected)  # before the session
+    _entry(args).acted_on(catalog.label(contract), variant=call.variant)
     session = executor.open_session(loaded.mesh)
     try:
         result = executor.query(
@@ -529,13 +573,14 @@ def _invoke(args: argparse.Namespace) -> int:
     from . import executor, policy
 
     path, loaded, catalog, rules = load(args.policy)
-    contract = _readable(catalog, rules, args.contract, 'invoke')
+    contract = _readable(args, catalog, rules, 'invoke')
     _judge(contract, catalog, args)  # the reply's paths, a dry run's too: it checks the command that will be sent
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
     request = _request(args.request) if args.request is not None else None
     injected = _injected(path, loaded, contract, rules)
     generated = [name for name in injected if policy.generated(loaded.inject[name])]
     call = executor.prepare(contract, rules, values, request=request, injected=injected)  # before any session
+    _entry(args).acted_on(catalog.label(contract), variant=call.variant)
     if args.dry_run:
         secrets = [name for name in injected if name not in generated]
         emit(executor.preview(contract, call, hidden=secrets), argparse.Namespace(**{**vars(args), 'select': None}))
@@ -626,13 +671,14 @@ def _refuse(flag: str, parts: Sequence[str], label: str, found: Any) -> NoReturn
     raise UsageError(msg, path=[part for part in parts[: found.at + 1] if part != ITEMS])
 
 
-def _readable(catalog: Catalog, rules: Rules, name: str, verb: str) -> Contract:
-    """The contract ``name`` names, if the policy shows it and ``verb`` acts on it."""
+def _readable(args: argparse.Namespace, catalog: Catalog, rules: Rules, verb: str) -> Contract:
+    """The contract ``args.contract`` names, if the policy shows it and ``verb`` acts on it; the call log notes it."""
     from .errors import RefusedError, UsageError
     from .schemas import verbs
 
-    contract = catalog.contract(name)
+    contract = catalog.contract(args.contract)
     label = catalog.label(contract)
+    _entry(args).acted_on(label)
     if not rules.visible(contract):
         msg = f'the policy does not show {label}'
         raise RefusedError(msg)
@@ -770,7 +816,7 @@ def _subscribe(
     from . import executor
 
     _, loaded, catalog, rules = load(args.policy)
-    contract = _readable(catalog, rules, args.contract, 'listen')
+    contract = _readable(args, catalog, rules, 'listen')
     _judge(contract, catalog, args)
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
 
@@ -802,7 +848,7 @@ def _wait(args: argparse.Namespace) -> int:
     from .errors import TimedOutError
 
     _, loaded, catalog, rules = load(args.policy)
-    contract = _readable(catalog, rules, args.contract, 'wait')
+    contract = _readable(args, catalog, rules, 'wait')
     _judge(contract, catalog, args, until=args.until)
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
 
@@ -912,6 +958,7 @@ class _Lines:
             return
         sys.stdout.write(text + '\n')
         sys.stdout.flush()
+        _entry(self.args).wrote(text + '\n')
 
     def notes(self) -> list[str]:
         """What the writer left out, and the paths that matched nothing."""

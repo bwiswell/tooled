@@ -966,8 +966,8 @@ class TestCall:
             ('wait_station', {'until': {'stock': 'five'}}, (4, 'validation', ['until', 'stock'])),
             ('query_look_reply_ping', {'player': 'ann'}, (4, 'validation', ['station'])),  # the tool requires it
             ('query_look_reply_pong', {'times': 'two'}, (4, 'validation', ['times'])),  # seared's, from the request
-            ('query_look_reply_ping', {'station': 's1', 'token': 't'}, (3, 'refused', None)),  # injected
-            ('fetch_station', {'world': 'w2'}, (3, 'refused', None)),  # bound
+            ('query_look_reply_ping', {'station': 's1', 'token': 't'}, (3, 'refused', ['token'])),  # injected
+            ('fetch_station', {'world': 'w2'}, (3, 'refused', ['world'])),  # bound
         ],
     )
     def test_errors_are_the_verb_s_and_the_tool_s(self, reads, capsys, tool, given, expected):
@@ -1002,6 +1002,122 @@ class TestCall:
     def test_no_arguments_are_none(self, reads, capsys):
         code, out, _ = run(capsys, 'call', 'fetch_station', '--policy', reads)
         assert (code, len(out)) == (0, 2)
+
+
+class TestCallLog:
+    """With TOOLED_LOG set, each run appends one line: what it did, by name, and how it ended; never a value."""
+
+    @pytest.fixture
+    def log(self, tmp_path, monkeypatch):
+        path = tmp_path / 'calls.jsonl'
+        monkeypatch.setenv('TOOLED_LOG', str(path))
+        return path
+
+    @staticmethod
+    def lines(log):
+        return [json.loads(line) for line in log.read_text().splitlines()]
+
+    @staticmethod
+    def part(line, *keys):
+        return {key: line[key] for key in keys}
+
+    def test_a_fetch(self, reads, log, capsys):
+        assert main(['fetch', 'Station', 'station=s2', '--policy', reads]) == 0
+        out = capsys.readouterr().out
+        (line,) = self.lines(log)
+        assert {key: value for key, value in line.items() if key not in {'at', 'seconds'}} == {
+            'verb': 'fetch',
+            'route': 'wire',
+            'operation': 'Station',
+            'tool': None,
+            'variant': None,
+            'arguments': ['station'],
+            'flags': ['--policy'],
+            'exit': 0,
+            'error': None,
+            'path': None,
+            'bytes': len(out.encode()),
+        }
+        assert 's2' not in log.read_text()  # a slot's value is never kept
+
+    def test_a_call(self, reads, log, capsys):
+        given = json.dumps({'player': 'ann', 'station': 's1'})
+        assert main(['call', 'query_look_reply_ping', '--args', given, '--policy', reads]) == 0
+        (line,) = self.lines(log)
+        assert self.part(line, 'verb', 'operation', 'tool', 'variant', 'arguments', 'flags', 'exit') == {
+            'verb': 'call',
+            'operation': 'LookReply',
+            'tool': 'query_look_reply_ping',
+            'variant': 'ping',
+            'arguments': ['player', 'station'],
+            'flags': ['--args', '--policy'],
+            'exit': 0,
+        }
+        assert 'ann' not in log.read_text()
+
+    def test_a_query_s_variant_is_read_from_its_request(self, reads, log, capsys):
+        main(['query', 'LookReply', 'player=ann', '--request', '{"kind": "pong"}', '--policy', reads])
+        assert self.lines(log)[0]['variant'] == 'pong'
+
+    def test_a_refused_call_with_its_kind_and_path(self, reads, log, capsys):
+        assert main(['call', 'wait_station', '--args', '{"until": {"stok": 5}}', '--policy', reads]) == 4
+        (line,) = self.lines(log)
+        assert self.part(line, 'operation', 'tool', 'exit', 'error', 'path', 'bytes') == {
+            'operation': 'Station',
+            'tool': 'wait_station',
+            'exit': 4,
+            'error': 'validation',
+            'path': ['until', 'stok'],
+            'bytes': 0,
+        }
+
+    def test_a_tool_none_has_is_named_as_asked(self, reads, log, capsys):
+        assert main(['call', 'fetch_stations', '--policy', reads]) == 2
+        line = self.lines(log)[0]
+        assert self.part(line, 'tool', 'operation', 'error') == {
+            'tool': 'fetch_stations',
+            'operation': None,
+            'error': 'usage',
+        }
+
+    def test_a_wait_past_its_timeout_keeps_no_last_value(self, reads, log, capsys):
+        main(['wait', 'Station', '--until', 'stock=99', '--timeout', '0.2', '--policy', reads])
+        (line,) = self.lines(log)
+        assert self.part(line, 'exit', 'error') == {'exit': 7, 'error': 'timeout'}
+        assert line['seconds'] >= 0.2
+        assert 'last' not in line
+
+    def test_a_listen_counts_every_line(self, reads, log, capsys):
+        assert main(['listen', 'Station', '--count', '2', '--policy', reads]) == 0
+        assert self.lines(log)[0]['bytes'] == len(capsys.readouterr().out.encode())
+
+    def test_a_verb_tooled_does_not_have(self, log, capsys):
+        assert main(['fetchh', 'Station']) == 2
+        assert self.part(self.lines(log)[0], 'verb', 'exit', 'error') == {'verb': None, 'exit': 2, 'error': 'usage'}
+
+    def test_runs_share_the_file(self, reads, log, capsys):
+        main(['operations', '--policy', reads])
+        main(['describe', 'Station', '--policy', reads])
+        assert [(line['verb'], line['operation']) for line in self.lines(log)] == [
+            ('operations', None),
+            ('describe', 'Station'),
+        ]
+
+    def test_a_log_it_can_not_write_leaves_the_run_alone(self, reads, tmp_path, monkeypatch, capsys):
+        target = tmp_path / 'missing' / 'calls.jsonl'
+        monkeypatch.setenv('TOOLED_LOG', str(target))
+        assert main(['fetch', 'Station', '--policy', reads]) == 0
+        assert lines(capsys.readouterr().err) == [
+            {'note': f'could not write the call log to {target}: No such file or directory'}
+        ]
+
+    def test_its_verbs_are_the_parser_s(self):
+        import argparse
+
+        from tooled.cli import VERBS, build_parser
+
+        (verbs,) = [action for action in build_parser()._actions if isinstance(action, argparse._SubParsersAction)]
+        assert list(verbs.choices) == list(VERBS)
 
 
 class TestOutput:
