@@ -9,10 +9,10 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
-## 0.2.8 — unreleased
+## 0.2.8 — 2026-10-24
 
-**Sessions.** A session holds a policy's world open, in a process of its own, for the calls that name it: many side
-by side, on one policy or several.
+**Sessions.** A session holds a policy's world open, its mesh and its app among it, in a process of its own, for the
+calls that name it: many side by side, on one policy or several, each call printing what it would cold.
 
 ### Added
 
