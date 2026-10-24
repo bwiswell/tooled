@@ -191,9 +191,10 @@ that meets every `--until`; a retained contract already in that state answers at
 ## Sessions
 
 A session holds the policy's world open in a process of its own: the policy as it was loaded, its catalog and
-rules, each value it injects, and the app's session on its state. A call that attaches to it loads and opens none
-of that, so it costs about what starting `tooled` does (a `see` on a small app takes about 0.08 s attached, against
-0.36 s cold). Many sessions run side by side, on one policy or several, each with its own state and injected values.
+rules, each value it injects, the mesh, and the app's session on its state. A call that attaches to it loads and
+opens none of that, so it costs about what starting `tooled` does: a `see` on a small app, or a `fetch` on a
+loopback mesh, takes about 0.08 s attached, against 0.37 s cold. Many sessions run side by side, on one policy or
+several, each with its own state, injected values and mesh.
 
 ```sh
 tooled session start --policy seat.toml --name seat-a        # prints where it is, once it's open
@@ -204,7 +205,7 @@ tooled session run --policy seat.toml -- claude -p "…"       # a session for o
 
 | Verb | What |
 |---|---|
-| `session start [--name N] [--idle D] [--for PID] [--foreground] [--timeout S]` | Opens a session, and prints, once it's ready, where it is and what it holds: `session`, `socket`, `pid`, `policy`, `app`, `idle`, `for`, `log`, and the `seconds` it took to open. One that doesn't open exits as a cold call would (5 for an app's state that won't open, 2 for a policy that won't load), saying why. A name already open is refused; with none, one is made up. `--foreground` holds it in this process instead, for a supervisor (a systemd user unit, a container, a harness that keeps its own processes): it prints the same, then serves until it ends |
+| `session start [--name N] [--idle D] [--for PID] [--foreground] [--timeout S]` | Opens a session, and prints, once it's ready, where it is and what it holds: `session`, `socket`, `pid`, `policy`, `mesh`, `app`, `idle`, `for`, `log`, and the `seconds` it took to open. One that doesn't open exits as a cold call would (5 for a mesh or an app's state that won't open, 2 for a policy that won't load), saying why. A name already open is refused; with none, one is made up. `--foreground` holds it in this process instead, for a supervisor (a systemd user unit, a container, a harness that keeps its own processes): it prints the same, then serves until it ends |
 | `session run [--name N] [--idle D] -- COMMAND …` | Opens a session, runs the command with `$TOOLED_SESSION` naming it, and closes the session when the command ends, exiting with the command's code. The session is tied to `session run`'s own process, so it ends with it however it ends |
 | `session stop [NAME]` | Closes a session (`NAME`, else `$TOOLED_SESSION`), and prints how it ended |
 | `session status [NAME]` | One session's status: `calls`, `in_flight`, `last_call` and `started` beside where it is; or, naming none, every session under the runtime directory, each one that has ended listed once, then cleared |
@@ -215,17 +216,18 @@ tooled session run --policy seat.toml -- claude -p "…"       # a session for o
 (`<name>.json`) and its log (`<name>.log`); a path's are beside it. The directory must be the user's alone (mode
 0700), and the socket and files are made so.
 
-**Attaching.** `operations`, `describe`, `tools`, `call`, `see` and `do` attach when given `--session NAME` (a
-line's verb takes it among tooled's own options, before the line), else `$TOOLED_SESSION`; an empty value names none.
+**Attaching.** Every verb but `check` and `session`'s own attaches when given `--session NAME` (a line's verb takes
+it among tooled's own options, before the line), else `$TOOLED_SESSION`; an empty value names none.
 Nothing else attaches a call: no session is found by its policy or its directory, so two agents never share one by
 accident. `check` reads the file on disk, and never attaches.
 
 - **The same output:** an attached call writes what the call would write cold, byte for byte, and exits as it would.
-  A watch comes line by line, as it would. The first SIGINT or SIGTERM asks the session to stop the call (a watch
-  ends as a signal ends it cold), and a second ends the client at once.
+  A `listen` or a watch comes line by line, as it would. The first SIGINT or SIGTERM asks the session to stop the
+  call (a `listen` or a watch ends as a signal ends it cold, and a `wait` exits 7 with the last value), and a second
+  ends the client at once.
 - **What's the call's:** its options, `--timeout`, the cap (`--max-bytes`, `$TOOLED_MAX_BYTES`), `--out` and `@path`
   (against its working directory), its stdin where it reads it (`--args -`), and `$TOOLED_LOG`.
-- **What's the session's:** the policy, the values it injects and the state, read once at its start, in the
+- **What's the session's:** the policy, the mesh, the values it injects and the state, read once at its start, in the
   environment of what started it. A generated value (`generate = "uuid"`) is still made for each write. A source that
   can't be read keeps the session from starting (exit 2), where a cold call fails only once it needs the value. A
   call naming another policy (`--policy`, or `$TOOLED_POLICY` in its environment) is refused, exit 2. Changing a
@@ -235,13 +237,16 @@ accident. `check` reads the file on disk, and never attaches.
   is held.
 - **Another tooled:** a call from a tooled of another version is refused, exit 2; start the session again with it.
 
-**Inside a session,** calls run side by side, a `listen` or a watch beside the calls an agent makes, each with its
-own streams. The app's session stays open between calls on a loop of its own, so a state's own tasks (a heartbeat)
-go on running, and an app that makes its user present (a game's commander, say) keeps them present while the
-session is open: that's the app's choice, in its `[app] state`. A line is guarded as it is cold: an empty stdin, its
-handlers' output kept apart, and a line past its `--timeout` cancelled (exit 7), the session going on. A handler that
-blocks the loop (a synchronous one, which can't be cancelled) holds every call on the session while it blocks; past a
-line's bound, the session is wedged: each call on it fails (exit 5), and it ends without leaving its state.
+**Inside a session,** calls run side by side, a `listen` or a watch beside the calls an agent makes, each with its own
+streams; the wire's share the one mesh it holds, so a `listen` under a monitor costs the agent no session of its own. A
+session holds its mesh for as long as it's open: zeared's `auto_reconnect` in `[mesh]` keeps it through a router's
+restart, as it keeps any long-lived client. The app's session stays open between calls on a loop of its own, so a
+state's own tasks (a heartbeat) go on running, and an app that makes its user present (a game's commander, say) keeps
+them present while the session is open: that's the app's choice, in its `[app] state`. A line is guarded as it is cold:
+an empty stdin, its handlers' output kept apart, and a line past its `--timeout` cancelled (exit 7), the session going
+on. A handler that blocks the loop (a synchronous one, which can't be cancelled) holds every call on the session while
+it blocks; past a line's bound, the session is wedged: each call on it fails (exit 5), and it ends without leaving its
+state.
 
 **How a session ends,** saying why in its status file:
 - `session stop`, or SIGTERM, SIGINT or SIGHUP;
@@ -251,7 +256,7 @@ line's bound, the session is wedged: each call on it fails (exit 5), and it ends
 - it's wedged.
 
 Its calls in flight are given 5 seconds to end, then stopped as their clients would stop them; the app's session is
-closed, so its state is left; and its socket is removed.
+closed, so its state is left, and then the mesh; and its socket is removed.
 
 **Who can attach:** the same user, by the socket's mode and, where the system tells it, the peer's. A session holds
 what the policy injects (a token, say), so a process that can reach its socket can act as the policy allows without

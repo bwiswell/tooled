@@ -1,9 +1,10 @@
 """Sessions: a policy's world held open in a process of its own, for the calls that name it.
 
 A session (:mod:`tooled.server`) holds, from its start, the policy as it was loaded, its catalog and rules, the
-values it injects, and the app, open on its state. A call that attaches to it loads and opens none of that, so it
-costs about what starting ``tooled`` does. Many sessions run side by side, on one policy or several, each with its
-own state and injected values: a harness exports ``tools`` once, and each agent's calls reach its own session.
+values it injects, the mesh, open, and the app, open on its state. A call that attaches to it loads and opens none
+of that, so it costs about what starting ``tooled`` does. Many sessions run side by side, on one policy or several,
+each with its own state and injected values: a harness exports ``tools`` once, and each agent's calls reach its own
+session.
 
 **Naming one.** A session is named by a name (letters, digits, ``.``, ``_`` and ``-``, up to 64) or by its socket's
 path (a value holding ``/``). A name's socket is ``$XDG_RUNTIME_DIR/tooled/<name>.sock`` (``$TMPDIR/tooled-<uid>/``
@@ -59,8 +60,10 @@ if TYPE_CHECKING:
 #: The environment variable naming the session a call attaches to.
 SESSION_ENV = 'TOOLED_SESSION'
 
-#: The verbs that attach to a session, when one is named.
-ATTACHES = frozenset({'operations', 'describe', 'tools', 'call', 'see', 'do'})
+#: The verbs that attach to a session, when one is named: every one but ``check`` and ``session``'s own.
+ATTACHES = frozenset(
+    {'operations', 'describe', 'fetch', 'query', 'listen', 'invoke', 'wait', 'tools', 'call', 'see', 'do'}
+)
 
 #: A session's idle timeout, in seconds, when it's tied to no process and none is given.
 IDLE = 30 * 60.0
@@ -196,7 +199,8 @@ def attach(given: list[str], handle: str, entry: Entry) -> int:
         'stdin': _stdin_of(given),
     }
     with link, link.makefile('r', encoding='utf-8', newline='\n') as lines, _stopping(link):
-        send(link, request)
+        with contextlib.suppress(OSError):  # closed on us (a refusal, an ending session): what it said is still there
+            send(link, request)
         for line in lines:
             frame = json.loads(line)
             if 'out' in frame:

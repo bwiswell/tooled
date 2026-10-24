@@ -62,7 +62,9 @@ fields = ["ask_id"]
 
 The session tooled opens: zeared's own `SessionConfig`, loaded by zeared, strict too. `mode` and `router` are the
 usual pair for reaching a hub; `connect`, `listen`, `retry` and the rest are as zeared documents them. No flag
-overrides it, so a policy can't be pointed at another mesh from the command line.
+overrides it, so a policy can't be pointed at another mesh from the command line. A cold call opens it for
+itself; a session opens it once and holds it while it's open ([cli.md](cli.md), *Sessions*), where
+`auto_reconnect = true` keeps it through a router's restart.
 
 **A policy of commands alone needs none.** With no `[protocol] packages`, only an app's commands or trees, `[mesh]`
 may be left out: what an app's commands reach is the app's own business. Then no rule may name a wire op (`read`,
@@ -126,8 +128,8 @@ Request fields every request that declares them carries, each from a source:
   echo it. `check` names its source and makes none. A write that carries one is asked once more, with the same
   value, when nothing answers (see [cli.md](cli.md)).
 - **In a session,** each source is read once, as the session starts, in the environment of what started it, and
-  one that can't be read keeps it from starting; a generated value is still made for each write. A token that changes means starting the session again
-  ([cli.md](cli.md), *Sessions*).
+  one that can't be read keeps it from starting; a generated value is still made for each write. A token that
+  changes means starting the session again ([cli.md](cli.md), *Sessions*).
 
 ```toml
 [inject.order_id]               # every request that declares `order_id` carries a fresh one

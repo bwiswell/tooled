@@ -1760,7 +1760,8 @@ class TestSessionNamed:
             (['call', 'see_station_show', '--args', '{}'], 'b', 'b'),
             (['check'], 'b', None),
             (['session', 'stop', 'a'], 'b', None),
-            (['fetch', 'Station'], 'b', None),
+            (['fetch', 'Station'], 'b', 'b'),
+            (['listen', 'Notice', '--session', 'a'], None, 'a'),
             ([], 'b', None),
         ],
     )

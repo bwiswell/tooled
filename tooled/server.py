@@ -4,20 +4,22 @@
 in its own with ``--foreground``.
 
 **What it holds** (:class:`Held`), from its start: the policy as it was loaded, its catalog and rules, each value it
-injects (resolved once, in the environment of what started it; a generated one is still made for each write), and
-the app, its session open on the state the policy builds (:class:`tooled.tree.Held`). A call naming another policy
-is refused.
+injects (resolved once, in the environment of what started it; a generated one is still made for each write), the
+mesh the policy names, open, and the app, its session open on the state the policy builds
+(:class:`tooled.tree.Held`). A call naming another policy is refused.
 
 **How a call runs:** in a thread of its own, with its own streams, directory and variables (:mod:`tooled.attached`),
-through the same command a cold call runs, so its output, its errors and its exit code are a cold call's. A line
-runs on the app's loop, guarded as a cold one is: a handler's output kept apart, its stdin empty, and a line past its
-bound cancelled (exit 7), the session going on. A handler that blocks the loop can't be cancelled: the session is
-wedged, every call on it fails (exit 5), and it ends, its state not left.
+through the same command a cold call runs, so its output, its errors and its exit code are a cold call's. A wire
+verb's runs on the mesh the session holds, side by side with the rest; a listen or a wait ends when its client asks,
+as a signal ends a cold one. A line runs on the app's loop, guarded as a cold one is: a handler's output kept
+apart, its stdin empty, and a line past its bound cancelled (exit 7), the session going on. A handler that blocks
+the loop can't be cancelled: the session is wedged, every call on it fails (exit 5), and it ends, its state not
+left.
 
 **How it ends:** asked to (``session stop``, SIGTERM, SIGINT); when the process it's for ends (``--for``); idle for
 its timeout, with no call in flight; or wedged. Its calls in flight are given a few seconds to end, then stopped as
-their clients would; the app's session is closed, so the state's own goodbye runs; and its status file says how it
-ended, its socket removed.
+their clients would; the app's session is closed, so the state's own goodbye runs, then the mesh; and its status
+file says how it ended, its socket removed.
 
 **Who attaches:** its socket is made the user's alone (0600), in a directory that is; and where the system tells a
 peer's user, a peer that isn't this one's is refused.
@@ -77,6 +79,7 @@ class Held:
         catalog: Its catalog.
         rules: Its rules.
         injected: Each value it injects that isn't generated, as read then.
+        mesh: The mesh it names, open, for one with ``[mesh]``: a zenoh session, or zeared's managed one.
         app: Its app, for one with ``[app]``.
         lines: The app's session, open on its state, for its lines.
     """
@@ -87,6 +90,7 @@ class Held:
     catalog: Catalog
     rules: Rules
     injected: dict[str, str]
+    mesh: Any = None
     app: App | None = None
     lines: Lines | None = None
 
@@ -152,8 +156,8 @@ class Server:
             self.held = self._held()
             self._listen()
         except BaseException:
-            if self.held is not None and self.held.lines is not None:
-                self.held.lines.close(timeout=OPENING)
+            if self.held is not None:
+                _let_go(self.held)
             for end in self._wake:
                 end.close()
             raise
@@ -162,8 +166,8 @@ class Server:
         return {**self.status(), 'seconds': round(time.perf_counter() - began, 3)}
 
     def _held(self) -> Held:
-        """What the session holds: the policy loaded, each source read, and the app's session opened on its state."""
-        from . import policy, tree
+        """What the session holds: the policy loaded, each source read, the mesh opened, and the app's session."""
+        from . import executor, policy, tree
         from .cli import load
 
         path, loaded, catalog, rules = load(str(self.path))
@@ -173,10 +177,16 @@ class Server:
             if not policy.generated(source)
         }
         held = Held(self.where, path, loaded, catalog, rules, injected)
-        if loaded.app is not None:
-            held.app = tree.app_of(loaded)
-            held.lines = tree.Held(held.app, tree.state_of(loaded, path), on_wedged=self._wedged)
-            held.lines.open(timeout=OPENING)
+        try:
+            if loaded.mesh is not None:
+                held.mesh = executor.open_session(loaded.mesh)
+            if loaded.app is not None:
+                held.app = tree.app_of(loaded)
+                held.lines = tree.Held(held.app, tree.state_of(loaded, path), on_wedged=self._wedged)
+                held.lines.open(timeout=OPENING)
+        except BaseException:
+            _let_go(held)
+            raise
         return held
 
     def status(self) -> dict[str, Any]:
@@ -189,6 +199,7 @@ class Server:
             'pid': os.getpid(),
             'socket': str(self.where.socket),
             'policy': str(self.path),
+            'mesh': self.held is not None and self.held.mesh is not None,
             'app': self.held is not None and self.held.lines is not None,
             'started': self._started,
             'last_call': self._last_at,
@@ -312,7 +323,11 @@ class Server:
             if 'control' in request:
                 self._control(link, request)
             elif self.reason is None:
-                self._call(link, reader, request)
+                stops = self._call(link, reader, request)
+                with contextlib.suppress(OSError):  # its end is sent: the client reads it, then the link's end
+                    link.shutdown(socket.SHUT_RDWR)
+                stops.join(ENDING)
+            reader.close()
 
     def _control(self, link: socket.socket, request: Mapping[str, Any]) -> None:
         if request['control'] == 'status':
@@ -324,8 +339,8 @@ class Server:
             self.end('stopped')
             self._done.wait(ENDING * 2 + OPENING * 2)
 
-    def _call(self, link: socket.socket, reader: Any, request: Mapping[str, Any]) -> None:  # reader: the link's lines
-        """Run one call, its output sent back as it's written, and its end."""
+    def _call(self, link: socket.socket, reader: Any, request: Mapping[str, Any]) -> threading.Thread:  # reader: lines
+        """Run one call, its output sent back as it's written, and its end: the thread reading its client's stops."""
         frames = _Frames(link)
         call = attached.Call(
             out=frames.stream('out'),
@@ -339,17 +354,20 @@ class Server:
         frames.gone = call.stop.by
         with self._lock:
             self._calls.add(call)
-        threading.Thread(target=_stops, args=(reader, call), name='tooled stop', daemon=True).start()
+        stops = threading.Thread(target=_stops, args=(reader, call), name='tooled stop', daemon=True)
+        stops.start()
         token = attached.CALL.set(call)
         try:
             frames.send(self._ran(request))
         finally:
             attached.CALL.reset(token)
+            frames.release()
             with self._lock:
                 self._calls.discard(call)
                 self._served += 1
                 self._last, self._last_at = time.monotonic(), _now()
                 self._lock.notify_all()
+        return stops
 
     def _ran(self, request: Mapping[str, Any]) -> dict[str, Any]:
         """The call run as a cold one runs, its errors written as a cold one's are: its end frame."""
@@ -394,6 +412,9 @@ class Server:
                 lines.close(timeout=OPENING)
             except Exception as exc:  # noqa: BLE001 -- the session ends regardless, saying so
                 reason += f"; leaving the app's state failed: {type(exc).__name__}: {exc}"
+        if self.held is not None and self.held.mesh is not None:
+            with contextlib.suppress(Exception):  # closing regardless: zenoh's own error type
+                self.held.mesh.close()
         self.reason = reason
         with self._lock:
             calls = self._served
@@ -436,18 +457,29 @@ class Server:
             part.replace(self.where.status)
 
 
+def _let_go(held: Held) -> None:
+    """Close what ``held`` opened, as far as it got: a session that won't open leaves nothing open."""
+    if held.lines is not None:
+        with contextlib.suppress(Exception):
+            held.lines.close(timeout=OPENING)
+    if held.mesh is not None:
+        with contextlib.suppress(Exception):
+            held.mesh.close()
+
+
 class _Frames:
     """A call's link back to its client: each frame one JSON line, whole, whichever thread writes it."""
 
     def __init__(self, link: socket.socket) -> None:
-        self.link, self.lock = link, threading.Lock()
+        self.link: socket.socket | None = link
+        self.lock = threading.Lock()
         self.lost = False
         self.gone: Any = lambda _signum: None  # told once the client is gone
 
     def send(self, frame: Mapping[str, Any]) -> None:
-        """Send ``frame``; once the client is gone, nothing."""
+        """Send ``frame``; once the client is gone, or the call has ended, nothing."""
         with self.lock:
-            if self.lost:
+            if self.lost or self.link is None:
                 return
             try:
                 send(self.link, frame)
@@ -455,6 +487,11 @@ class _Frames:
                 self.lost = True
         if self.lost:
             self.gone(signal.SIGPIPE)
+
+    def release(self) -> None:
+        """Let go of the link once the call has ended, so what still holds the call (a task's context) holds none."""
+        with self.lock:
+            self.link = None
 
     def stream(self, kind: str) -> _FrameStream:
         """A text stream whose writes are sent as ``kind``'s frames."""

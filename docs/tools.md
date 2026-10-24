@@ -199,7 +199,7 @@ tooled call query_look_reply_ping --args '{"player": "ann", "station": "s1"}' --
 - **In a session:** with `TOOLED_SESSION` in the harness's environment for an agent, each of its calls runs in that
   agent's session, which holds the policy and the app open, and prints what it would cold. The tools themselves
   don't depend on a session: export them once, and hand the same tools to every agent, each with its own session
-  ([cli.md](cli.md), *Sessions*). A wire call opens the mesh for itself in this version, inside the session.
+  ([cli.md](cli.md), *Sessions*). A wire call runs on the mesh the session holds.
 - **Any tool the policy shows,** not only those `--verbs` kept: picking shapes what a harness offers, and the
   policy is the guard. A name the policy shows no tool of is a usage error (exit 2) naming the closest. Only the
   tool called need be one the dialect can say, so a profile that exports with picks calls the same way.

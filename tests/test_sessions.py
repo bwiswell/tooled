@@ -222,6 +222,22 @@ class TestStartAndStop:
         )
 
 
+class TestTheWire:
+    def test_a_session_holds_the_mesh(self, tmp_path, runtime, world):
+        from _support_policy import HEAD as MESH
+
+        body = '[bind]\nworld = "w1"\n\n[[allow]]\nops = ["read"]\nkeys = ["demo/w1/**"]\n'
+        policy = str(write(tmp_path, body, head=MESH.replace('tcp/127.0.0.1:7447', world.endpoint)))
+        cold = tooled('fetch', 'Station', '--policy', policy)
+        code, out, _ = tooled('session', 'start', '--policy', policy, '--name', 'wire')
+        assert (code, json.loads(out)['mesh'], json.loads(out)['app']) == (0, True, False)
+        try:
+            assert tooled('fetch', 'Station', env={'TOOLED_SESSION': 'wire'}) == cold
+            assert cold[0] == 0
+        finally:
+            tooled('session', 'stop', 'wire')
+
+
 class TestRun:
     def test_a_command_in_a_session_of_its_own(self, policy, runtime):
         script = (
