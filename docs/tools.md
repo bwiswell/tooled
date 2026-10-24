@@ -26,6 +26,9 @@ Each tool is one call of one verb:
 | any other queryable | `invoke_…` | its slots, each required (a write reaches one key); its request |
 | retained, or a stream | `wait_…` | its slots, each optional; `until`, its conditions; `timeout` |
 | a stream | `listen_…` | its slots, each optional; `count`, 1 by default; `timeout` |
+| a command that declares `EFFECT = READ` | `see_…` | its arguments, parsed's (*On the tree*, below) |
+| any other command | `do_…` | its arguments; `confirm`, for one that asks first |
+| a chain | `do_…`, once | its shared arguments, and `steps` |
 
 A request with a union at its root becomes **one tool per variant** the policy allows, its tag fixed by the tool:
 `query_look_reply_ping` and `query_look_reply_pong`, but no tool for a `dev-peek` the policy denies. A retained
@@ -57,6 +60,27 @@ for a value whose fields equal every one given:
 ```
 
 `tooled wait`'s dotted paths into nested fields aren't a tool's: a wait on one needs the command.
+
+### On the tree
+
+A command the policy shows is a tool of its op's verb, `see` or `do`, named for it with its mount's prefix
+(`see_relay_status`, `do_station_dock`). Its parameters are its arguments as parsed writes their schema
+(`parsed.doc.json_schema`), already closed, in the dialect:
+
+- **the slots the policy binds** left out;
+- **each name's kind** said in its field's description (`the station's key (a station)`), and the other `x-` keys
+  left out;
+- **`confirm`** for a command that asks before it acts: `true` answers its question yes where the policy allows
+  `confirm`; left out, the question comes back unanswered and nothing is done.
+
+**A chain is one tool,** its steps never their own: its shared arguments, and `steps`, an array of the steps the
+policy shows in order, each a closed object tagged by `step` (`{"step": "jump", "system": "sol"}`), a union a
+constrained decoder holds. **An interactive command is never a tool,** whatever the policy says; a note on stderr
+names the ones it shows, and each one's `INSTEAD` is a tool when the policy shows it.
+
+`tooled call` loads a command's arguments into the command (a chain's into its steps), adds the bound slots, says it
+as a line (`app.render`, in the mount that holds it) and runs it as `tooled see` or `tooled do` runs a line: judged
+by the policy first, then parsed's envelope printed, with its exit code.
 
 ### Picking tools
 
@@ -159,6 +183,9 @@ tooled call query_look_reply_ping --args '{"player": "ann", "station": "s1"}' --
   seared's to judge, and a field the policy injects or hides is refused (exit 3) with the policy's reason. It prints
   what the verb prints, with the verb's exit code: a fetch's values, a query's or a write's replies, the value a
   wait found, or exit 7 with the last one seen.
+- **A command's call** is run as its line: the envelope `see` and `do` print, with their exit codes; a bound slot
+  given another value is refused, and what the command refuses (a step the chain hasn't, a value of the wrong type)
+  is a `validation` error naming it, as `steps[1].system`.
 - **A listen's values come as one JSON list,** once `count` have come or `timeout` is up; a note says when fewer
   came. A fetch, a query and a write wait 5 seconds on the mesh, as the verbs do by default.
 - **A ledger:** with `TOOLED_LOG` set, each call appends a line naming its tool, operation and variant, the names

@@ -21,8 +21,8 @@ Every verb takes `--policy` after the verb (else `$TOOLED_POLICY`, else `./toole
 | `wait CONTRACT [slot=value …] --until PATH=VALUE [--until …]` | a retained contract or a stream | the first value that meets every condition |
 | `see [options] <words…>` | a command that declares `EFFECT = READ` | parsed's envelope for the line (below) |
 | `do [options] <words…>` | any other command | parsed's envelope for the line, a question it asks first among it |
-| `call TOOL [--args JSON]` | any tool the policy shows | what the verb its name begins with prints, a listen's values as one JSON list ([tools.md](tools.md), *Calling a tool*) |
-| `tools [--format openai\|anthropic\|mcp] [--verbs VERBS] [--sizes]` | the policy | the operations it shows as tool definitions for a harness: one for each fetch, query, write, wait or listen, and one for each allowed variant of a request's union ([tools.md](tools.md)); `--verbs fetch,wait:Fleet*` keeps some verbs' tools, or some operations'; with `--sizes`, each one's bytes and estimated tokens |
+| `call TOOL [--args JSON]` | any tool the policy shows | what the verb its name begins with prints, a listen's values as one JSON list, a command's envelope ([tools.md](tools.md), *Calling a tool*) |
+| `tools [--format openai\|anthropic\|mcp] [--verbs VERBS] [--sizes]` | the policy | the operations it shows as tool definitions for a harness: one for each fetch, query, write, wait or listen, and one for each allowed variant of a request's union; one for each command (`see_…`, `do_…`) and chain, but an interactive one ([tools.md](tools.md)); `--verbs fetch,wait:Fleet*` keeps some verbs' tools, or some operations'; with `--sizes`, each one's bytes and estimated tokens |
 
 An operation is anything tooled lists and acts on; each is a contract in this version. An operation, a contract
 included, is its class's name, or `module:Class`. Presence feeds have no verb in this version; `operations` lists

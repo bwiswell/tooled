@@ -36,6 +36,13 @@ lines as it lands, and the entry is dated when that version is released.
   the reply changes, after `--select` and under the cap as `listen`'s lines are, until its count, bound or
   conditions, or SIGINT or SIGTERM, which end it cleanly with exit 0.
 
+- **Commands in `tools` and `call`:** each command the policy shows is a `see_…` or `do_…` tool, its parameters
+  parsed's schema of its arguments in the dialect (bound slots out, a name's kind in its description, `confirm` for
+  one that asks), and a chain is one tool, its `steps` a tagged array of the steps the policy shows. An interactive
+  command is never a tool, and a note names it. `call` loads a command's arguments, says them as a line and runs it
+  as `see` or `do` does. The dialect now holds an `anyOf` of closed objects each tagged by a `const`, which seared's
+  protocols never emit.
+
 ### Changed
 
 - **A command's `verbs`** in `operations` and `describe` are its op's, `see` or `do`, now that they run.

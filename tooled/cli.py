@@ -601,6 +601,9 @@ def _tools(args: argparse.Namespace) -> int:
     untooled = [catalog.label(contract) for contract in tools.untooled(rules)]
     if untooled:
         _notes([f'no tool for a presence feed, which no verb acts on yet: {", ".join(untooled)}'])
+    interactive = [catalog.label(command) for command in tools.interactive(rules)]
+    if interactive:
+        _notes([f'no tool for an interactive command, for a person at a terminal: {", ".join(interactive)}'])
     return 0
 
 
@@ -611,12 +614,14 @@ def _call(args: argparse.Namespace) -> int:
     entry.tool = args.tool
     *_, rules = load(args.policy)
     tool = tools.find(rules, args.tool)
-    entry.acted_on(rules.catalog.label(tool.contract), variant=tool.variant)
+    entry.acted_on(rules.catalog.label(tool.operation), variant=tool.variant, route=_route(tool.verb))
     given = _request(args.args, what='--args') if args.args is not None else {}
     entry.arguments = list(given)
     mapped = calls.arguments(tool, given, rules)
+    if tool.verb in tools.TREE:
+        return _call_line(args, rules, tool, mapped)
     slots = [f'{name}={value}' for name, value in mapped.slots.items()]
-    run = argparse.Namespace(**vars(args), contract=tool.contract.qualname, slots=slots, timeout=_ASKED, meta=False)
+    run = argparse.Namespace(**vars(args), contract=tool.operation.qualname, slots=slots, timeout=_ASKED, meta=False)
     if tool.verb == 'fetch':
         return _fetch(run)
     if tool.verb in {'query', 'invoke'}:
@@ -626,6 +631,34 @@ def _call(args: argparse.Namespace) -> int:
         run.until, run.timeout = list(mapped.until), mapped.timeout
         return _wait(run)
     return _listened(run, count=mapped.count or 1, duration=mapped.timeout or tools.TIMEOUT)
+
+
+def _route(verb: str) -> str:
+    """The route a verb takes."""
+    from .tools import TREE
+
+    return 'tree' if verb in TREE else 'wire'
+
+
+def _call_line(args: argparse.Namespace, rules: Rules, tool: Any, mapped: Any) -> int:  # a Tool; its Arguments
+    """A command's tool call: said as a line, in the mount that holds it, and run as ``see`` or ``do`` runs one."""
+    from parsed import RenderError
+
+    from . import tree
+    from .policy import Op
+
+    app = tree.app_of(rules.policy)
+    command = tool.operation
+    mount = next(m for m in app.mounts if m.under == command.under and m.holds(command.cls))
+    try:
+        line = app.render(mapped.said, mount=mount)
+    except RenderError as exc:
+        msg = f'{tool.name}: {exc}'
+        raise UsageError(msg) from exc
+    if mapped.yes:
+        line += ' --yes'
+    run = argparse.Namespace(**vars(args), line=[line], timeout=_LINE_BOUND)
+    return _line(run, Op.SEE if tool.verb == 'see' else Op.DO)
 
 
 def _see(args: argparse.Namespace) -> int:
@@ -667,7 +700,7 @@ def _line(args: argparse.Namespace, op: Any) -> int:  # a tree op
     entry = _entry(args)
     if judged is not None:
         entry.acted_on(catalog.label(judged.commands[0]), route='tree')
-        entry.arguments = list(judged.given)
+        entry.arguments = entry.arguments or list(judged.given)  # a tool call's are its arguments
     state = tree.state_of(loaded, path)
     bound = tree.bound_of(judged, args.timeout)
     if judged is not None and judged.wait is not None and judged.wait.watch:
