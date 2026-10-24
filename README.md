@@ -31,8 +31,8 @@ refuses two sources for one package); an app whose command trees it reads must p
 uv tool, with the protocol beside it:
 
 ```sh
-uv tool install "git+https://github.com/bwiswell/tooled@v0.2.6" --with <protocol-package>
-tooled --version            # tooled 0.2.6 (seared 0.4.4, zeared 0.4.4, parsed 0.1.7)
+uv tool install "git+https://github.com/bwiswell/tooled@v0.2.7" --with <protocol-package>
+tooled --version            # tooled 0.2.7 (seared 0.4.4, zeared 0.4.4, parsed 0.1.8)
 ```
 
 `--with` takes whatever names the protocol: a path to its checkout, a git URL, or a package name. From a checkout of
@@ -137,13 +137,14 @@ nothing outside the repo is needed.
 
 ## Status
 
-0.2.6 reads and writes a mesh: `check`, `operations`, `describe`, `fetch`, `query`, `listen`, `invoke` (with
+0.2.7 reads and writes a mesh: `check`, `operations`, `describe`, `fetch`, `query`, `listen`, `invoke` (with
 `--dry-run`, generated ids, and one retry after a lost reply) and `wait`, under a strict policy file with bound
 slots, injected fields (from paths that may hold variables) and generated ones, and allow and deny rules over
-ops, operations, keys, union variants and hidden request fields. For a harness, `tools` exports what a policy
-shows as tool definitions, `call` carries out a model's call of one, and `TOOLED_LOG` keeps a line a run. It reads
-an app's parsed command trees beside the contracts, lists and describes them, and guards them with the tree's ops
-(`see`, `do`, `confirm`), one route shown where a command and a contract overlap. `--select` and `--until` paths
-are checked against each contract's schema before the call, and every error, a malformed argument's included, is
-one JSON line on stderr. Not yet: running commands, publishing and unretaining, a long-lived `tooled serve` with
-an MCP face, and per-protocol extensions.
+ops, operations, keys, union variants and hidden request fields. It runs an app's parsed command trees beside the
+contracts: `see` and `do` run a line in the app's session, on a state the policy builds, judged by the tree's ops
+(`see`, `do`, `confirm`) and guarded against a handler waiting on a person; a read waits and watches. For a
+harness, `tools` exports what a policy shows as tool definitions, contracts and commands alike, `call` carries out
+a model's call of one, and `TOOLED_LOG` keeps a line a run. `--select` and `--until` paths are checked before the
+call, and every error, a malformed argument's included, is one JSON line on stderr. Not yet: a session kept open
+across a turn, publishing and unretaining, a long-lived `tooled serve` with an MCP face, and per-protocol
+extensions.

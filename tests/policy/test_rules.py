@@ -494,6 +494,12 @@ class TestTree:
             tree_rules(tmp_path, app_catalog, body)
         assert exc.value.path == ('allow', 0, 'operations', 0)
 
+    def test_an_app_s_state_takes_what_no_request_declares(self, tmp_path, app_catalog):
+        head = HEAD + '\n[app]\nfactory = "_support_app:factory"\nstate = "_support_app:state"\n'
+        Rules(load(write(tmp_path, '[inject.ticket]\nenv = "DEMO_TICKET"\n', head=head)), app_catalog)
+        with pytest.raises(PolicyFileError, match="no request declares, and there's no \\[app\\] state"):
+            tree_rules(tmp_path, app_catalog, '[inject.ticket]\nenv = "DEMO_TICKET"\n')
+
     def test_a_command_s_slot_may_be_bound(self, tmp_path, app_catalog):
         tree_rules(tmp_path, app_catalog, '[bind]\nstation = "s1"\n')  # Station's slot too, and StationShow's
 

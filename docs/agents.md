@@ -20,6 +20,12 @@ apply to any agent with a shell tool.
   time. Such a rule matches only with the contract right after `invoke`; a command with an option before the
   contract doesn't match, and asks.
 
+  On the tree, the two verbs split reads from everything else, so two rules cover an app: `"Bash(tooled see *)"`
+  allowed, `"Bash(tooled do *)"` left to ask, or allowed a command at a time (`"Bash(tooled do fleet * mine)"`).
+  `see` refuses anything but a read, whatever the policy says, so the first rule holds even if a profile is wrong.
+  tooled's own options go before the line, or in the environment (`TOOLED_POLICY`), so a rule sees the line's
+  words right after the verb.
+
   The policy is the guardrail an agent can't forget; the permission rules are the user's own say on each verb.
 - **Check it first.** `tooled check --connect` says what the policy shows and whether the mesh answers.
 - **Check it in CI, too.** `tooled check --no-resolve --policy agents/player.toml` loads a policy against the
@@ -57,6 +63,10 @@ Claude Code's Bash tool waits 2 minutes by default, and 10 at most. A `wait` tha
 as a background command, which tells the session when it ends; or `listen` under Monitor follows the state as it
 changes. `--timeout` is how long tooled itself waits: 30 seconds by default.
 
+On the tree, a read waits with the line's own flags: `tooled see fleets show frigate --until docked=true --timeout
+2m` gives the reply once it meets every condition, or exits 7 with the last one. tooled waits on such a line for its
+own bound and 5 seconds more, whatever `--timeout` it was given before the line.
+
 ## A ledger
 
 Set `TOOLED_LOG` in the session's environment and every tooled run appends one JSON line to it: the verb, the
@@ -69,6 +79,10 @@ no value ([cli.md](cli.md), *The call log*). A file a turn makes it one turn's l
 line reaches the session as it comes; stop the monitor, and tooled ends cleanly on the signal. `--count` and
 `--for` bound it when it runs to completion instead, and `--meta` adds each value's key and whether it was a
 replay of retained state or live.
+
+On the tree, `tooled see <read> --watch` does the same for a read's reply: its envelope now, then one each time
+the reply changes, a line of JSON each, until its `--count`, its `--timeout`, its `--until`, or the monitor's
+stop. It's state, read again every second, not events: for those, `listen` the stream that carries them.
 
 ## Keeping output readable
 

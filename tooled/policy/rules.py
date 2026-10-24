@@ -166,6 +166,20 @@ class Rules:
                 out.append(partner)
         return out
 
+    def not_shown(self, operation: Guarded) -> str:
+        """Why the policy doesn't show ``operation``: a side it takes instead, a deny carried over, or its rules."""
+        label = self.catalog.label(operation)
+        instead = self.instead(operation)
+        if instead:
+            names = ' and '.join(self.catalog.label(other) for other in instead)
+            side = 'tree' if any(isinstance(other, Command) for other in instead) else 'wire'
+            return f'the policy does not show {label}: it goes by the {side} for that, as {names}'
+        carried = self.carried(operation)
+        if carried is not None:
+            index, denied = carried
+            return f'the policy does not show {label}: deny[{index}] denies {self.catalog.label(denied)}, its contract'
+        return f'the policy does not show {label}'
+
     def carried(self, operation: Guarded) -> tuple[int, Contract] | None:
         """The deny that carries over to ``operation``, a command: its index, and the contract it denies."""
         if not isinstance(operation, Command):
@@ -393,9 +407,10 @@ class Rules:
                 msg = f'binds {slot!r}, which no contract or command has as a slot'
                 raise PolicyFileError(msg, path=('bind', slot))
         fields = self.catalog.request_fields
+        app = self.policy.app
         for name in self.policy.inject:
-            if name not in fields:
-                msg = f'injects {name!r}, which no request declares'
+            if name not in fields and (app is None or app.state is None):  # an app's state takes every one
+                msg = f"injects {name!r}, which no request declares, and there's no [app] state to take it"
                 raise PolicyFileError(msg, path=('inject', name))
 
     def _check_rule(self, rule: Rule, where: tuple[str | int, ...]) -> None:

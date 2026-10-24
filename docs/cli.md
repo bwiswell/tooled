@@ -11,7 +11,7 @@ Every verb takes `--policy` after the verb (else `$TOOLED_POLICY`, else `./toole
 
 | Verb | Acts on | Prints |
 |---|---|---|
-| `check [--connect] [--no-resolve]` | the policy | how many operations its protocol and its app's commands come to (with an app or trees, which, and how many commands, and under `unmarked` the shown commands that declare neither `EFFECT` nor `INTERACTIVE`; where commands and contracts overlap, each overlap and the side shown, and the denies that don't carry over), what it shows by op, and how many it hides; under `fixed`, each shown operation's open slots that the allow rules let only one value fill, with that value (bind them, or every call must give it); each injected field's source, the length of one read, and the path it read, variables expanded (a generated one is never made); with `--connect`, whether the session opens; with `--no-resolve`, the same without reading any inject source or expanding any variable |
+| `check [--connect] [--no-resolve]` | the policy | how many operations its protocol and its app's commands come to (with an app or trees, which, and how many commands, and under `unmarked` the shown commands that declare neither `EFFECT` nor `INTERACTIVE`; where commands and contracts overlap, each overlap and the side shown, and the denies that don't carry over), what it shows by op, and how many it hides; under `fixed`, each shown operation's open slots that the allow rules let only one value fill, with that value (bind them, or every call must give it); each injected field's source, the length of one read, and the path it read, variables expanded (a generated one is never made); with `--connect`, whether the mesh's session opens, and the app's on the state it builds (`session`); with `--no-resolve`, the same without reading any inject source or expanding any variable |
 | `operations` | the policy | one line of each operation it shows, contracts and commands: route, then a contract's kind, verbs, effect and topic (bound slots filled), or a command's verbs, effect and phrase; the slots left to give, the summary, and an interactive command's `instead` |
 | `describe OPERATION [--reply \| --variant TAG]` | any shown operation | the operation, layered (below) |
 | `fetch CONTRACT [slot=value …]` | a retained contract | its values, sorted |
@@ -19,8 +19,10 @@ Every verb takes `--policy` after the verb (else `$TOOLED_POLICY`, else `./toole
 | `listen CONTRACT [slot=value …]` | a retained contract or a stream | one JSON line per value as it arrives |
 | `invoke CONTRACT [slot=value …] [--request JSON] [--dry-run]` | a queryable that writes: `EFFECT = WRITE` or `ACTION`, or none declared | its replies, in the order they arrived; with `--dry-run`, what it would send |
 | `wait CONTRACT [slot=value …] --until PATH=VALUE [--until …]` | a retained contract or a stream | the first value that meets every condition |
-| `call TOOL [--args JSON]` | any tool the policy shows | what the verb its name begins with prints, a listen's values as one JSON list ([tools.md](tools.md), *Calling a tool*) |
-| `tools [--format openai\|anthropic\|mcp] [--verbs VERBS] [--sizes]` | the policy | the operations it shows as tool definitions for a harness: one for each fetch, query, write, wait or listen, and one for each allowed variant of a request's union ([tools.md](tools.md)); `--verbs fetch,wait:Fleet*` keeps some verbs' tools, or some operations'; with `--sizes`, each one's bytes and estimated tokens |
+| `see [options] <words…>` | a command that declares `EFFECT = READ` | parsed's envelope for the line (below) |
+| `do [options] <words…>` | any other command | parsed's envelope for the line, a question it asks first among it |
+| `call TOOL [--args JSON]` | any tool the policy shows | what the verb its name begins with prints, a listen's values as one JSON list, a command's envelope ([tools.md](tools.md), *Calling a tool*) |
+| `tools [--format openai\|anthropic\|mcp] [--verbs VERBS] [--sizes]` | the policy | the operations it shows as tool definitions for a harness: one for each fetch, query, write, wait or listen, and one for each allowed variant of a request's union; one for each command (`see_…`, `do_…`) and chain, but an interactive one ([tools.md](tools.md)); `--verbs fetch,wait:Fleet*` keeps some verbs' tools, or some operations'; with `--sizes`, each one's bytes and estimated tokens |
 
 An operation is anything tooled lists and acts on; each is a contract in this version. An operation, a contract
 included, is its class's name, or `module:Class`. Presence feeds have no verb in this version; `operations` lists
@@ -68,7 +70,47 @@ A command's document, beside its `route` (`tree`), op (`see` or `do`) and effect
 - `reply`: its `REPLY` as a field list, or `null` for none; `--reply` gives its whole dump schema. `--variant` is a
   contract's.
 
-No verb of this version runs a command, so a command's `verbs` are none.
+A command's verb is its op's: `see` for a read, `do` for any other.
+
+### `see` and `do`
+
+The tree's verbs run a line of the policy's app (`[app]`, in [policy.md](policy.md)): `see` a read, `do` anything
+else, each verb its op. tooled's own options stand first (`--policy`, `--select`, `--max-bytes`, `--out`,
+`--pretty`, `--timeout`; `--` ends them); from the line's first word on, every word is the line's, a flag among
+them. The words are joined as parsed's own command line joins them: a word with a space quoted, a single argument
+the whole line.
+
+```sh
+tooled see fleets show frigate
+tooled do fleet frigate jump vraelon then dock vraelon-station
+tooled do move "Cla'allis Belt"           # one word: no shell quoting to get wrong past the shell's own
+```
+
+- **The line is judged before it runs,** against the app alone, so a refused line never opens its session. Each of
+  its steps (one, or a chain's, joined by `then`) must be a command the verb runs (`see does not run FleetMine,
+  which is no read; what does: do`), one the policy shows, at a key it allows and can hold.
+- **Asking first:** a command that asks before it acts comes back with its question in `asks`, nothing done (exit
+  0). `--yes` on the line answers it where the policy allows `confirm` at that key; elsewhere the line is refused,
+  saying to leave `--yes` out, since parsed would answer it whatever tooled said.
+- **Then it runs,** in the app's session on the state the policy builds, and prints parsed's envelope: `command`,
+  `line`, `ok`, `done`, `asks`, `met`, `waited`, `reply`, `text` and `error`, under the size cap and `--select`
+  (`--select reply.stock`). The exit code is the envelope's: 0; 2 for a line that doesn't read, with suggestions; 3
+  refused (an `INTERACTIVE` command, with no person at a terminal, naming what to say instead); 4 a value refused;
+  7 a wait past its bound; 1 a handler that failed.
+- **Waits and watches** are the line's, on a read with a `REPLY`: `--until PATH=VALUE` (repeated for several) waits
+  for a reply that meets every condition, and `--timeout 2m` bounds it (30s by default), exit 7 with the last reply
+  past it; `--watch` writes the envelope as a line of JSON now and each time the reply changes, until `--count N`,
+  the bound, its conditions, or SIGINT or SIGTERM (exit 0), each line after `--select` and under the cap, as
+  `listen`'s are. The app's session reads the line again every second; it's state, not events.
+- **Guarded against a person who isn't there:** an app may leave an editor or a viewer unmarked (`INTERACTIVE` is
+  optional), so a line runs with an empty stdin, where a prompt reads nothing and fails at once, and a stdout of its
+  own, where what a handler writes is kept out of the result (a note says how much). A line still running at
+  `--timeout` (30 seconds by default; `30`, `30s`, `5m`) is given up on, exit 7 with `"last": null`. A line that
+  waits on its own (`--until … --timeout 2m`) is given that bound and 5 seconds more, so parsed's own timeout, with
+  its last reply, comes first; a `--watch` with no bound is given none. `tooled check` names, under `unmarked`, the
+  commands a profile might rather deny.
+- **A line that runs nothing,** one that doesn't read or asks for `--help`, isn't judged: parsed answers it. Its
+  help and listings are the app's, and may name commands the policy doesn't show; running one is still refused.
 
 ### `query`
 

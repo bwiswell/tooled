@@ -96,7 +96,23 @@ _HINT_NAMES = 12
 _ASKED = 5.0
 
 #: The verbs, as the parser has them.
-VERBS = ('check', 'operations', 'describe', 'fetch', 'query', 'listen', 'invoke', 'wait', 'tools', 'call')
+VERBS = ('check', 'operations', 'describe', 'fetch', 'query', 'listen', 'invoke', 'wait', 'tools', 'call', 'see', 'do')
+
+#: The verbs that take a line: tooled's own options first, then the line's words, each as the shell gave it.
+LINES = ('see', 'do')
+
+#: tooled's own options a line's verb takes before the line, and whether each takes a value.
+_LINE_OPTIONS = {
+    '--policy': True,
+    '--select': True,
+    '--max-bytes': True,
+    '--out': True,
+    '--pretty': False,
+    '--timeout': True,
+}
+
+#: How long a line's verb waits on its line, in seconds, when none is given: longer for a line that waits itself.
+_LINE_BOUND = 30.0
 
 #: Verbs renamed, refused naming the new one rather than as unknown verbs.
 RENAMED = {
@@ -231,6 +247,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_wait(verbs, [common, saving])
     _add_tools(verbs, [common, saving])
     _add_call(verbs, [common, saving])
+    _add_lines(verbs, [common, saving])
     return parser
 
 
@@ -321,6 +338,30 @@ def _add_tools(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # a
     tools.set_defaults(run=_tools)
 
 
+def _add_lines(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # argparse's subparsers
+    """``see``'s and ``do``'s parsers: tooled's own options, then the line, which :func:`main` splits off first."""
+    for verb, what in (('see', 'a read: a command that declares EFFECT = READ'), ('do', 'any other command')):
+        line = verbs.add_parser(
+            verb,
+            parents=parents,
+            usage=f'tooled {verb} [options] <words…>',
+            help=f"run a line of the app's: {what}",
+            description=(
+                f"Run a line of the policy's app, {what}: tooled's own options first, then the line's words, each as "
+                'the shell gave it, or the whole line as one. The line is judged by the policy before it runs, and '
+                "parsed's envelope printed. --yes on the line answers its questions where the policy allows confirm."
+            ),
+        )
+        line.add_argument(
+            '--timeout',
+            type=_duration,
+            default=_LINE_BOUND,
+            metavar='DURATION',
+            help="how long to wait on the line: 30, 30s, 5m (default 30s; a line's own wait, its bound and 5s)",
+        )
+        line.set_defaults(run=_see if verb == 'see' else _do)
+
+
 def _add_call(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # argparse's subparsers
     """``call``'s parser."""
     call = verbs.add_parser(
@@ -367,7 +408,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if given and given[0] in RENAMED:
             raise UsageError(RENAMED[given[0]])
-        args = build_parser().parse_args(given)
+        head, line = _split_line(given)
+        args = build_parser().parse_args(head)
+        if line is not None:
+            args.line = line
         args.entry = entry
         entry.arguments = [slot.partition('=')[0] for slot in getattr(args, 'slots', None) or []]
         _log_as_json()
@@ -380,6 +424,34 @@ def main(argv: Sequence[str] | None = None) -> int:
     entry.end(code)
     _log_call(entry)
     return code
+
+
+def _split_line(given: list[str]) -> tuple[list[str], list[str] | None]:
+    """For a line's verb, the arguments argparse reads (the verb and tooled's own options) and the line's words.
+
+    tooled's options stand first, before the line's first word; from it on, every word is the line's, a flag
+    among them (``--yes``, ``--until``). ``--`` ends tooled's options, for a line that begins with one of them. For any
+    other verb, the arguments are argparse's whole, and the line ``None``.
+    """
+    if not given or given[0] not in LINES:
+        return given, None
+    head, at = [given[0]], 1
+    while at < len(given):
+        word = given[at]
+        name = word.partition('=')[0]
+        if word == '--':
+            at += 1
+            break
+        if word in {'-h', '--help'} or (name in _LINE_OPTIONS and '=' in word):
+            head.append(word)
+            at += 1
+        elif name in _LINE_OPTIONS:
+            takes = _LINE_OPTIONS[name]
+            head += given[at : at + 1 + takes]
+            at += 1 + takes
+        else:
+            break
+    return head, given[at:]
 
 
 def _log_call(entry: Entry) -> None:
@@ -432,7 +504,6 @@ def load(given: str | None) -> tuple[Path, Policy, Catalog, Rules]:
 
 def _check(args: argparse.Namespace) -> int:
     from . import policy
-    from .executor import open_session
 
     path, loaded, catalog, rules = load(args.policy)
     shown: dict[str, list[str]] = {}
@@ -457,6 +528,7 @@ def _check(args: argparse.Namespace) -> int:
         'mesh': {'mode': mesh.mode.value, 'router': mesh.router, 'connect': list(mesh.connect)} if mesh else None,
         'packages': list(loaded.protocol.packages),
         **({'app': loaded.app.factory} if loaded.app is not None else {}),
+        **({'state': loaded.app.state} if loaded.app is not None and loaded.app.state is not None else {}),
         **({'trees': list(loaded.protocol.trees)} if loaded.protocol.trees else {}),
         **({'commands': len(catalog.commands)} if loaded.app is not None or loaded.protocol.trees else {}),
         **({'unmarked': _unmarked(visible, catalog)} if catalog.commands else {}),
@@ -469,9 +541,7 @@ def _check(args: argparse.Namespace) -> int:
         'inject': inject,
     }
     if args.connect:
-        started = time.perf_counter()
-        open_session(_mesh(loaded)).close()
-        summary['connect'] = {'ok': True, 'seconds': round(time.perf_counter() - started, 3)}
+        _connect(path, loaded, summary)
     emit(summary, args)
     return 0
 
@@ -531,6 +601,9 @@ def _tools(args: argparse.Namespace) -> int:
     untooled = [catalog.label(contract) for contract in tools.untooled(rules)]
     if untooled:
         _notes([f'no tool for a presence feed, which no verb acts on yet: {", ".join(untooled)}'])
+    interactive = [catalog.label(command) for command in tools.interactive(rules)]
+    if interactive:
+        _notes([f'no tool for an interactive command, for a person at a terminal: {", ".join(interactive)}'])
     return 0
 
 
@@ -541,12 +614,14 @@ def _call(args: argparse.Namespace) -> int:
     entry.tool = args.tool
     *_, rules = load(args.policy)
     tool = tools.find(rules, args.tool)
-    entry.acted_on(rules.catalog.label(tool.contract), variant=tool.variant)
+    entry.acted_on(rules.catalog.label(tool.operation), variant=tool.variant, route=_route(tool))
     given = _request(args.args, what='--args') if args.args is not None else {}
     entry.arguments = list(given)
     mapped = calls.arguments(tool, given, rules)
+    if _route(tool) == 'tree':
+        return _call_line(args, rules, tool, mapped)
     slots = [f'{name}={value}' for name, value in mapped.slots.items()]
-    run = argparse.Namespace(**vars(args), contract=tool.contract.qualname, slots=slots, timeout=_ASKED, meta=False)
+    run = argparse.Namespace(**vars(args), contract=tool.operation.qualname, slots=slots, timeout=_ASKED, meta=False)
     if tool.verb == 'fetch':
         return _fetch(run)
     if tool.verb in {'query', 'invoke'}:
@@ -556,6 +631,132 @@ def _call(args: argparse.Namespace) -> int:
         run.until, run.timeout = list(mapped.until), mapped.timeout
         return _wait(run)
     return _listened(run, count=mapped.count or 1, duration=mapped.timeout or tools.TIMEOUT)
+
+
+def _route(tool: Any) -> str:  # a Tool
+    """The route a tool takes: the tree's for a command's, the wire's for a contract's."""
+    from .catalog import Command
+
+    return 'tree' if isinstance(tool.operation, Command) else 'wire'
+
+
+def _call_line(args: argparse.Namespace, rules: Rules, tool: Any, mapped: Any) -> int:  # a Tool; its Arguments
+    """A command's tool call: said as a line, in the mount that holds it, and run as ``see`` or ``do`` runs one."""
+    from parsed import RenderError
+
+    from . import tree
+    from .policy import Op
+
+    app = tree.app_of(rules.policy)
+    command = tool.operation
+    mount = next(m for m in app.mounts if m.under == command.under and m.holds(command.cls))
+    try:
+        line = app.render(mapped.said, mount=mount)
+    except RenderError as exc:
+        msg = f'{tool.name}: {exc}'
+        raise UsageError(msg) from exc
+    if mapped.yes:
+        line += ' --yes'
+    if mapped.until:  # a read's wait: its conditions and its bound, as the line's own flags
+        from parsed.argv import line_of
+
+        words = [word for condition in mapped.until for word in ('--until', condition.text)]
+        line += ' ' + line_of([*words, '--timeout', f'{mapped.timeout:g}s'])
+    run = argparse.Namespace(**vars(args), line=[line], timeout=_LINE_BOUND)
+    return _line(run, Op.DO if tool.verb == 'do' else Op.SEE)
+
+
+def _see(args: argparse.Namespace) -> int:
+    from .policy import Op
+
+    return _line(args, Op.SEE)
+
+
+def _do(args: argparse.Namespace) -> int:
+    from .policy import Op
+
+    return _line(args, Op.DO)
+
+
+def _line(args: argparse.Namespace, op: Any) -> int:  # a tree op
+    """Judge the line by the policy, then run it in the app's session, and print parsed's envelope.
+
+    Its exit code is the envelope's: 0, or its error kind's, as tooled's are (2 a line that doesn't read, 3 refused,
+    4 a value refused, 7 a wait past its bound), and 1 for a handler that fails. A line still running at its bound
+    is given up on, exit 7 (:func:`tooled.tree.ran`).
+    """
+    from parsed.argv import line_of
+
+    from . import tree
+
+    if not args.line:
+        msg = f"tooled {args.verb} takes a line: the words of a command, after tooled's own options"
+        raise UsageError(msg)
+    try:
+        text = line_of(args.line)
+    except Exception as exc:  # parsed's ReadError: a word holding a double quote
+        raise UsageError(str(exc)) from exc
+    path, loaded, catalog, rules = load(args.policy)
+    if loaded.app is None:
+        msg = f"tooled {args.verb} runs a line of the policy's app, and the policy names no [app]"
+        raise UsageError(msg)
+    app = tree.app_of(loaded)
+    judged = tree.judged(app, rules, text, op=op)
+    entry = _entry(args)
+    if judged is not None:
+        entry.acted_on(catalog.label(judged.commands[0]), route='tree')
+        entry.arguments = entry.arguments or list(judged.given)  # a tool call's are its arguments
+    state = tree.state_of(loaded, path)
+    bound = tree.bound_of(judged, args.timeout)
+    if judged is not None and judged.wait is not None and judged.wait.watch:
+        return _watched(args, app, state, text, bound=bound)
+    result, wrote = tree.ran(app, state, text, bound=bound)
+    emit(result.to_json(), args)
+    _notes(_wrote(wrote))
+    return result.code
+
+
+def _watched(args: argparse.Namespace, app: Any, state: Any, text: str, *, bound: float | None) -> int:
+    """A line that watches: each envelope as a line of JSON as it comes, until the watch ends, or a signal.
+
+    Each is written as ``listen`` writes a value, after ``--select``, one over the cap left out and noted. The exit
+    code is the last envelope's, or 0 when a signal stopped it.
+    """
+    import threading
+
+    from . import tree
+
+    args.meta = False
+    line = _Lines(args)
+    stop = threading.Event()
+    with _signalled(stop):
+        last, wrote, ended = tree.watched(
+            app, state, text, each=lambda result: line(result.to_json()), bound=bound, stop=stop
+        )
+    _notes([*line.notes(), *_wrote(wrote)])
+    return last.code if ended and last is not None else 0
+
+
+def _wrote(wrote: str) -> list[str]:
+    """The note for what a line's handlers wrote to stdout, kept out of the result: none, if they wrote nothing."""
+    return [f"the line's handler wrote {len(wrote)} characters to stdout, kept out of the result"] if wrote else []
+
+
+@contextlib.contextmanager
+def _signalled(stop: Any) -> Generator[None]:  # a threading.Event
+    """``stop`` set on SIGINT or SIGTERM while the block runs, on the main thread; elsewhere, the program's own."""
+    import signal
+    import threading
+
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    held = {signum: signal.signal(signum, lambda *_: stop.set()) for signum in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        yield
+    finally:
+        for signum, handler in held.items():
+            signal.signal(signum, handler)
 
 
 def _describe(args: argparse.Namespace) -> int:
@@ -571,7 +772,7 @@ def _describe(args: argparse.Namespace) -> int:
         msg = f'{label} is no operation tooled describes'
         raise UsageError(msg)
     if not rules.visible(operation):
-        raise RefusedError(_not_shown(rules, operation))
+        raise RefusedError(rules.not_shown(operation))
     if isinstance(operation, Command):
         if args.variant is not None:
             msg = f"{label} is a command, whose arguments hold no union's variants: describe it whole"
@@ -667,6 +868,36 @@ def _invoke(args: argparse.Namespace) -> int:
     return 0
 
 
+def _connect(path: Path, loaded: Policy, summary: dict[str, Any]) -> None:
+    """``check --connect``: open the policy's mesh, and its app's session on the state it builds, then close them.
+
+    Raises:
+        UsageError: The policy names neither.
+    """
+    import asyncio
+
+    from .executor import open_session
+    from .tree import app_of, opened, state_of
+
+    if loaded.mesh is None and loaded.app is None:
+        msg = 'the policy names no [mesh] and no [app], so --connect has nothing to open'
+        raise UsageError(msg)
+    if loaded.mesh is not None:
+        started = time.perf_counter()
+        open_session(loaded.mesh).close()
+        summary['connect'] = {'ok': True, 'seconds': round(time.perf_counter() - started, 3)}
+    if loaded.app is not None:
+        app, state = app_of(loaded), state_of(loaded, path)
+
+        async def visit() -> None:
+            async with opened(app, state):
+                pass
+
+        started = time.perf_counter()
+        asyncio.run(visit())
+        summary['session'] = {'ok': True, 'seconds': round(time.perf_counter() - started, 3)}
+
+
 def _mesh(loaded: Policy) -> SessionConfig:
     """The policy's mesh, for a verb that reaches it.
 
@@ -754,27 +985,12 @@ def _readable(args: argparse.Namespace, catalog: Catalog, rules: Rules, verb: st
     label = catalog.label(contract)
     _entry(args).acted_on(label)
     if not rules.visible(contract):
-        raise RefusedError(_not_shown(rules, contract))
+        raise RefusedError(rules.not_shown(contract))
     if verb not in verbs(contract):
         acts = ', '.join(verbs(contract)) or 'nothing in this version of tooled'
         msg = f'{verb} does not act on {label}, a {contract.kind.value} contract; what does: {acts}'
         raise UsageError(msg)
     return contract
-
-
-def _not_shown(rules: Rules, operation: Any) -> str:  # a contract or a command
-    """Why the policy doesn't show ``operation``: a side it takes instead, a deny carried over, or its rules."""
-    label = rules.catalog.label(operation)
-    instead = rules.instead(operation)
-    if instead:
-        names = ' and '.join(rules.catalog.label(other) for other in instead)
-        side = 'tree' if any(other in rules.catalog.commands for other in instead) else 'wire'
-        return f'the policy does not show {label}: it goes by the {side} for that, as {names}'
-    carried = rules.carried(operation)
-    if carried is not None:
-        index, denied = carried
-        return f'the policy does not show {label}: deny[{index}] denies {rules.catalog.label(denied)}, its contract'
-    return f'the policy does not show {label}'
 
 
 def _pairs(items: Sequence[str], what: str) -> dict[str, str]:

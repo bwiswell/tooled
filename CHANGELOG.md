@@ -9,6 +9,51 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
+## 0.2.7 — 2026-10-24
+
+**Command trees, run.** `tooled see` and `tooled do` run a line of the app's in its session, on a state built from
+the policy, judged step by step before it runs and guarded against a person who isn't there; a read waits and
+watches with its own flags. Commands and chains are tools, a read with a reply waits as one, and `call` carries
+each out as its line.
+
+### Added
+
+- **`[app] state = "pkg.module:function"`:** called with the policy's `bound` and `injected` values as keyword
+  arguments, it returns the state the app's session opens on, entered with the session and left after; handlers see
+  it as `ctx.state`. An injected value needn't be a request's field when there's a state to take it. `check` names
+  the state function, and `check --connect` opens the app's session on its state, beside the mesh, and closes it.
+- **`tooled see` and `tooled do`:** a line of the app's, `see` for a read and `do` for any other, after tooled's own
+  options, its words joined as parsed's command line joins them. It's judged before it runs (each step, a chain's
+  too: its verb, what the policy shows, its key), then run in the app's session, and parsed's envelope printed
+  under the cap and `--select`, with the envelope's exit code. A question comes back unanswered; `--yes` answers it
+  where the policy allows `confirm`, and is refused elsewhere. A line that doesn't read, or asks for help, is
+  parsed's to answer.
+- **A guard for unmarked interactive commands:** a line runs with an empty stdin, so a handler that prompts fails at
+  once, and a stdout of its own, its writes kept out of the result and noted. One still running at `--timeout` (30s
+  by default) is given up on, exit 7; a line's own wait is given its bound and 5 seconds more.
+- **Waits and watches on `see`:** a read's `--until` and `--timeout` are the line's, passed to parsed, with tooled
+  waiting the line's bound and 5 seconds more. `--watch` streams the envelope as a line of JSON now and each time
+  the reply changes, after `--select` and under the cap as `listen`'s lines are, until its count, bound or
+  conditions, or SIGINT or SIGTERM, which end it cleanly with exit 0.
+- **Commands in `tools` and `call`:** each command the policy shows is a `see_…` or `do_…` tool, its parameters
+  parsed's schema of its arguments in the dialect (bound slots out, a name's kind in its description, `confirm` for
+  one that asks), and a chain is one tool, its `steps` a tagged array of the steps the policy shows. An interactive
+  command is never a tool, and a note names it. `call` loads a command's arguments, says them as a line and runs it
+  as `see` or `do` does. The dialect now holds an `anyOf` of closed objects each tagged by a `const`, which seared's
+  protocols never emit.
+- **Wait tools on the tree:** a read with a `REPLY` is a `wait_…` tool beside its `see_…`, its `until` typed from
+  the reply's top-level fields as a contract's wait's is, and `timeout`; its call is the line with `--until` and
+  `--timeout`, run as `see` runs one. A condition a line can't say as a string is refused, naming it.
+
+### Changed
+
+- **A command's `verbs`** in `operations` and `describe` are its op's, `see` or `do`, now that they run.
+- **parsed `v0.1.8`,** one patch wide as before: an app whose commands tooled reads must pin the same.
+- **`check --connect`** opens the app's session where there's an `[app]`, so a policy of commands alone may take
+  it; only a policy with neither a mesh nor an app is a usage error.
+- **Breaking,** for a program that imports the package: a `Tool`'s `contract` is its `operation`, a contract or a
+  command, beside `chain`, a chain's base for a chain's tool.
+
 ## 0.2.6 — 2026-10-23
 
 **Command trees, read.** parsed's commands join the catalog beside a protocol's contracts, from an app's mounts or
@@ -25,20 +70,17 @@ for commands alone. `operations` and `describe` show them; running them comes ne
   trees, and counts the commands.
 - **parsed as a dependency,** pinned at `v0.1.7`; `--version` names it beside seared and zeared, since an app whose
   commands tooled reads must pin the same parsed.
-
 - **The policy over commands:** the tree's ops, `see` (a command declaring `EFFECT = READ`), `do` (any other, an
   undeclared one included) and `confirm` (answering yes to a command that asks first, beside its `see` or `do`).
   Their keys are a command's keys, led by its mount's prefix, and `[bind]` narrows a command's slot by its name. A
   call's key is refused when a slot's value holds `/`, `*`, `$`, `?` or `#`, naming the kind whose resolver should
   map it.
   `check` lists the commands a policy shows, by op, and their fixed slots.
-
 - **Routes and overlaps:** a command overlaps a contract when it takes its fields from the contract's request class
   or replies with its class, and a profile shows one side, not both: `[protocol] route` (`tree` by default, or
   `wire`) picks where the rules would show both, and an allow rule naming one side without a glob takes it. The side
   not taken is refused naming the other. A deny that denies a contract wholly by name carries over to its commands;
   `check` lists the overlaps, and the denies by keys that can't carry.
-
 - **Commands listed and described:** `operations` lists commands beside contracts, every row with its `route`
   (`wire` or `tree`) and `effect`, a command's with its phrase, and an interactive one's with the command to say
   instead. `describe` takes a command: its op, phrases and keys, slots, flags, asking first, the contracts it

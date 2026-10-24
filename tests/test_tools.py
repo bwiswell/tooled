@@ -11,7 +11,7 @@ from tooled.catalog import Catalog
 from tooled.errors import PolicyFileError, UsageError
 from tooled.output import as_json
 from tooled.policy import Rules, load
-from tooled.tools import FORMATS, NAME, find, sizes, spec, tools, untooled
+from tooled.tools import FORMATS, NAME, find, interactive, sizes, spec, tools, untooled
 
 POLICY = """
 [bind]
@@ -253,7 +253,7 @@ class TestWhichTools:
         found = exported(tmp_path, catalog)
         assert (found['fetch_station'].verb, found['fetch_station'].variant) == ('fetch', None)
         assert (found['query_look_reply_ping'].verb, found['query_look_reply_ping'].variant) == ('query', 'ping')
-        assert found['invoke_move_result'].contract is catalog.get('MoveResult')
+        assert found['invoke_move_result'].operation is catalog.get('MoveResult')
 
     def test_a_retained_contract_is_fetched_and_waited_on_and_a_stream_listened_to(self, tmp_path, catalog):
         found = exported(tmp_path, catalog)
@@ -567,3 +567,147 @@ class TestSizes:
             'bytes': sum(row['bytes'] for row in out['tools']),
             'tokens': sum(row['tokens'] for row in out['tools']),
         }
+
+
+#: A policy over the chained fixture app: every tree op, a slot bound, the gateway's writes denied by key.
+TREE_POLICY = """
+[protocol]
+
+[app]
+factory = "_support_app:chained"
+
+[bind]
+fleet = "f1"
+
+[[allow]]
+ops = ["see", "do", "confirm"]
+
+[[deny]]
+ops = ["do"]
+keys = ["gateway/**"]
+"""
+
+
+def tree_tools(tmp_path, body=TREE_POLICY):
+    rules = Rules(load(write(tmp_path, head=body)), Catalog.load([], factory='_support_app:chained'))
+    return rules, {tool.name: tool for tool in tools(rules)}
+
+
+class TestCommandTools:
+    def test_one_for_each_command_and_chain_the_policy_shows(self, tmp_path):
+        _, found = tree_tools(tmp_path)
+        assert list(found) == [
+            'do_fleet_mine',
+            'do_orders_fleet_order',
+            'do_player_move',
+            'do_relay_run',
+            'do_station_dock',
+            'see_gateway_status',
+            'see_relay_status',
+            'see_station_show',
+            'wait_station_show',
+        ]  # no step alone, no interactive command, no write the gateway's keys deny; a wait for a read with a reply
+        assert (found['see_station_show'].verb, found['do_orders_fleet_order'].chain.__name__) == ('see', 'FleetOrder')
+
+    def test_parsed_s_schema_in_the_dialect(self, tmp_path):
+        _, found = tree_tools(tmp_path)
+        assert found['see_station_show'].parameters == {
+            'type': 'object',
+            'properties': {'station': {'type': 'string', 'description': "the station's key"}},
+            'required': ['station'],
+            'additionalProperties': False,
+        }
+        assert found['see_station_show'].description == "Show a station: its stock, and why it's closed when it is."
+        assert found['do_fleet_mine'].parameters['properties'] == {}  # its one slot, bound
+
+    def test_asking_first_takes_confirm_and_says_so(self, tmp_path):
+        _, found = tree_tools(tmp_path)
+        dock = found['do_station_dock']
+        assert dock.parameters['properties'] == {
+            'station': {'type': 'string', 'description': "the station's key (a station)"},  # its x-kind, folded
+            'confirm': {
+                'type': 'boolean',
+                'description': 'answer its question yes, where the policy allows; left out, the question comes back, '
+                'nothing done',
+                'default': False,
+            },
+        }
+        assert dock.description.endswith('It may ask before it acts: `confirm` answers yes, where the policy allows.')
+        assert not {key for key in keywords(dock.parameters) if key.startswith('x-')}
+
+    def test_a_chain_is_one_tool_of_the_steps_shown(self, tmp_path):
+        _, found = tree_tools(tmp_path)
+        chain = found['do_orders_fleet_order']
+        steps = chain.parameters['properties']['steps']
+        assert [branch['properties']['step']['const'] for branch in steps['items']['anyOf']] == ['dock', 'jump']
+        assert 'fleet' not in chain.parameters['properties']  # shared, and bound
+        assert chain.description.endswith('Its `steps` go in order, each tagged by `step`: dock, jump.')
+        body = TREE_POLICY + '\n[[deny]]\nops = ["do"]\nkeys = ["orders/fleet/*/dock/*"]\n'
+        _, found = tree_tools(tmp_path, body)
+        steps = found['do_orders_fleet_order'].parameters['properties']['steps']
+        assert [branch['properties']['step']['const'] for branch in steps['items']['anyOf']] == ['jump']
+
+    def test_a_read_with_a_reply_waits(self, tmp_path):
+        _, found = tree_tools(tmp_path)
+        wait = found['wait_station_show']
+        assert (wait.verb, wait.operation.name) == ('wait', 'StationShow')
+        assert list(wait.parameters['properties']) == ['station', 'until', 'timeout']
+        assert wait.parameters['required'] == ['station', 'until']
+        until = wait.parameters['properties']['until']
+        assert (list(until['properties']), until['minProperties']) == (['world', 'station', 'stock', 'closed'], 1)
+        assert until['properties']['stock'] == {'type': 'integer', 'minimum': 0, 'description': 'units in stock'}
+        assert wait.description.endswith(
+            'Waits for a value that meets every condition in `until`, up to `timeout` seconds, and gives it.'
+        )
+        assert 'wait_relay_status' not in found  # a read with no reply has nothing to wait on
+
+    def test_interactive_commands_are_named_not_exported(self, tmp_path):
+        rules, _ = tree_tools(tmp_path)
+        assert [command.name for command in interactive(rules)] == ['StationMap']
+
+    def test_found_by_name(self, tmp_path):
+        rules, found = tree_tools(tmp_path)
+        assert find(rules, 'do_orders_fleet_order') == found['do_orders_fleet_order']
+        assert find(rules, 'see_relay_status').operation.name == 'relay/Status'
+
+    def test_picks_take_the_tree_s_verbs(self, tmp_path):
+        rules, _ = tree_tools(tmp_path)
+        assert [tool.name for tool in tools(rules, ['see:relay/*', 'do:Station*'])] == [
+            'do_station_dock',
+            'see_relay_status',
+        ]
+
+
+class TestTaggedUnions:
+    def test_a_tagged_any_of_is_said(self):
+        from tooled.tools import _Dialect
+
+        node = {
+            'anyOf': [
+                {'type': 'object', 'properties': {'step': {'const': 'a'}}, 'unevaluatedProperties': False},
+                {'type': 'object', 'properties': {'step': {'const': 'b'}, 'to': {'type': 'string', 'x-follows': True}}},
+            ]
+        }
+        assert _Dialect({}, 'X').portable(node, 'steps') == {
+            'anyOf': [
+                {'type': 'object', 'properties': {'step': {'const': 'a'}}, 'additionalProperties': False},
+                {
+                    'type': 'object',
+                    'properties': {'step': {'const': 'b'}, 'to': {'type': 'string'}},  # its x- key left out
+                    'additionalProperties': False,
+                },
+            ]
+        }
+
+    @pytest.mark.parametrize(
+        'node',
+        [
+            {'anyOf': [{'type': 'string'}, {'type': 'integer'}]},  # untagged
+            {'anyOf': [{'type': 'object', 'properties': {'step': {'const': 'a'}}}], 'allOf': [{}]},
+        ],
+    )
+    def test_any_other_union_is_not(self, node):
+        from tooled.tools import _Dialect, _Unsayable
+
+        with pytest.raises(_Unsayable):
+            _Dialect({}, 'X').portable(node, 'steps')

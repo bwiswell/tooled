@@ -266,11 +266,19 @@ An app's command trees: parsed's commands, beside the protocol's contracts.
 | Key | Meaning |
 |---|---|
 | `factory` | `pkg.module:function`: called with nothing, it returns the app (parsed's `App`) whose mounts hold the commands. It's called to read them, so it should be cheap: definitions that import without the app's runtime, handlers by their paths. |
+| `state` | `pkg.module:function`, optional: called with the policy's values as keyword arguments, `bound` (every `[bind]` value, by its slot) and `injected` (every `[inject]` value, by its name, each source read and a generated one made once), it returns the state the app's session opens on. A state that opens and closes, a context manager as a link to a server is, is entered with the session and left after, and handlers see it as `ctx.state`. Without it, the session opens on none. |
 
 ```toml
 [app]
 factory = "demo.client.app:make"
+state = "demo.client.app:state"   # def state(*, bound, injected): a link, the commander's identity
 ```
+
+**The state is the app's:** what it opens, and what presence it holds, are its own business. A value the policy
+injects needn't be any request's field when there's a state to take it. The session knows no terminal, so an
+`INTERACTIVE` command is refused before it runs, naming what to say instead. A state function that can't be found,
+or takes other arguments, is the policy's mistake (exit 2); one that fails, or a state that won't open, is the
+app's (exit 5, as a session that won't open is).
 
 Each mount's commands become operations, led by its prefix: a group mounted at the root names its commands by class
 (`FleetMine`, `demo.client.fleet:FleetMine`), and one mounted under `relay` by its words, slashed (`relay/Run`,
@@ -287,4 +295,4 @@ person who isn't there, so a profile may rather deny it.
 ## Not in this version
 
 `[[keepalive]]` and `[protocol] extension` are refused with the reason: they arrive with `tooled serve` and with
-extensions. So is `[app] state`, which builds what commands run with: it arrives with running them.
+extensions.

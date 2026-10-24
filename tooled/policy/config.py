@@ -35,9 +35,10 @@ fields = ["ask_id"]
 ```
 
 Commands come from parsed's command trees: ``[app] factory = "pkg.module:function"`` names the function returning the
-app whose mounts hold them, each under its mount's prefix; or, for a policy that only describes, ``[protocol] trees``
-names packages read as trees at the root. A policy names one or the other, and at least one of them or a protocol
-package.
+app whose mounts hold them, each under its mount's prefix, and ``[app] state`` the one that builds the state its
+session opens on, from the policy's bound and injected values; or, for a policy that only describes,
+``[protocol] trees`` names packages read as trees at the root. A policy names one or the other, and at least one of
+them or a protocol package.
 
 A rule's ``ops`` say what's done (``read``, ``query``, ``invoke``… on the wire; ``see``, ``do`` and ``confirm`` on the
 tree), and its ``operations`` what it's done to: globs over the names ``tooled operations`` lists. A rule's ops are
@@ -157,10 +158,14 @@ class Protocol(s.Seared):
 
 @s.seared(unknown='raise')
 class AppConfig(s.Seared):
-    """The app whose command trees the policy reads."""
+    """The app whose command trees the policy reads, and the state its session opens on."""
 
     factory: str = s.Str(
         required=True, doc="`pkg.module:function`, called with nothing, returning parsed's App: its mounts' commands"
+    )
+    state: str | None = s.Str(
+        default=None,
+        doc="`pkg.module:function`, given the policy's bound and injected values, returning the app's state",
     )
 
 
@@ -190,9 +195,7 @@ _LATER = {
 _LATER_PROTOCOL = {
     'extension': '`[protocol] extension` arrives with extensions, which this version of tooled does not have',
 }
-_LATER_APP = {
-    'state': '`[app] state` builds the state commands run with, which arrives with running them in tooled 0.2.7',
-}
+_LATER_APP: dict[str, str] = {}
 
 #: What ``[app] factory`` names: a module's dotted name, ``:``, and a name in it (dotted, for an attribute's).
 _FACTORY = re.compile(r'[A-Za-z_]\w*(\.[A-Za-z_]\w*)*:[A-Za-z_]\w*(\.[A-Za-z_]\w*)*')
@@ -288,9 +291,11 @@ def _check_sources(policy: Policy) -> None:
     if app is not None and protocol.trees:
         msg = "`[protocol] trees` is for a policy with no [app]: the app's mounts hold its commands"
         raise PolicyFileError(msg, path=('protocol', 'trees'))
-    if app is not None and not _FACTORY.fullmatch(app.factory):
-        msg = f'`[app] factory` is pkg.module:function, not {app.factory!r}'
-        raise PolicyFileError(msg, path=('app', 'factory'))
+    for key in ('factory', 'state'):
+        target = getattr(app, key) if app is not None else None
+        if target is not None and not _FACTORY.fullmatch(target):
+            msg = f'`[app] {key}` is pkg.module:function, not {target!r}'
+            raise PolicyFileError(msg, path=('app', key))
 
 
 def _check_mesh(policy: Policy) -> None:

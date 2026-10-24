@@ -159,12 +159,8 @@ class TestCheck:
         code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', path)
         assert code == 0
         assert (out['mesh'], out['packages'], out['commands']) == (None, [], 9)
-        code, _, err = run(capsys, 'check', '--connect', '--policy', path)
-        assert (code, err['error'], err['message']) == (
-            2,
-            'usage',
-            'the policy names no [mesh], so nothing it allows reaches one',
-        )
+        code, out, _ = run(capsys, 'check', '--connect', '--policy', path)  # the app's session opens: no mesh needed
+        assert (code, out['session']['ok'], 'connect' in out) == (0, True, False)
 
     def test_overlaps_and_the_denies_that_do_not_carry(self, tmp_path, capsys):
         body = (
@@ -194,6 +190,24 @@ class TestCheck:
         for argv in (['fetch', 'Station'], ['describe', 'Station']):
             code, _, err = run(capsys, *argv, '--policy', path)
             assert (code, err['message']) == (3, expected)
+
+    def test_an_app_s_state_is_named_and_opened_with_connect(self, tmp_path, capsys, monkeypatch):
+        monkeypatch.setenv('DEMO_TICKET', 'tk-ann')
+        head = '[protocol]\n\n[app]\nfactory = "_support_app:factory"\nstate = "_support_app:state"\n'
+        path = str(write(tmp_path, '[inject.ticket]\nenv = "DEMO_TICKET"\n', head=head))
+        code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', path)
+        assert (code, out['state'], 'session' in out) == (0, '_support_app:state', False)
+        code, out, _ = run(capsys, 'check', '--connect', '--policy', path)
+        assert (code, out['session']['ok']) == (0, True)
+        import _support_app
+
+        assert (_support_app.BUILT[-1].injected, _support_app.BUILT[-1].left) == ({'ticket': 'tk-ann'}, True)
+
+    def test_a_state_that_will_not_build(self, tmp_path, capsys):
+        head = '[protocol]\n\n[app]\nfactory = "_support_app:factory"\nstate = "_support_app:broken_state"\n'
+        code, _, err = run(capsys, 'check', '--connect', '--policy', str(write(tmp_path, head=head)))
+        assert (code, err['error']) == (5, 'mesh')
+        assert err['message'].startswith("the app's state would not build")
 
     def test_trees_with_no_app(self, tmp_path, capsys):
         head = HEAD.replace('packages = ["_support_protocol"]\n', 'trees = ["_support_tree.service"]\n')
@@ -1143,6 +1157,248 @@ class TestCommandsListed:
         assert (code, out['unmarked']) == (0, ['FleetMine'])
 
 
+class TestLines:
+    """`see` and `do`: a line of the app's, judged by the policy, run in its session, parsed's envelope printed."""
+
+    @pytest.fixture
+    def app(self, tmp_path):
+        head = '[protocol]\n\n[app]\nfactory = "_support_app:chained"\n'
+        body = '[[allow]]\nops = ["see", "do"]\n\n[[allow]]\nops = ["confirm"]\nkeys = ["dock/vesta"]\n'
+        return str(write(tmp_path, body, head=head))
+
+    def line(self, capsys, policy, verb, *words):
+        return run(capsys, verb, '--policy', policy, *words)
+
+    def test_a_read(self, app, capsys):
+        code, out, err = self.line(capsys, app, 'see', 'station', 's1', 'show')
+        assert (code, err) == (0, None)
+        assert (out['ok'], out['command'], out['reply']) == (
+            True,
+            'station {station} show',
+            {
+                'world': 'w1',
+                'station': 's1',
+                'stock': 5,
+            },
+        )
+
+    def test_a_line_as_one_argument(self, app, capsys):
+        code, out, _ = self.line(capsys, app, 'do', 'fleet f1 mine')
+        assert (code, out['text']) == (0, 'f1 mining')
+
+    def test_a_chain(self, app, capsys):
+        code, out, _ = self.line(capsys, app, 'do', 'orders', 'fleet', 'f1', 'jump', 'sol', 'then', 'dock', 'vesta')
+        assert (code, out['text']) == (0, 'FleetJump then FleetDock')
+
+    def test_a_question_comes_back_unanswered(self, app, capsys):
+        code, out, _ = self.line(capsys, app, 'do', 'dock', 'ceres')
+        assert (code, out['done'], out['asks']) == (0, False, 'Dock at ceres for 10 credits?')
+
+    def test_yes_where_confirm_is_allowed(self, app, capsys):
+        code, out, _ = self.line(capsys, app, 'do', '--yes', 'dock', 'vesta')
+        assert (code, out['done'], out['text']) == (0, True, 'docked at vesta')
+
+    def test_yes_where_it_is_not(self, app, capsys):
+        code, out, err = self.line(capsys, app, 'do', 'dock', 'ceres', '--yes')
+        assert (code, out, err['error']) == (3, None, 'refused')
+        assert err['message'].endswith('leave --yes out, and its question comes back unanswered, nothing done')
+
+    @pytest.mark.parametrize(
+        ('verb', 'words', 'expected'),
+        [
+            ('see', ['fleet', 'f1', 'jump'], (2, 'usage')),  # it doesn't read: parsed's envelope, with suggestions
+            ('see', ['station', 's1', 'map'], (3, 'refused')),  # interactive, with no terminal
+            ('do', ['relay', 'run'], (1, 'handler')),  # its handler fails
+        ],
+    )
+    def test_the_envelope_s_exit_codes(self, app, capsys, verb, words, expected):
+        got, out, _ = self.line(capsys, app, verb, *words)
+        assert (got, out['ok'], out['error']['error']) == (expected[0], False, expected[1])
+
+    def test_the_wrong_verb(self, app, capsys):
+        code, out, err = self.line(capsys, app, 'see', 'fleet', 'f1', 'mine')
+        assert (code, out, err['message']) == (2, None, 'see does not run FleetMine, which is no read; what does: do')
+
+    def test_help_runs_nothing(self, app, capsys):
+        code, out, _ = self.line(capsys, app, 'see', 'station', 's1', 'show', '--help')
+        assert (code, out['done']) == (0, False)
+        assert out['text'].startswith('station <station> show')
+
+    def test_select_and_tooled_s_options_before_the_line(self, app, capsys):
+        code, out, _ = run(capsys, 'see', '--select', 'reply.stock', '--policy', app, 'station', 's1', 'show')
+        assert (code, out) == (0, {'reply': {'stock': 5}})
+
+    def test_a_line_that_begins_like_one_of_tooled_s_options(self, app, capsys):
+        code, out, _ = run(capsys, 'see', '--policy', app, '--', '--help')
+        assert (code, out['done']) == (0, False)  # the line's --help: parsed's listing
+
+    def test_every_word_after_the_first_is_the_line_s(self, app, capsys):
+        code, out, _ = run(capsys, 'see', '--policy', app, 'station', 's1', 'show', '--pretty')
+        assert (code, out['ok'], out['error']['error']) == (2, False, 'usage')  # --pretty is no flag of the line's
+
+    @pytest.mark.parametrize(
+        ('argv', 'message'),
+        [
+            (['see'], "tooled see takes a line: the words of a command, after tooled's own options"),
+            (['do', 'move', 'a"b', 'c'], 'holds a double quote'),
+        ],
+    )
+    def test_usage(self, app, capsys, argv, message):
+        code, _, err = run(capsys, argv[0], '--policy', app, *argv[1:])
+        assert (code, err['error']) == (2, 'usage')
+        assert message in err['message']
+
+    def test_a_policy_with_no_app(self, tmp_path, capsys):
+        policy = str(write(tmp_path, head='[protocol]\ntrees = ["_support_tree.game"]\n'))
+        code, _, err = run(capsys, 'see', '--policy', policy, 'station', 's1', 'show')
+        assert (code, err['message']) == (
+            2,
+            "tooled see runs a line of the policy's app, and the policy names no [app]",
+        )
+
+    @pytest.fixture
+    def desk(self, tmp_path):
+        head = '[protocol]\n\n[app]\nfactory = "_support_app:desk"\n'
+        return str(write(tmp_path, '[[allow]]\nops = ["see", "do"]\n', head=head))
+
+    def test_a_prompt_fails_at_once(self, desk, capsys):
+        started = time.monotonic()
+        code, out, _ = run(capsys, 'do', '--policy', desk, 'note', 'edit')
+        assert time.monotonic() - started < 5
+        assert (code, out['error']['message']) == (1, 'EOFError: EOF when reading a line')
+
+    def test_a_handler_still_waiting_is_given_up_on(self, desk, capsys):
+        import _support_app
+
+        _support_app.RELEASED.clear()
+        try:
+            code, out, err = run(capsys, 'see', '--timeout', '0.3', '--policy', desk, 'screen', 'show')
+        finally:
+            _support_app.RELEASED.set()
+        assert (code, out, err['error'], err['last']) == (7, None, 'timeout', None)
+        assert err['message'].startswith("no result for 'screen show' within 0.3s")
+
+    def test_a_line_that_waits_is_given_its_own_bound(self, app, capsys):
+        argv = [
+            'see',
+            '--timeout',
+            '0.1',
+            '--policy',
+            app,
+            'station',
+            's1',
+            'show',
+            '--until',
+            'stock=99',
+            '--timeout',
+            '1s',
+        ]
+        code, out, err = run(capsys, *argv)  # parsed's own timeout comes first, with its last reply
+        assert (code, err, out['error']['error'], out['reply']['stock']) == (7, None, 'timeout', 5)
+
+    @pytest.fixture
+    def quick(self, monkeypatch):
+        import _support_app
+
+        import tooled.tree
+
+        monkeypatch.setattr(tooled.tree, 'INTERVAL', 0.02)
+        _support_app.TICKS[0] = 0
+
+    def test_a_watch_streams_a_line_each_change(self, desk, quick, capsys):
+        assert main(['see', '--policy', desk, 'clock', 'show', '--watch', '--count', '2']) == 0
+        out, err = capsys.readouterr()
+        assert [json.loads(line)['reply'] for line in out.splitlines()] == [{'tick': 1}, {'tick': 2}]
+        assert err == ''
+
+    def test_a_watch_s_lines_after_select(self, desk, quick, capsys):
+        argv = ['see', '--select', 'reply.tick', '--policy', desk, 'clock', 'show', '--watch', '--count', '2']
+        assert main(argv) == 0
+        assert [json.loads(line) for line in capsys.readouterr().out.splitlines()] == [
+            {'reply': {'tick': 1}},
+            {'reply': {'tick': 2}},
+        ]
+
+    def test_a_wait_until_met(self, desk, quick, capsys):
+        code, out, _ = run(capsys, 'see', '--policy', desk, 'clock', 'show', '--until', 'tick=3', '--timeout', '5s')
+        assert (code, out['met'], out['reply']) == (0, True, {'tick': 3})
+
+    def test_a_signal_ends_a_watch_cleanly(self, desk):
+        env = {**os.environ, 'PYTHONPATH': os.pathsep.join(sys.path)}
+        proc = subprocess.Popen(
+            [sys.executable, '-m', 'tooled', 'see', '--policy', desk, 'clock', 'show', '--watch'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+        )
+        try:
+            got = b''
+            deadline = time.monotonic() + 20
+            while b'\n' not in got and time.monotonic() < deadline:
+                ready, _, _ = select.select([proc.stdout], [], [], 0.05)
+                if ready:
+                    got += os.read(proc.stdout.fileno(), 4096)
+            proc.send_signal(signal.SIGTERM)
+            out, err = proc.communicate(timeout=20)
+        finally:
+            proc.kill()
+        assert proc.returncode == 0, err
+        assert json.loads((got + out).splitlines()[0])['reply'] == {'tick': 1}
+
+    def test_a_command_s_tool_call(self, app, capsys):
+        code, out, _ = run(capsys, 'call', 'see_station_show', '--args', '{"station": "Vesta Ring"}', '--policy', app)
+        assert (code, out['line'], out['reply']['station']) == (0, 'station "Vesta Ring" show', 'Vesta Ring')
+
+    def test_a_chain_s_tool_call(self, app, capsys):
+        given = json.dumps(
+            {'fleet': 'f1', 'steps': [{'step': 'jump', 'system': 'sol'}, {'step': 'dock', 'station': 'vesta'}]}
+        )
+        code, out, _ = run(capsys, 'call', 'do_orders_fleet_order', '--args', given, '--policy', app)
+        assert (code, out['line'], out['text']) == (
+            0,
+            'orders fleet f1 jump sol then dock vesta',
+            'FleetJump then FleetDock',
+        )
+
+    def test_confirm_where_the_policy_allows_it_and_not(self, app, capsys):
+        code, out, _ = run(
+            capsys, 'call', 'do_station_dock', '--args', '{"station": "vesta", "confirm": true}', '--policy', app
+        )
+        assert (code, out['done']) == (0, True)
+        code, out, err = run(
+            capsys, 'call', 'do_station_dock', '--args', '{"station": "ceres", "confirm": true}', '--policy', app
+        )
+        assert (code, out, err['error']) == (3, None, 'refused')
+
+    def test_a_wait_s_tool_call(self, app, capsys):
+        given = '{"station": "s1", "until": {"stock": 5}}'
+        code, out, _ = run(capsys, 'call', 'wait_station_show', '--args', given, '--policy', app)
+        assert (code, out['line'], out['met']) == (0, 'station s1 show --until stock=5 --timeout 30s', True)
+        given = '{"station": "s1", "until": {"closed": "a storm"}, "timeout": 0.2}'
+        code, out, _ = run(capsys, 'call', 'wait_station_show', '--args', given, '--policy', app)
+        assert (code, out['met'], out['error']['error'], out['reply']['stock']) == (7, False, 'timeout', 5)
+
+    def test_tools_name_the_interactive_ones_left_out(self, app, capsys):
+        code, out, err = run(capsys, 'tools', '--policy', app)
+        assert code == 0
+        assert 'see_station_map' not in {tool['function']['name'] for tool in out}
+        assert err == {'note': 'no tool for an interactive command, for a person at a terminal: StationMap'}
+
+    def test_logged_on_the_tree(self, app, capsys, tmp_path, monkeypatch):
+        log = tmp_path / 'calls.jsonl'
+        monkeypatch.setenv('TOOLED_LOG', str(log))
+        self.line(capsys, app, 'see', 'station', 's1', 'show')
+        line = json.loads(log.read_text())
+        assert {key: line[key] for key in ('verb', 'route', 'operation', 'arguments', 'exit')} == {
+            'verb': 'see',
+            'route': 'tree',
+            'operation': 'StationShow',
+            'arguments': ['station'],
+            'exit': 0,
+        }
+        assert 's1' not in log.read_text()
+
+
 class TestCallLog:
     """With TOOLED_LOG set, each run appends one line: what it did, by name, and how it ended; never a value."""
 
@@ -1393,7 +1649,7 @@ class TestCheckWithoutResolving:
         assert code == 2
         assert err == {
             'error': 'policy',
-            'message': "injects 'tokn', which no request declares",
+            'message': "injects 'tokn', which no request declares, and there's no [app] state to take it",
             'path': ['inject', 'tokn'],
         }
 
