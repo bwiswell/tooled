@@ -202,6 +202,71 @@ class TestOperations:
         assert run(capsys, 'operations', '--policy', str(write(tmp_path))) == (0, [], None)
 
 
+class TestTools:
+    def test_prints_each_tool_in_the_form_asked(self, tmp_path, capsys):
+        code, out, err = run(capsys, 'tools', '--format', 'anthropic', '--policy', str(write(tmp_path, POLICY)))
+        assert code == 0
+        assert [tool['name'] for tool in out] == [
+            'fetch_station',
+            'fetch_status',
+            'listen_notice',
+            'listen_trace',
+            'query_look_reply_ping',
+            'query_look_reply_pong',
+            'wait_notice',
+            'wait_station',
+            'wait_status',
+            'wait_trace',
+        ]
+        assert set(out[0]) == {'name', 'description', 'input_schema'}
+        assert err == {'note': 'no tool for a presence feed, which no verb acts on yet: Seen'}
+
+    def test_openai_by_default(self, tmp_path, capsys):
+        _, out, _ = run(capsys, 'tools', '--policy', str(write(tmp_path, POLICY)))
+        assert out[0]['type'] == 'function'
+        assert out[0]['function']['name'] == 'fetch_station'
+
+    def test_verbs_keep_some_tools(self, tmp_path, capsys):
+        policy = str(write(tmp_path, POLICY))
+        _, out, _ = run(capsys, 'tools', '--verbs', 'fetch,wait:Station', '--format', 'mcp', '--policy', policy)
+        assert [tool['name'] for tool in out] == ['fetch_station', 'fetch_status', 'wait_station']
+
+    def test_sizes(self, tmp_path, capsys):
+        argv = [
+            'tools',
+            '--sizes',
+            '--format',
+            'mcp',
+            '--verbs',
+            'fetch,query',
+            '--policy',
+            str(write(tmp_path, POLICY)),
+        ]
+        code, out, _ = run(capsys, *argv)
+        assert code == 0
+        assert out['format'] == 'mcp'
+        assert [row['name'] for row in out['tools']] == [
+            'fetch_station',
+            'fetch_status',
+            'query_look_reply_ping',
+            'query_look_reply_pong',
+        ]
+        assert out['total']['tools'] == 4
+
+    @pytest.mark.parametrize(
+        ('flag', 'given', 'message'),
+        [
+            ('--format', 'xml', "tooled tools: argument --format: invalid choice: 'xml'"),
+            ('--verbs', 'fetch,publish', 'tooled tools: argument --verbs: each is a verb, or verb:GLOB, of fetch'),
+            ('--verbs', 'wait:Statoin', "no operation named 'Statoin'"),
+        ],
+    )
+    def test_a_bad_option_is_a_usage_error(self, tmp_path, capsys, flag, given, message):
+        code, _, err = run(capsys, 'tools', flag, given, '--policy', str(write(tmp_path, POLICY)))
+        assert (code, err['error']) == (2, 'usage')
+        assert err['message'].startswith(message)
+
+
 class TestDescribe:
     def test_one_contract(self, tmp_path, capsys):
         code, out, _ = run(capsys, 'describe', 'LookReply', '--policy', str(write(tmp_path, POLICY)))

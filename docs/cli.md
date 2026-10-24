@@ -19,6 +19,7 @@ Every verb takes `--policy` after the verb (else `$TOOLED_POLICY`, else `./toole
 | `listen CONTRACT [slot=value …]` | a retained contract or a stream | one JSON line per value as it arrives |
 | `invoke CONTRACT [slot=value …] [--request JSON] [--dry-run]` | a queryable that writes: `EFFECT = WRITE` or `ACTION`, or none declared | its replies, in the order they arrived; with `--dry-run`, what it would send |
 | `wait CONTRACT [slot=value …] --until PATH=VALUE [--until …]` | a retained contract or a stream | the first value that meets every condition |
+| `tools [--format openai\|anthropic\|mcp] [--verbs VERBS] [--sizes]` | the policy | the operations it shows as tool definitions for a harness: one for each fetch, query, write, wait or listen, and one for each allowed variant of a request's union ([tools.md](tools.md)); `--verbs fetch,wait:Fleet*` keeps some verbs' tools, or some operations'; with `--sizes`, each one's bytes and estimated tokens |
 
 An operation is anything tooled lists and acts on; each is a contract in this version. An operation, a contract
 included, is its class's name, or `module:Class`. Presence feeds have no verb in this version; `operations` lists

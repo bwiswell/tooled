@@ -9,5 +9,8 @@ anything reaches the mesh.
   and the exit codes.
 - **[policy.md](policy.md)**: the policy file: the mesh, the protocol, bound slots, injected fields, and how
   allow and deny rules decide what's shown and what's allowed.
+- **[tools.md](tools.md)**: `tooled tools`: the operations a policy shows as tool definitions for a harness, its
+  waits and listens among them, in OpenAI's, Anthropic's or MCP's form, in a schema dialect a constrained decoder
+  holds.
 - **[agents.md](agents.md)**: using tooled from Claude Code: permission rules by verb, the write loop and long
   waits, `listen` under Monitor, and keeping output readable.

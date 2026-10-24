@@ -29,6 +29,11 @@ and zeared tooled runs on, since a protocol package tooled reads must pin the sa
   checks it and the policy, then prints the selector and the request, injected secrets as ``"<injected>"``,
   without sending anything.
 
+- ``tools [--format openai|anthropic|mcp] [--verbs VERBS] [--sizes]``: the operations the policy shows as tool
+  definitions, for a harness to hand a model (:mod:`tooled.tools`): one for each fetch, query, write, wait or listen,
+  and one for each allowed variant of a request's union; ``--verbs`` keeps those of some verbs, or of some verbs'
+  operations (``fetch,wait:Fleet*``). ``--sizes`` gives
+  each one's bytes and estimated tokens instead. A presence feed has none, and a note says which.
 - ``wait CONTRACT [slot=value …] --until PATH=VALUE [--until …]``: subscribe as ``listen`` does, until a value
   meets every condition, and print it: a retained contract already in that state answers at once. A path is dotted
   (``numbers.fuel``); a value reads as JSON if it can (``40``, ``true``, ``"30%"``), else as a string (``idle``).
@@ -199,6 +204,7 @@ def build_parser() -> argparse.ArgumentParser:
     listen.set_defaults(run=_listen)
     _add_invoke(verbs, [common, saving])
     _add_wait(verbs, [common, saving])
+    _add_tools(verbs, [common, saving])
     return parser
 
 
@@ -258,6 +264,35 @@ def _add_wait(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # ar
     wait.add_argument('--timeout', type=_seconds, default=30.0, metavar='S', help='seconds to wait (default 30)')
     wait.add_argument('--meta', action='store_true', help="add the value's key, origin and time")
     wait.set_defaults(run=_wait)
+
+
+def _add_tools(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # argparse's subparsers
+    """``tools``'s parser."""
+    from .tools import CALLS, FORMATS
+
+    tools = verbs.add_parser(
+        'tools',
+        parents=parents,
+        help='export the operations the policy shows as tool definitions, for a harness',
+        description=(
+            'The operations the policy shows, as tool definitions a harness hands a model: one for each fetch, query, '
+            "write, wait or listen, and one for each allowed variant of a request's union, in a schema dialect a "
+            'constrained decoder holds. Sorted, and byte-stable.'
+        ),
+    )
+    tools.add_argument('--format', choices=FORMATS, default='openai', help='the form to write them in (default openai)')
+    tools.add_argument(
+        '--verbs',
+        type=_picks,
+        default=CALLS,
+        metavar='VERBS',
+        help=(
+            'only these tools, comma-separated: a verb for all of its, or verb:GLOB for those whose operation the '
+            f'glob matches (wait:Fleet*); default all of {",".join(CALLS)}'
+        ),
+    )
+    tools.add_argument('--sizes', action='store_true', help="each tool's bytes and estimated tokens, not the tools")
+    tools.set_defaults(run=_tools)
 
 
 def version() -> str:
@@ -366,6 +401,18 @@ def _operations(args: argparse.Namespace) -> int:
 
     *_, rules = load(args.policy)
     emit(listing(rules), args)
+    return 0
+
+
+def _tools(args: argparse.Namespace) -> int:
+    from . import tools
+
+    *_, catalog, rules = load(args.policy)
+    found = tools.tools(rules, args.verbs)
+    emit(tools.sizes(found, args.format) if args.sizes else [tools.spec(tool, args.format) for tool in found], args)
+    untooled = [catalog.label(contract) for contract in tools.untooled(rules)]
+    if untooled:
+        _notes([f'no tool for a presence feed, which no verb acts on yet: {", ".join(untooled)}'])
     return 0
 
 
@@ -839,6 +886,17 @@ def _bytes(text: str) -> int:
         msg = f'a cap is a whole number of bytes, zero or more, not {text}'
         raise argparse.ArgumentTypeError(msg)
     return value
+
+
+def _picks(text: str) -> tuple[str, ...]:
+    from .tools import CALLS
+
+    picks = tuple(pick.strip() for pick in text.split(','))
+    unknown = [pick for pick in picks if pick.partition(':')[0] not in CALLS]
+    if unknown:
+        msg = f'each is a verb, or verb:GLOB, of {", ".join(CALLS)}; not {", ".join(map(repr, unknown))}'
+        raise argparse.ArgumentTypeError(msg)
+    return picks
 
 
 def _count(text: str) -> int:
