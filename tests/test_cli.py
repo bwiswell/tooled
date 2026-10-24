@@ -49,9 +49,7 @@ class TestVersion:
         assert version() == f'tooled {tooled.__version__} ({on})'
 
     def test_prints_and_exits_zero(self, capsys):
-        with pytest.raises(SystemExit) as exc:
-            main(['--version'])
-        assert exc.value.code == 0
+        assert main(['--version']) == 0
         assert capsys.readouterr().out == version() + '\n'
 
     def test_python_dash_m_runs_the_same_command(self):
@@ -63,28 +61,29 @@ class TestVersion:
 
 
 class TestUsage:
-    """What argparse refuses is tooled's usage error: one JSON line on stderr, exit 2, no usage text."""
+    """What parsed refuses is tooled's usage error: one JSON line on stderr, exit 2, the usage after the refusal."""
 
     @pytest.mark.parametrize(
         ('argv', 'message'),
         [
-            ([], 'tooled: the following arguments are required: verb'),
-            (['check', '--nope'], 'tooled: unrecognized arguments: --nope'),
-            (['fetch'], 'tooled fetch: the following arguments are required: contract'),
-            (['fetch', 'Station', '--select', 'a..b'], 'tooled fetch: argument --select: --select takes dotted paths'),
-            (['wait', 'Station', '--until', 'nonsense'], 'tooled wait: argument --until: --until is path=value'),
-            (['fetch', 'Station', '--max-bytes', 'x'], 'tooled fetch: argument --max-bytes: a cap is a whole number'),
-            (['listen', 'Notice', '--count', 'x'], 'tooled listen: argument --count: a count is a whole number'),
-            (['query', 'LookReply', '--timeout', 'x'], 'tooled query: argument --timeout: a timeout is a number'),
-            (['query', 'LookReply', '--timeout', 'nan'], 'tooled query: argument --timeout: a timeout is a number'),
-            (['listen', 'Notice', '--for', 'inf'], 'tooled listen: argument --for: a duration is seconds'),
-            (['nope'], "tooled: argument verb: invalid choice: 'nope'"),
-            (['check', '--session', 'seat-a'], 'tooled: unrecognized arguments: --session seat-a'),
-            (['session'], 'tooled session: the following arguments are required: action'),
-            (['session', 'start', '--idle', 'soon'], 'tooled session start: argument --idle: a duration is seconds'),
-            (['session', 'start', '--for', 'x'], 'tooled session start: argument --for: no process x is running'),
-            (['session', 'start', '--for', '0'], 'tooled session start: argument --for: no process 0 is running'),
-            (['session', 'stop', 'a', 'b'], 'tooled: unrecognized arguments: b'),
+            ([], 'tooled takes a verb, then its words: tooled --help lists them'),
+            (['check', '--nope'], 'no command takes --nope'),
+            (['fetch'], 'fetch: which contract? `fetch <contract> [<slots> …]'),
+            (['fetch', 'Station', '--select', 'a..b'], '--select: --select takes dotted paths'),
+            (['wait', 'Station', '--until', 'nonsense'], '--until: --until is path=value'),
+            (['fetch', 'Station', '--max-bytes', 'x'], '--max-bytes: a cap is a whole number zero or more, not x'),
+            (['listen', 'Notice', '--count', 'x'], '--count: a count is a whole number above zero, not x'),
+            (['query', 'LookReply', '--timeout', 'x'], '--timeout: a timeout is a number of seconds above zero, not x'),
+            (['query', 'LookReply', '--timeout', 'nan'], '--timeout: a timeout is a number of seconds above zero'),
+            (['listen', 'Notice', '--for', 'inf'], '--for: a duration is seconds above zero, or with s, m or h'),
+            (['nope'], "no command 'nope'"),
+            (['check', '--session', 'seat-a'], 'check takes no --session'),
+            (['fetch', 'Station', '--yes'], 'tooled fetch takes no --yes'),
+            (['session'], 'session: then what? start | run | stop | status'),
+            (['session', 'start', '--idle', 'soon'], '--idle: a duration is seconds above zero'),
+            (['session', 'start', '--for', 'x'], '--for: no process x is running'),
+            (['session', 'start', '--for', '0'], '--for: no process 0 is running'),
+            (['session', 'stop', 'a', 'b'], "session stop a: 'b' is left over"),
         ],
     )
     def test_is_one_json_line(self, capsys, argv, message):
@@ -92,7 +91,6 @@ class TestUsage:
         assert (code, out) == (2, None)
         assert err['error'] == 'usage'
         assert err['message'].startswith(message)
-        assert 'usage:' not in err['message']
 
     @pytest.mark.parametrize('argv', [['contracts'], ['contracts', '--policy', 'tooled.toml', '--pretty']])
     def test_a_renamed_verb_names_its_new_name(self, capsys, argv):
@@ -101,12 +99,18 @@ class TestUsage:
         assert err['error'] == 'usage'
         assert err['message'] == '`tooled contracts` was renamed `tooled operations` in tooled 0.2.4'
 
-    def test_help_still_prints_and_exits_zero(self, capsys):
-        with pytest.raises(SystemExit) as exc:
-            main(['fetch', '--help'])
-        assert exc.value.code == 0
+    @pytest.mark.parametrize('argv', [['fetch', '--help'], ['fetch', '-h'], ['--help', 'fetch'], ['fetch', 'X', '-h']])
+    def test_help_prints_and_exits_zero(self, capsys, argv):
+        assert main(argv) == 0
         out, err = capsys.readouterr()
-        assert out.startswith('usage: tooled fetch')
+        assert out.startswith('fetch <contract> [<slots> …] [--policy <path>]')
+        assert err == ''
+
+    def test_the_program_s_help_lists_the_verbs(self, capsys):
+        assert main(['--help']) == 0
+        out, err = capsys.readouterr()
+        assert out.startswith('Typed, policy-guarded access to a zeared mesh, for agents and people.')
+        assert "\n  fetch       Read a retained contract's values.\n" in out
         assert err == ''
 
 
@@ -365,8 +369,8 @@ class TestTools:
     @pytest.mark.parametrize(
         ('flag', 'given', 'message'),
         [
-            ('--format', 'xml', "tooled tools: argument --format: invalid choice: 'xml'"),
-            ('--verbs', 'fetch,publish', 'tooled tools: argument --verbs: each is a verb, or verb:GLOB, of fetch'),
+            ('--format', 'xml', "--format: 'xml' is no form tooled writes: openai, anthropic, mcp"),
+            ('--verbs', 'fetch,publish', '--verbs: each is a verb, or verb:GLOB, of fetch'),
             ('--verbs', 'wait:Statoin', "no operation named 'Statoin'"),
         ],
     )
@@ -890,12 +894,6 @@ class TestListen:
         assert codes == [0]
         assert len(capsys.readouterr().out.splitlines()) == 1
 
-    @pytest.mark.parametrize(('text', 'seconds'), [('30', 30.0), ('30s', 30.0), ('1.5m', 90.0), ('1h', 3600.0)])
-    def test_durations(self, text, seconds):
-        from tooled.cli import _duration
-
-        assert _duration(text) == seconds
-
     def test_a_signal_ends_it_cleanly_mid_stream(self, reads, world):
         import _support_protocol as demo
 
@@ -976,7 +974,7 @@ class TestWait:
     @pytest.mark.parametrize(
         ('argv', 'message'),
         [
-            (['Station'], 'the following arguments are required: --until'),
+            (['Station'], 'wait Station needs --until'),
             (['Station', '--until', 'stock'], '--until is path=value'),
         ],
     )
@@ -984,11 +982,6 @@ class TestWait:
         code, _, err = run(capsys, 'wait', *argv, '--policy', reads)
         assert (code, err['error']) == (2, 'usage')
         assert message in err['message']
-
-    def test_the_default_timeout_is_thirty_seconds(self):
-        from tooled.cli import build_parser
-
-        assert build_parser().parse_args(['wait', 'Station', '--until', 'stock=1']).timeout == 30.0
 
     def test_sigterm_ends_it_as_not_met(self, reads, world):
         env = {**os.environ, 'PYTHONPATH': os.pathsep.join(sys.path)}
@@ -1245,14 +1238,18 @@ class TestLines:
     @pytest.mark.parametrize(
         ('argv', 'message'),
         [
-            (['see'], "tooled see takes a line: the words of a command, after tooled's own options"),
-            (['do', 'move', 'a"b', 'c'], 'holds a double quote'),
+            (['see'], 'see: which line?'),
+            (['see', ''], "tooled see takes a line: the words of a command, after tooled's own options"),
         ],
     )
     def test_usage(self, app, capsys, argv, message):
         code, _, err = run(capsys, argv[0], '--policy', app, *argv[1:])
         assert (code, err['error']) == (2, 'usage')
         assert message in err['message']
+
+    def test_a_word_holding_a_double_quote_reaches_the_line_as_given(self, app, capsys):
+        code, out, _ = self.line(capsys, app, 'see', 'station', 'a"b', 'show')
+        assert (code, out['line'], out['reply']['station']) == (0, 'station a\\"b show', 'a"b')
 
     def test_a_policy_with_no_app(self, tmp_path, capsys):
         policy = str(write(tmp_path, head='[protocol]\ntrees = ["_support_tree.game"]\n'))
@@ -1513,14 +1510,6 @@ class TestCallLog:
             {'note': f'could not write the call log to {target}: No such file or directory'}
         ]
 
-    def test_its_verbs_are_the_parser_s(self):
-        import argparse
-
-        from tooled.cli import VERBS, build_parser
-
-        (verbs,) = [action for action in build_parser()._actions if isinstance(action, argparse._SubParsersAction)]
-        assert list(verbs.choices) == list(VERBS)
-
 
 class TestOutput:
     def test_select_keeps_parts_of_each_reply(self, reads, capsys):
@@ -1584,7 +1573,8 @@ class TestDescribeLayers:
     def test_variant_and_reply_are_one_or_the_other(self, tmp_path, capsys):
         policy = str(write(tmp_path, POLICY))
         code, _, err = run(capsys, 'describe', 'LookReply', '--variant', 'ping', '--reply', '--policy', policy)
-        assert (code, err['message']) == (2, 'tooled describe: argument --reply: not allowed with argument --variant')
+        assert (code, err['error']) == (2, 'usage')
+        assert err['message'].startswith('tooled describe takes --variant or --reply, not both')
 
 
 class TestListenOutput:
@@ -1624,16 +1614,6 @@ class TestListenOutput:
             [{'station': 's2'}, {'station': 's1'}],
         )
         assert err == ''
-
-
-def test_the_help_names_every_exit_code(capsys):
-    from tooled.cli import EPILOG
-    from tooled.errors import TooledError
-
-    codes = {cls.exit_code for cls in TooledError.__subclasses__()}
-    assert codes == {2, 3, 4, 5, 6, 7}
-    for code in (0, *codes):
-        assert f'\n  {code}  ' in EPILOG
 
 
 class TestCheckWithoutResolving:
@@ -1778,6 +1758,5 @@ class TestSessionNamed:
         from tooled.sessions import ATTACHES
 
         for verb in sorted(ATTACHES):
-            with pytest.raises(SystemExit):
-                main([verb, '--help'])
-            assert '--session NAME' in capsys.readouterr().out, verb
+            assert main([verb, '--help']) == 0
+            assert '--session <session>' in capsys.readouterr().out, verb

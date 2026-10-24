@@ -169,8 +169,8 @@ wheels = [
 
 [[package]]
 name = "parsed"
-version = "0.2.0"
-source = { git = "https://github.com/bwiswell/parsed?tag=v0.2.0#ad9936a5a9a0647c7ced5c1c468d8d2730e71c5f" }
+version = "0.2.2"
+source = { git = "https://github.com/bwiswell/parsed?tag=v0.2.2#47626282f87098848858efb41147e908aa92b13c" }
 dependencies = [
     { name = "seared" },
 ]
@@ -406,7 +406,7 @@ wheels = [
 
 [[package]]
 name = "tooled"
-version = "0.2.9"
+version = "0.2.10"
 source = { editable = "." }
 dependencies = [
     { name = "parsed" },
@@ -427,7 +427,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "parsed", git = "https://github.com/bwiswell/parsed?tag=v0.2.0" },
+    { name = "parsed", git = "https://github.com/bwiswell/parsed?tag=v0.2.2" },
     { name = "seared", git = "https://github.com/bwiswell/seared?tag=v0.4.4" },
     { name = "zeared", git = "https://github.com/bwiswell/zeared?tag=v0.4.4" },
 ]

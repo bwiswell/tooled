@@ -216,10 +216,7 @@ class TestStartAndStop:
 
     def test_a_process_that_is_not_running(self, policy, runtime):
         code, _, err = tooled('session', 'start', '--policy', policy, '--for', '999999999')
-        assert (code, json.loads(err)['message']) == (
-            2,
-            'tooled session start: argument --for: no process 999999999 is running',
-        )
+        assert (code, json.loads(err)['message']) == (2, '--for: no process 999999999 is running')
 
 
 class TestTheWire:
@@ -255,10 +252,7 @@ class TestRun:
 
     def test_no_command(self, policy, runtime):
         code, _, err = tooled('session', 'run', '--policy', policy)
-        assert (code, json.loads(err)['message']) == (
-            2,
-            'tooled session run takes a command, after --: tooled session run -- COMMAND …',
-        )
+        assert (code, json.loads(err)['message'].startswith('session run: which command?')) == (2, True)
 
     def test_a_command_that_can_not_run(self, policy, runtime):
         code, _, err = tooled('session', 'run', '--policy', policy, '--name', 'bad', '--', '/nowhere/at/all')

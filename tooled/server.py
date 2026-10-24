@@ -385,7 +385,7 @@ class Server:
                 code = failed(UsageError(msg), entry)
             else:
                 code = cli.ran(argv, entry)
-        except SystemExit as exc:  # --help, --version: cut short, as a cold run is
+        except SystemExit as exc:  # a runner that exits: cut short, as a cold run is
             return {'end': _exit_code(exc.code), 'cut': True}
         except attached.Stopped as exc:
             return {'end': 128 + exc.signum, 'cut': True}
