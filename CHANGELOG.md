@@ -9,10 +9,10 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
-## 0.2.9 — unreleased
+## 0.2.9 — 2026-10-24
 
 **Tools over MCP.** `tooled serve` hands a harness the policy's tools over MCP, each call carried out in a session it
-shares with the agent's command line.
+shares with the agent's command line; and tooled moves to parsed's first real version, `v0.2.0`.
 
 ### Added
 
