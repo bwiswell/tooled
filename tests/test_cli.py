@@ -159,12 +159,8 @@ class TestCheck:
         code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', path)
         assert code == 0
         assert (out['mesh'], out['packages'], out['commands']) == (None, [], 9)
-        code, _, err = run(capsys, 'check', '--connect', '--policy', path)
-        assert (code, err['error'], err['message']) == (
-            2,
-            'usage',
-            'the policy names no [mesh], so nothing it allows reaches one',
-        )
+        code, out, _ = run(capsys, 'check', '--connect', '--policy', path)  # the app's session opens: no mesh needed
+        assert (code, out['session']['ok'], 'connect' in out) == (0, True, False)
 
     def test_overlaps_and_the_denies_that_do_not_carry(self, tmp_path, capsys):
         body = (
@@ -194,6 +190,24 @@ class TestCheck:
         for argv in (['fetch', 'Station'], ['describe', 'Station']):
             code, _, err = run(capsys, *argv, '--policy', path)
             assert (code, err['message']) == (3, expected)
+
+    def test_an_app_s_state_is_named_and_opened_with_connect(self, tmp_path, capsys, monkeypatch):
+        monkeypatch.setenv('DEMO_TICKET', 'tk-ann')
+        head = '[protocol]\n\n[app]\nfactory = "_support_app:factory"\nstate = "_support_app:state"\n'
+        path = str(write(tmp_path, '[inject.ticket]\nenv = "DEMO_TICKET"\n', head=head))
+        code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', path)
+        assert (code, out['state'], 'session' in out) == (0, '_support_app:state', False)
+        code, out, _ = run(capsys, 'check', '--connect', '--policy', path)
+        assert (code, out['session']['ok']) == (0, True)
+        import _support_app
+
+        assert (_support_app.BUILT[-1].injected, _support_app.BUILT[-1].left) == ({'ticket': 'tk-ann'}, True)
+
+    def test_a_state_that_will_not_build(self, tmp_path, capsys):
+        head = '[protocol]\n\n[app]\nfactory = "_support_app:factory"\nstate = "_support_app:broken_state"\n'
+        code, _, err = run(capsys, 'check', '--connect', '--policy', str(write(tmp_path, head=head)))
+        assert (code, err['error']) == (5, 'mesh')
+        assert err['message'].startswith("the app's state would not build")
 
     def test_trees_with_no_app(self, tmp_path, capsys):
         head = HEAD.replace('packages = ["_support_protocol"]\n', 'trees = ["_support_tree.service"]\n')
@@ -1393,7 +1407,7 @@ class TestCheckWithoutResolving:
         assert code == 2
         assert err == {
             'error': 'policy',
-            'message': "injects 'tokn', which no request declares",
+            'message': "injects 'tokn', which no request declares, and there's no [app] state to take it",
             'path': ['inject', 'tokn'],
         }
 

@@ -273,10 +273,15 @@ class TestCommandSources:
             load(write(tmp_path, f'[app]\nfactory = "{factory}"\n'))
         assert exc.value.path == ('app', 'factory')
 
-    def test_an_app_s_state_is_refused_with_the_reason(self, tmp_path):
-        body = '[app]\nfactory = "_support_app:factory"\nstate = "_support_app:state"\n'
-        with pytest.raises(PolicyFileError, match=re.escape('arrives with running them in tooled 0.2.7')) as exc:
-            load(write(tmp_path, body))
+    def test_an_app_s_state(self, tmp_path):
+        policy = load(write(tmp_path, '[app]\nfactory = "_support_app:factory"\nstate = "_support_app:state"\n'))
+        assert policy.app is not None
+        assert policy.app.state == '_support_app:state'
+        assert load(write(tmp_path, '[app]\nfactory = "_support_app:factory"\n')).app.state is None
+
+    def test_a_state_is_a_module_and_a_name(self, tmp_path):
+        with pytest.raises(PolicyFileError, match=re.escape('`[app] state` is pkg.module:function')) as exc:
+            load(write(tmp_path, '[app]\nfactory = "_support_app:factory"\nstate = "state"\n'))
         assert exc.value.path == ('app', 'state')
 
     def test_an_app_needs_its_factory(self, tmp_path):

@@ -393,9 +393,10 @@ class Rules:
                 msg = f'binds {slot!r}, which no contract or command has as a slot'
                 raise PolicyFileError(msg, path=('bind', slot))
         fields = self.catalog.request_fields
+        app = self.policy.app
         for name in self.policy.inject:
-            if name not in fields:
-                msg = f'injects {name!r}, which no request declares'
+            if name not in fields and (app is None or app.state is None):  # an app's state takes every one
+                msg = f"injects {name!r}, which no request declares, and there's no [app] state to take it"
                 raise PolicyFileError(msg, path=('inject', name))
 
     def _check_rule(self, rule: Rule, where: tuple[str | int, ...]) -> None:
