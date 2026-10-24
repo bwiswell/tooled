@@ -1296,6 +1296,55 @@ class TestLines:
         code, out, err = run(capsys, *argv)  # parsed's own timeout comes first, with its last reply
         assert (code, err, out['error']['error'], out['reply']['stock']) == (7, None, 'timeout', 5)
 
+    @pytest.fixture
+    def quick(self, monkeypatch):
+        import _support_app
+
+        import tooled.tree
+
+        monkeypatch.setattr(tooled.tree, 'INTERVAL', 0.02)
+        _support_app.TICKS[0] = 0
+
+    def test_a_watch_streams_a_line_each_change(self, desk, quick, capsys):
+        assert main(['see', '--policy', desk, 'clock', 'show', '--watch', '--count', '2']) == 0
+        out, err = capsys.readouterr()
+        assert [json.loads(line)['reply'] for line in out.splitlines()] == [{'tick': 1}, {'tick': 2}]
+        assert err == ''
+
+    def test_a_watch_s_lines_after_select(self, desk, quick, capsys):
+        argv = ['see', '--select', 'reply.tick', '--policy', desk, 'clock', 'show', '--watch', '--count', '2']
+        assert main(argv) == 0
+        assert [json.loads(line) for line in capsys.readouterr().out.splitlines()] == [
+            {'reply': {'tick': 1}},
+            {'reply': {'tick': 2}},
+        ]
+
+    def test_a_wait_until_met(self, desk, quick, capsys):
+        code, out, _ = run(capsys, 'see', '--policy', desk, 'clock', 'show', '--until', 'tick=3', '--timeout', '5s')
+        assert (code, out['met'], out['reply']) == (0, True, {'tick': 3})
+
+    def test_a_signal_ends_a_watch_cleanly(self, desk):
+        env = {**os.environ, 'PYTHONPATH': os.pathsep.join(sys.path)}
+        proc = subprocess.Popen(
+            [sys.executable, '-m', 'tooled', 'see', '--policy', desk, 'clock', 'show', '--watch'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+        )
+        try:
+            got = b''
+            deadline = time.monotonic() + 20
+            while b'\n' not in got and time.monotonic() < deadline:
+                ready, _, _ = select.select([proc.stdout], [], [], 0.05)
+                if ready:
+                    got += os.read(proc.stdout.fileno(), 4096)
+            proc.send_signal(signal.SIGTERM)
+            out, err = proc.communicate(timeout=20)
+        finally:
+            proc.kill()
+        assert proc.returncode == 0, err
+        assert json.loads((got + out).splitlines()[0])['reply'] == {'tick': 1}
+
     def test_logged_on_the_tree(self, app, capsys, tmp_path, monkeypatch):
         log = tmp_path / 'calls.jsonl'
         monkeypatch.setenv('TOOLED_LOG', str(log))

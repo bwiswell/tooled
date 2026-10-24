@@ -97,6 +97,11 @@ tooled do move "Cla'allis Belt"           # one word: no shell quoting to get wr
   (`--select reply.stock`). The exit code is the envelope's: 0; 2 for a line that doesn't read, with suggestions; 3
   refused (an `INTERACTIVE` command, with no person at a terminal, naming what to say instead); 4 a value refused;
   7 a wait past its bound; 1 a handler that failed.
+- **Waits and watches** are the line's, on a read with a `REPLY`: `--until PATH=VALUE` (repeated for several) waits
+  for a reply that meets every condition, and `--timeout 2m` bounds it (30s by default), exit 7 with the last reply
+  past it; `--watch` writes the envelope as a line of JSON now and each time the reply changes, until `--count N`,
+  the bound, its conditions, or SIGINT or SIGTERM (exit 0), each line after `--select` and under the cap, as
+  `listen`'s are. The app's session reads the line again every second; it's state, not events.
 - **Guarded against a person who isn't there:** an app may leave an editor or a viewer unmarked (`INTERACTIVE` is
   optional), so a line runs with an empty stdin, where a prompt reads nothing and fails at once, and a stdout of its
   own, where what a handler writes is kept out of the result (a note says how much). A line still running at

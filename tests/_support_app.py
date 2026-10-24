@@ -138,6 +138,18 @@ def screen_show(command: object, ctx: parsed.Context[State]) -> str:
     return 'drawn'
 
 
+#: The desk clock's reads so far; a test sets it back to 0.
+TICKS = [0]
+
+
+def clock_show(command: object, ctx: parsed.Context[State]) -> object:
+    """The desk's clock, one tick on for each read."""
+    from _support_tree.desk import Clock
+
+    TICKS[0] += 1
+    return Clock(tick=TICKS[0])
+
+
 def desk() -> parsed.App:
     """An editor and a viewer, neither marked interactive, with handlers that wait on a person."""
     from _support_tree import desk as commands
@@ -146,6 +158,7 @@ def desk() -> parsed.App:
     app.mount('_support_tree.desk')
     app.on(commands.NoteEdit, '_support_app:note_edit')
     app.on(commands.ScreenShow, '_support_app:screen_show')
+    app.on(commands.ClockShow, '_support_app:clock_show')
     return app
 
 

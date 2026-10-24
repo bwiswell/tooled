@@ -1,4 +1,5 @@
 import re
+import threading
 import time
 
 import _support_app
@@ -8,7 +9,7 @@ from _support_policy import write
 from tooled.catalog import Catalog
 from tooled.errors import CatalogError, MeshError, RefusedError, TimedOutError, UsageError
 from tooled.policy import Op, Rules, load
-from tooled.tree import GRACE, app_of, bound_of, judged, made_state, opened, ran, state_of
+from tooled.tree import GRACE, app_of, bound_of, judged, made_state, opened, ran, state_of, watched
 
 #: A policy of the fixture app, its state built from a bound slot and two injected values.
 POLICY = """
@@ -254,3 +255,45 @@ class TestBound:
         line = judge(tmp_path, chained, EVERY, 'station s1 show --watch', op=Op.SEE)
         assert line is not None
         assert (line.wait is not None, bound_of(line, 30)) == (True, None)
+
+
+@pytest.fixture
+def quick(monkeypatch):
+    """The desk clock from its first tick, and a session that reads again at once."""
+    import tooled.tree
+
+    monkeypatch.setattr(tooled.tree, 'INTERVAL', 0.02)
+    _support_app.TICKS[0] = 0
+
+
+class TestWatched:
+    def test_each_change_handed_on_until_its_count(self, quick):
+        got = []
+        last, wrote, ended = watched(
+            _support_app.desk(), None, 'clock show --watch --count 3', each=lambda r: got.append(r.reply.tick), bound=10
+        )
+        assert (got, last.code, wrote, ended) == ([1, 2, 3], 0, '', True)
+
+    def test_stopped_its_session_closes(self, quick):
+        stop = threading.Event()
+        state = _support_app.State({}, {})
+        got = []
+
+        def each(result):
+            got.append(result.reply.tick)
+            stop.set()
+
+        last, _, ended = watched(_support_app.desk(), state, 'clock show --watch', each=each, bound=None, stop=stop)
+        assert (got, last.reply.tick, ended, state.left) == ([1], 1, False, True)
+
+    def test_still_running_at_its_bound(self, quick):
+        with pytest.raises(TimedOutError) as exc:
+            watched(_support_app.desk(), None, 'clock show --watch', each=lambda r: None, bound=0.3)
+        assert exc.value.message == (
+            "the watch 'clock show --watch' was still running at 0.3s, and was given up on; --timeout gives it longer"
+        )
+        assert exc.value.last['reply']['tick'] >= 1
+
+    def test_a_wait_until_its_conditions_are_met(self, quick):
+        result, _ = ran(_support_app.desk(), None, 'clock show --until tick=3 --timeout 5s', bound=10)
+        assert (result.ok, result.met, result.reply.tick) == (True, True, 3)

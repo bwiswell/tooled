@@ -16,3 +16,19 @@ class ScreenShow(parsed.Command):
 
     PHRASE = 'screen show'
     EFFECT = parsed.Effect.READ
+
+
+@parsed.parsed
+class Clock(parsed.Parsed):
+    """The desk's clock: how many times it's been read."""
+
+    tick: int = parsed.Int(required=True, doc='the reads so far')
+
+
+@parsed.parsed
+class ClockShow(parsed.Command):
+    """Read the desk's clock: a read whose reply changes each time, for a watch to follow."""
+
+    PHRASE = 'clock show'
+    EFFECT = parsed.Effect.READ
+    REPLY = Clock
