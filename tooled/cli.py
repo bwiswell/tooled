@@ -1,13 +1,15 @@
 """The ``tooled`` command (``python -m tooled``).
 
 Stdlib ``argparse`` only. Every verb takes ``--policy`` (else ``$TOOLED_POLICY``, else ``./tooled.toml``) after
-the verb, so a permission rule can match a verb by its prefix (``tooled fetch``). ``--version`` names the seared
-and zeared tooled runs on, since a protocol package tooled reads must pin the same zeared.
+the verb, so a permission rule can match a verb by its prefix (``tooled fetch``). ``--version`` names the seared,
+zeared and parsed tooled runs on, since a protocol package tooled reads must pin the same zeared, and an app the same
+parsed.
 
 **Verbs:**
-- ``check``: load the policy and its protocol, resolve what it injects, and summarize what it shows: each source's
-  length, and the path it read, variables expanded; and, as ``fixed``, each open slot the allow rules let only one
-  value fill, which the policy would rather bind. With ``--connect``, also open the session; with
+- ``check``: load the policy, its protocol and its app's commands, resolve what it injects, and summarize what it
+  shows: how many commands it read, when it reads any; each source's length, and the path it read, variables
+  expanded; and, as ``fixed``, each open slot the allow rules let only one value fill, which the policy would rather
+  bind. With ``--connect``, also open the session; with
   ``--no-resolve``, read no inject source and expand no variable, so a policy can be checked against its protocol
   without its secrets (in CI, say).
 - ``operations``: every operation the policy shows, one line of each: its kind, the verbs that act on it, its topic
@@ -333,13 +335,15 @@ def _add_call(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # ar
 
 
 def version() -> str:
-    """``tooled X (seared Y, zeared Z)``: tooled's version, and the seared and zeared it runs on."""
+    """``tooled X (seared Y, zeared Z, parsed W)``: tooled's version, and the seared, zeared and parsed it runs on."""
+    import parsed
     import seared
     import zeared
 
     from . import __version__  # lazy: the package imports this module before it sets its version
 
-    return f'tooled {__version__} (seared {seared.__version__}, zeared {zeared.__version__})'
+    on = f'seared {seared.__version__}, zeared {zeared.__version__}, parsed {parsed.__version__}'
+    return f'tooled {__version__} ({on})'
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -416,7 +420,8 @@ def load(given: str | None) -> tuple[Path, Policy, Catalog, Rules]:
 
     path = policy.find(given)
     loaded = policy.load(path)
-    catalog = Catalog.load(loaded.protocol.packages)
+    factory = loaded.app.factory if loaded.app is not None else None
+    catalog = Catalog.load(loaded.protocol.packages, trees=loaded.protocol.trees, factory=factory)
     return path, loaded, catalog, policy.Rules(loaded, catalog)
 
 
@@ -446,6 +451,9 @@ def _check(args: argparse.Namespace) -> int:
         'policy': str(path),
         'mesh': {'mode': mesh.mode.value, 'router': mesh.router, 'connect': list(mesh.connect)},
         'packages': list(loaded.protocol.packages),
+        **({'app': loaded.app.factory} if loaded.app is not None else {}),
+        **({'trees': list(loaded.protocol.trees)} if loaded.protocol.trees else {}),
+        **({'commands': len(catalog.commands)} if loaded.app is not None or loaded.protocol.trees else {}),
         'operations': len(catalog.operations),
         'visible': {op.value: shown[op.value] for op in policy.Op if op.value in shown},
         'hidden': len(catalog.operations) - len(visible),

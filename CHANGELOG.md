@@ -9,6 +9,27 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
+## 0.2.6 — unreleased
+
+**Command trees, read.** parsed's commands join the catalog beside a protocol's contracts, from an app's mounts or
+from packages read as trees.
+
+### Added
+
+- **Commands in the catalog:** with `[app] factory = "pkg.module:function"`, the function's parsed `App` gives its
+  mounts' commands, each led by its mount's prefix: `relay/Run`, `relay/pkg.service:Run`, keyed `relay/run`. A
+  package mounted twice gives each command twice, one a mount. `[protocol] trees` reads packages as trees at the
+  root, for a policy with no app. A command's effect is its `EFFECT` on zeared's scale. `check` names the app or the
+  trees, and counts the commands.
+- **parsed as a dependency,** pinned at `v0.1.7`; `--version` names it beside seared and zeared, since an app whose
+  commands tooled reads must pin the same parsed.
+
+### Changed
+
+- **`[protocol] packages` is optional** where `[app]` or `[protocol] trees` gives the policy commands. A policy that
+  names none of the three is refused, as is one with both trees and an app, and `[app] state` (it arrives with
+  running commands).
+
 ## 0.2.5 — 2026-10-23
 
 **Tools for harnesses.** The operations a policy shows, as tool definitions a harness hands a model that calls

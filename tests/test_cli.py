@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 
+import parsed
 import pytest
 import seared
 import zeared
@@ -43,8 +44,9 @@ def run(capsys, *argv):
 
 
 class TestVersion:
-    def test_names_tooled_seared_and_zeared(self):
-        assert version() == f'tooled {tooled.__version__} (seared {seared.__version__}, zeared {zeared.__version__})'
+    def test_names_tooled_seared_zeared_and_parsed(self):
+        on = f'seared {seared.__version__}, zeared {zeared.__version__}, parsed {parsed.__version__}'
+        assert version() == f'tooled {tooled.__version__} ({on})'
 
     def test_prints_and_exits_zero(self, capsys):
         with pytest.raises(SystemExit) as exc:
@@ -122,6 +124,36 @@ class TestCheck:
             'fixed': {},
             'inject': {'token': {'source': 'env DEMO_TOKEN', 'length': 16}},
         }
+
+    def test_an_app_s_commands_are_counted_and_none_shown_yet(self, tmp_path, capsys):
+        path = write(tmp_path, '[app]\nfactory = "_support_app:factory"\n')
+        code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', str(path))
+        assert code == 0
+        assert {key: out[key] for key in ('packages', 'app', 'commands', 'operations', 'hidden')} == {
+            'packages': ['_support_protocol'],
+            'app': '_support_app:factory',
+            'commands': 8,
+            'operations': 16,
+            'hidden': 16,  # no rule reaches a command until the tree's ops
+        }
+        assert 'trees' not in out
+
+    def test_trees_with_no_app(self, tmp_path, capsys):
+        head = HEAD.replace('packages = ["_support_protocol"]\n', 'trees = ["_support_tree.service"]\n')
+        code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', str(write(tmp_path, head=head)))
+        assert code == 0
+        assert {key: out[key] for key in ('packages', 'trees', 'commands', 'operations')} == {
+            'packages': [],
+            'trees': ['_support_tree.service'],
+            'commands': 2,
+            'operations': 2,
+        }
+        assert 'app' not in out
+
+    def test_an_app_that_will_not_load(self, tmp_path, capsys):
+        path = write(tmp_path, '[app]\nfactory = "_support_app:not_an_app"\n')
+        code, _, err = run(capsys, 'check', '--no-resolve', '--policy', str(path))
+        assert (code, err['error'], err['path']) == (2, 'catalog', ['app', 'factory'])
 
     def test_notes_each_open_slot_the_allow_rules_fix(self, tmp_path, capsys):
         body = (

@@ -6,9 +6,11 @@ authors = [
     { name = "Benj Wiswell", email = "benjwiswell@gmail.com" },
 ]
 requires-python = ">=3.14,<4.0"
-# The ranges are the seared and zeared this release is tested against. uv doesn't
-# check a range against a git source, so the tags below are what pin them.
+# The ranges are the seared, zeared and parsed this release is tested against. uv
+# doesn't check a range against a git source, so the tags below are what pin them.
+# parsed may break between 0.1.x patches, so its range is one patch wide.
 dependencies = [
+    "parsed>=0.1.7,<0.1.8",
     "seared>=0.4.4,<0.5",
     "zeared>=0.4.4,<0.5",
 ]
@@ -36,11 +38,12 @@ dev = [
 # check the ranges above against a git source, so the tag is what pins it:
 # without one, a `uv lock --upgrade` would take whatever the sibling's `master`
 # holds. Moving to a new sibling release means moving its tag, then
-# `uv lock --upgrade-package <name>`. The two must also agree with each other:
-# zeared pins seared by tag, and uv refuses two different URLs for one package.
+# `uv lock --upgrade-package <name>`. They must also agree with each other:
+# zeared and parsed pin seared by tag, and uv refuses two URLs for one package.
 # A protocol package tooled reads must pin the same zeared, for the same reason.
 # To test against an unpushed change, point a source at the sibling checkout:
 #   zeared = { path = "../zeared", editable = true }
+parsed = { git = "https://github.com/bwiswell/parsed", tag = "v0.1.7" }
 seared = { git = "https://github.com/bwiswell/seared", tag = "v0.4.4" }
 zeared = { git = "https://github.com/bwiswell/zeared", tag = "v0.4.4" }
 

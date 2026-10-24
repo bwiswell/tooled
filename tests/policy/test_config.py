@@ -1,3 +1,5 @@
+import re
+
 import pytest
 from _support_policy import HEAD, write
 from zeared import Mode
@@ -140,10 +142,14 @@ class TestLoad:
 
 
 class TestChecks:
-    def test_no_packages(self, tmp_path):
+    def test_nothing_to_read_operations_from(self, tmp_path):
         head = HEAD.replace('["_support_protocol"]', '[]')
-        with pytest.raises(PolicyFileError, match='names no package'):
+        with pytest.raises(PolicyFileError) as exc:
             load(write(tmp_path, head=head))
+        assert exc.value.message == (
+            'the policy names no operations: give `[protocol] packages`, `[app] factory` or `[protocol] trees`'
+        )
+        assert exc.value.path == ('protocol',)
 
     def test_a_rule_with_no_ops(self, tmp_path):
         with pytest.raises(PolicyFileError, match='at least one op') as exc:
@@ -237,3 +243,43 @@ class TestPathVariables:
         with pytest.raises(PolicyFileError, match=match) as exc:
             load(write(tmp_path, f'[inject.token]\n{kind} = "{path}"{key}\n'))
         assert exc.value.path == ('inject', 'token', kind)
+
+
+#: The head of a policy with no protocol packages, for the trees and apps below.
+NO_PACKAGES = HEAD.replace('packages = ["_support_protocol"]\n', '')
+
+
+class TestCommandSources:
+    def test_an_app_s_factory(self, tmp_path):
+        policy = load(write(tmp_path, '[app]\nfactory = "_support_app:factory"\n', head=NO_PACKAGES))
+        assert policy.app is not None
+        assert (policy.app.factory, policy.protocol.packages, policy.protocol.trees) == ('_support_app:factory', [], [])
+
+    def test_trees_with_no_app(self, tmp_path):
+        policy = load(write(tmp_path, head=NO_PACKAGES + 'trees = ["_support_tree.game"]\n'))
+        assert (policy.app, policy.protocol.trees) == (None, ['_support_tree.game'])
+
+    def test_trees_and_an_app_are_one_too_many(self, tmp_path):
+        head = HEAD + 'trees = ["_support_tree.game"]\n'
+        with pytest.raises(PolicyFileError, match=re.escape("is for a policy with no [app]: the app's mounts")) as exc:
+            load(write(tmp_path, '[app]\nfactory = "_support_app:factory"\n', head=head))
+        assert exc.value.path == ('protocol', 'trees')
+
+    @pytest.mark.parametrize(
+        'factory', ['_support_app', '_support_app:', ':factory', 'a-b:c', '_support_app:factory()']
+    )
+    def test_a_factory_is_a_module_and_a_name(self, tmp_path, factory):
+        with pytest.raises(PolicyFileError, match=re.escape('`[app] factory` is pkg.module:function')) as exc:
+            load(write(tmp_path, f'[app]\nfactory = "{factory}"\n'))
+        assert exc.value.path == ('app', 'factory')
+
+    def test_an_app_s_state_is_refused_with_the_reason(self, tmp_path):
+        body = '[app]\nfactory = "_support_app:factory"\nstate = "_support_app:state"\n'
+        with pytest.raises(PolicyFileError, match=re.escape('arrives with running them in tooled 0.2.7')) as exc:
+            load(write(tmp_path, body))
+        assert exc.value.path == ('app', 'state')
+
+    def test_an_app_needs_its_factory(self, tmp_path):
+        with pytest.raises(PolicyFileError) as exc:
+            load(write(tmp_path, '[app]\n'))
+        assert exc.value.path == ('app', 'factory')
