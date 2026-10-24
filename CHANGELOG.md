@@ -9,6 +9,24 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
+## 0.2.5 — unreleased
+
+**Tools for harnesses.** The operations a policy shows, as tool definitions a harness hands a model that calls
+tools rather than a shell.
+
+### Added
+
+- **`tooled tools`:** one tool for each fetch, query, write, wait or listen the policy shows, and one for each
+  variant of a request's root union it allows, in OpenAI's, Anthropic's or MCP's form (`--format`, `openai` by
+  default). A tool's parameters are the unbound slots and the request's fields, without what the policy injects or
+  the union's tag, in a schema dialect a constrained decoder holds: references inlined, objects closed, required
+  first. A wait's `until` is typed from the value's top-level fields, so a model writes only conditions that can
+  be met; a listen takes a `count`, and both a `timeout`. A field that holds a union anywhere but a request's root
+  can't be said in the dialect, so the export is refused, naming every such field, for the policy to deny.
+  `--verbs` keeps some verbs' tools, or some operations' (`fetch,query,invoke,wait:Fleet*`), and `--sizes` gives
+  each tool's bytes and estimated tokens. The output is sorted and byte-stable, so a model server's prompt cache
+  keeps hitting.
+
 ## 0.2.4 — 2026-10-22
 
 **Operations, not contracts.** What tooled lists, names and looks up is an operation, so a later version can list a

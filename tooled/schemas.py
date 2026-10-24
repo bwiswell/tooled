@@ -233,7 +233,7 @@ def tag_keys(cls: type) -> list[str]:
     for envelope in json_schema(cls, mode='load').get('allOf', ()):
         branches = envelope.get('allOf')
         for branch in branches if isinstance(branches, list) else ():
-            key, _tag = _branch_tag(branch)
+            key, _tag = branch_tag(branch)
             if key is not None:
                 keys.append(key)
                 break
@@ -280,7 +280,7 @@ def drop_variants(schema: dict[str, Any], denied: set[str]) -> dict[str, Any]:
             continue
         kept, keys = [], set()
         for branch in branches:
-            tag_key, tag = _branch_tag(branch)
+            tag_key, tag = branch_tag(branch)
             if tag_key is not None:
                 keys.add(tag_key)
             if tag not in denied:
@@ -293,7 +293,7 @@ def drop_variants(schema: dict[str, Any], denied: set[str]) -> dict[str, Any]:
     return prune_defs(out)
 
 
-def _branch_tag(branch: Any) -> tuple[str | None, str | None]:  # a JSON Schema node
+def branch_tag(branch: Any) -> tuple[str | None, str | None]:  # a JSON Schema node
     """The tag key and tag an ``if``/``then`` branch selects on: ``if: {properties: {key: {const: tag}}}``."""
     condition = branch.get('if', {}) if isinstance(branch, dict) else {}
     for key, rule in condition.get('properties', {}).items():
