@@ -68,7 +68,8 @@ overrides it, so a policy can't be pointed at another mesh from the command line
 
 | Key | Meaning |
 |---|---|
-| `packages` | The protocol packages (or modules) whose contracts tooled reads, submodules included. Each must import in tooled's environment, on the same zeared tooled runs on. |
+| `packages` | The protocol packages (or modules) whose contracts tooled reads, submodules included. Each must import in tooled's environment, on the same zeared tooled runs on. Optional when `[app]` or `trees` gives the policy commands. |
+| `trees` | For a policy with no `[app]`: packages (or modules) whose parsed commands tooled reads, each a tree at the root, on the same parsed tooled runs on. |
 
 Each zeared `Message` class becomes a **contract**, one of the operations `tooled operations` lists, sorted by what
 it is, which decides its op:
@@ -188,7 +189,30 @@ is refused: a field is hidden, never allowed one by one.
 **Names must name something.** A contract name, a variant tag, a hidden field, a bound slot or an injected field
 written without a glob must exist in the protocol, so a typo is refused at load. A glob may match nothing.
 
+## `[app]`
+
+An app's command trees: parsed's commands, beside the protocol's contracts.
+
+| Key | Meaning |
+|---|---|
+| `factory` | `pkg.module:function`: called with nothing, it returns the app (parsed's `App`) whose mounts hold the commands. It's called to read them, so it should be cheap: definitions that import without the app's runtime, handlers by their paths. |
+
+```toml
+[app]
+factory = "demo.client.app:make"
+```
+
+Each mount's commands become operations, led by its prefix: a group mounted at the root names its commands by class
+(`FleetMine`, `demo.client.fleet:FleetMine`), and one mounted under `relay` by its words, slashed (`relay/Run`,
+`relay/demo.service:Run`). So a package mounted twice, under two prefixes, gives each of its commands twice, one a
+mount. A command's keys are its phrases' (parsed's `CommandDoc.keys`), led the same way: `fleet/{fleet}/mine`,
+`relay/run`. Its effect is its `EFFECT`, read on zeared's scale (`read`, `write`, `action`), and none when it
+declares none.
+
+A policy gives commands by `[app]` or by `[protocol] trees`, not both, and it needs one of those or a protocol
+package. `check` names the app or the trees, and counts the commands it read.
+
 ## Not in this version
 
 `[[keepalive]]` and `[protocol] extension` are refused with the reason: they arrive with `tooled serve` and with
-extensions.
+extensions. So is `[app] state`, which builds what commands run with: it arrives with running them.
