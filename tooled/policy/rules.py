@@ -336,7 +336,7 @@ def _refuse_hidden(rule: Rule, index: int, contract: Contract, variant: str | No
     """Refuse a call whose request gives a field ``rule`` hides: an optional one at its root that ``rule`` names.
 
     Raises:
-        RefusedError: It gives one, or more; each is named.
+        RefusedError: It gives one, or more; each is named, and the first is its path.
     """
     if rule.variants is not None and (variant is None or not _tag(rule, variant)):
         return
@@ -349,7 +349,7 @@ def _refuse_hidden(rule: Rule, index: int, contract: Contract, variant: str | No
     else:
         listed = ', '.join(repr(name) for name in named[:-1]) + f' and {named[-1]!r}'
         msg = f'{listed} are hidden by the policy (deny[{index}]); leave them out of the request'
-    raise RefusedError(msg)
+    raise RefusedError(msg, path=(named[0],))
 
 
 def _optional(contract: Contract, tag: str | None) -> list[str]:

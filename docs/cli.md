@@ -166,6 +166,35 @@ The cap is `--max-bytes N`, else `$TOOLED_MAX_BYTES`, else 28,000 bytes; `0` rem
 
 In `listen`, a line over the cap is left out and noted at the end.
 
+## The call log
+
+With `TOOLED_LOG` set to a path, every run appends one JSON line to it as it ends, done or with an error, so a
+harness keeps a ledger of what its agent ran without wrapping tooled:
+
+```json
+{"at": "2026-10-23T22:19:04.512Z", "verb": "call", "route": "wire", "operation": "OrderResult",
+ "tool": "invoke_order_result_jump", "variant": "jump", "arguments": ["fleet", "to"], "flags": ["--args", "--policy"],
+ "exit": 0, "error": null, "path": null, "bytes": 61, "seconds": 0.84}
+```
+
+| Key | What |
+|---|---|
+| `at`, `seconds` | when the run began (UTC), and how long it took |
+| `verb`, `route` | the verb (`null` for one tooled doesn't have), and `wire` for a verb on an operation |
+| `operation`, `tool`, `variant` | what it acted on, as far as it got; a call's `tool` is the name it was given, found or not |
+| `arguments`, `flags` | the names of what was given (a call's arguments, a verb's slots), and the options given |
+| `exit`, `error`, `path` | the exit code, the error's kind, and where in the input it lies |
+| `bytes` | what went to stdout: the result a harness hands back |
+
+- **No values:** no slot's, request's, argument's or reply's, no error's message (which can quote one), and not a
+  timed-out wait's `last`. Names, kinds and sizes are enough to compare one agent's runs with another's.
+- **Every key on every line,** `null` where it doesn't apply.
+- **One append a line,** so runs side by side share a file. A harness that keeps a record a turn gives each its own
+  (`TOOLED_LOG=turns/<stamp>/calls.jsonl`).
+- **What it can't see:** a run cut short (a crash, a kill, `--help`) leaves no line, and nor does what failed
+  before tooled ran: a shell that couldn't parse the command, or a permission the harness refused. Those are in the
+  harness's own record. A log tooled can't write is a note on stderr; the run's result and exit code stand.
+
 ## Exit codes
 
 | Code | Kind | Meaning |

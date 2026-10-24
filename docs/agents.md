@@ -57,6 +57,12 @@ Claude Code's Bash tool waits 2 minutes by default, and 10 at most. A `wait` tha
 as a background command, which tells the session when it ends; or `listen` under Monitor follows the state as it
 changes. `--timeout` is how long tooled itself waits: 30 seconds by default.
 
+## A ledger
+
+Set `TOOLED_LOG` in the session's environment and every tooled run appends one JSON line to it: the verb, the
+operation, the names of what was given, the exit code and error kind, the bytes printed and the seconds taken, and
+no value ([cli.md](cli.md), *The call log*). A file a turn makes it one turn's ledger.
+
 ## Live data
 
 `tooled listen CONTRACT` prints a line per value as it arrives. Run it under Claude Code's Monitor tool and each

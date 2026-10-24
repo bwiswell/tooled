@@ -161,6 +161,8 @@ tooled call query_look_reply_ping --args '{"player": "ann", "station": "s1"}' --
   wait found, or exit 7 with the last one seen.
 - **A listen's values come as one JSON list,** once `count` have come or `timeout` is up; a note says when fewer
   came. A fetch, a query and a write wait 5 seconds on the mesh, as the verbs do by default.
+- **A ledger:** with `TOOLED_LOG` set, each call appends a line naming its tool, operation and variant, the names
+  of its arguments, its exit code and error kind, and its bytes and seconds ([cli.md](cli.md), *The call log*).
 - **Any tool the policy shows,** not only those `--verbs` kept: picking shapes what a harness offers, and the
   policy is the guard. A name the policy shows no tool of is a usage error (exit 2) naming the closest. Only the
   tool called need be one the dialect can say, so a profile that exports with picks calls the same way.
