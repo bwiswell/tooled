@@ -4,9 +4,10 @@ import _support_app
 import pytest
 from _support_policy import write
 
-from tooled.errors import CatalogError, MeshError
-from tooled.policy import load
-from tooled.tree import app_of, made_state, opened, state_of
+from tooled.catalog import Catalog
+from tooled.errors import CatalogError, MeshError, RefusedError, UsageError
+from tooled.policy import Op, Rules, load
+from tooled.tree import app_of, judged, made_state, opened, state_of
 
 #: A policy of the fixture app, its state built from a bound slot and two injected values.
 POLICY = """
@@ -119,3 +120,82 @@ class TestOpened:
     def test_no_app_no_session(self, tmp_path):
         with pytest.raises(CatalogError, match='names no \\[app\\]'):
             app_of(load(write(tmp_path, head='[protocol]\ntrees = ["_support_tree.game"]\n')))
+
+
+#: The head of a policy of the chained fixture app: the game, the service twice, and a fleet's orders.
+CHAINED = '[protocol]\n\n[app]\nfactory = "_support_app:chained"\n'
+
+
+@pytest.fixture(scope='module')
+def chained():
+    return Catalog.load([], factory='_support_app:chained'), _support_app.chained()
+
+
+def judge(tmp_path, chained, body, text, op=Op.DO):
+    catalog, app = chained
+    return judged(app, Rules(load(write(tmp_path, body, head=CHAINED)), catalog), text, op=op)
+
+
+EVERY = '[[allow]]\nops = ["see", "do", "confirm"]\n'
+
+
+class TestJudged:
+    def test_a_read_under_see(self, tmp_path, chained):
+        line = judge(tmp_path, chained, EVERY, 'station s1 show', op=Op.SEE)
+        assert line is not None
+        assert ([c.name for c in line.commands], line.keys, line.given, line.yes) == (
+            ['StationShow'],
+            ('station/s1/show',),
+            ('station',),
+            False,
+        )
+
+    def test_a_chain_judged_step_by_step(self, tmp_path, chained):
+        line = judge(tmp_path, chained, EVERY, 'orders fleet f1 jump sol then dock vesta')
+        assert line is not None
+        assert [c.name for c in line.commands] == ['orders/FleetJump', 'orders/FleetDock']
+        assert line.keys == ('orders/fleet/f1/jump/sol', 'orders/fleet/f1/dock/vesta')
+
+    def test_a_chain_is_refused_when_one_step_is(self, tmp_path, chained):
+        body = EVERY + '\n[[deny]]\nops = ["do"]\nkeys = ["orders/fleet/*/dock/vesta"]\n'
+        with pytest.raises(RefusedError, match='do on orders/FleetDock at orders/fleet/f1/dock/vesta is denied'):
+            judge(tmp_path, chained, body, 'orders fleet f1 jump sol then dock vesta')
+
+    @pytest.mark.parametrize(
+        ('text', 'op', 'message'),
+        [
+            ('fleet f1 mine', Op.SEE, 'see does not run FleetMine, which is no read; what does: do'),
+            ('station s1 show', Op.DO, 'do does not run StationShow, which is a read; what does: see'),
+        ],
+    )
+    def test_each_verb_runs_its_own(self, tmp_path, chained, text, op, message):
+        with pytest.raises(UsageError) as exc:
+            judge(tmp_path, chained, EVERY, text, op=op)
+        assert exc.value.message == message
+
+    def test_one_the_policy_does_not_show(self, tmp_path, chained):
+        with pytest.raises(RefusedError, match='the policy does not show FleetMine'):
+            judge(tmp_path, chained, '[[allow]]\nops = ["do"]\noperations = ["StationDock"]\n', 'fleet f1 mine')
+
+    def test_a_key_the_policy_refuses_or_can_not_hold(self, tmp_path, chained):
+        with pytest.raises(RefusedError, match='no allow rule covers do on FleetMine at fleet/f9/mine'):
+            judge(tmp_path, chained, '[[allow]]\nops = ["do"]\nkeys = ["fleet/f1/**"]\n', 'fleet f9 mine')
+        with pytest.raises(RefusedError, match="slot 'fleet' holds 'a/b'"):
+            judge(tmp_path, chained, EVERY, 'fleet a/b mine')
+
+    def test_yes_needs_confirm_where_it_asks(self, tmp_path, chained):
+        with pytest.raises(RefusedError) as exc:
+            judge(tmp_path, chained, '[[allow]]\nops = ["do"]\n', 'dock ceres --yes')
+        assert exc.value.message == (
+            'no allow rule covers confirm on StationDock at dock/ceres; leave --yes out, and its question comes back '
+            'unanswered, nothing done'
+        )
+        line = judge(tmp_path, chained, '[[allow]]\nops = ["do"]\n', 'dock ceres')  # unanswered: no confirm needed
+        assert line is not None
+        assert line.yes is False
+        assert judge(tmp_path, chained, EVERY, '--yes dock ceres').yes is True
+        assert judge(tmp_path, chained, '[[allow]]\nops = ["do"]\n', 'fleet f1 mine --yes') is not None  # no question
+
+    @pytest.mark.parametrize('text', ['fleet f1 jump', 'nowhere at all', 'station s1 show --help', '--help'])
+    def test_a_line_that_runs_nothing_is_parsed_s_to_answer(self, tmp_path, chained, text):
+        assert judge(tmp_path, chained, EVERY, text, op=Op.SEE) is None

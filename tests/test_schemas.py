@@ -442,7 +442,7 @@ class TestCommandListing:
         assert rows['relay/Run'] == {
             'name': 'relay/Run',
             'route': 'tree',
-            'verbs': [],
+            'verbs': ['do'],
             'effect': 'action',
             'phrase': 'relay run',
             'slots': [],
@@ -468,7 +468,7 @@ class TestDescribeCommand:
             'qualname': '_support_tree.game:StationDock',
             'route': 'tree',
             'op': 'do',
-            'verbs': [],
+            'verbs': ['do'],
             'effect': 'action',
             'phrases': ['dock {station}'],
             'keys': ['dock/{station}'],

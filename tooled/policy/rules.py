@@ -166,6 +166,20 @@ class Rules:
                 out.append(partner)
         return out
 
+    def not_shown(self, operation: Guarded) -> str:
+        """Why the policy doesn't show ``operation``: a side it takes instead, a deny carried over, or its rules."""
+        label = self.catalog.label(operation)
+        instead = self.instead(operation)
+        if instead:
+            names = ' and '.join(self.catalog.label(other) for other in instead)
+            side = 'tree' if any(isinstance(other, Command) for other in instead) else 'wire'
+            return f'the policy does not show {label}: it goes by the {side} for that, as {names}'
+        carried = self.carried(operation)
+        if carried is not None:
+            index, denied = carried
+            return f'the policy does not show {label}: deny[{index}] denies {self.catalog.label(denied)}, its contract'
+        return f'the policy does not show {label}'
+
     def carried(self, operation: Guarded) -> tuple[int, Contract] | None:
         """The deny that carries over to ``operation``, a command: its index, and the contract it denies."""
         if not isinstance(operation, Command):

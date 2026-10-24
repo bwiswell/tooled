@@ -96,7 +96,13 @@ _HINT_NAMES = 12
 _ASKED = 5.0
 
 #: The verbs, as the parser has them.
-VERBS = ('check', 'operations', 'describe', 'fetch', 'query', 'listen', 'invoke', 'wait', 'tools', 'call')
+VERBS = ('check', 'operations', 'describe', 'fetch', 'query', 'listen', 'invoke', 'wait', 'tools', 'call', 'see', 'do')
+
+#: The verbs that take a line: tooled's own options first, then the line's words, each as the shell gave it.
+LINES = ('see', 'do')
+
+#: tooled's own options a line's verb takes before the line, and whether each takes a value.
+_LINE_OPTIONS = {'--policy': True, '--select': True, '--max-bytes': True, '--out': True, '--pretty': False}
 
 #: Verbs renamed, refused naming the new one rather than as unknown verbs.
 RENAMED = {
@@ -231,6 +237,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_wait(verbs, [common, saving])
     _add_tools(verbs, [common, saving])
     _add_call(verbs, [common, saving])
+    _add_lines(verbs, [common, saving])
     return parser
 
 
@@ -321,6 +328,23 @@ def _add_tools(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # a
     tools.set_defaults(run=_tools)
 
 
+def _add_lines(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # argparse's subparsers
+    """``see``'s and ``do``'s parsers: tooled's own options, then the line, which :func:`main` splits off first."""
+    for verb, what in (('see', 'a read: a command that declares EFFECT = READ'), ('do', 'any other command')):
+        line = verbs.add_parser(
+            verb,
+            parents=parents,
+            usage=f'tooled {verb} [options] <words…>',
+            help=f"run a line of the app's: {what}",
+            description=(
+                f"Run a line of the policy's app, {what}: tooled's own options first, then the line's words, each as "
+                'the shell gave it, or the whole line as one. The line is judged by the policy before it runs, and '
+                "parsed's envelope printed. --yes on the line answers its questions where the policy allows confirm."
+            ),
+        )
+        line.set_defaults(run=_see if verb == 'see' else _do)
+
+
 def _add_call(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # argparse's subparsers
     """``call``'s parser."""
     call = verbs.add_parser(
@@ -367,7 +391,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if given and given[0] in RENAMED:
             raise UsageError(RENAMED[given[0]])
-        args = build_parser().parse_args(given)
+        head, line = _split_line(given)
+        args = build_parser().parse_args(head)
+        if line is not None:
+            args.line = line
         args.entry = entry
         entry.arguments = [slot.partition('=')[0] for slot in getattr(args, 'slots', None) or []]
         _log_as_json()
@@ -380,6 +407,34 @@ def main(argv: Sequence[str] | None = None) -> int:
     entry.end(code)
     _log_call(entry)
     return code
+
+
+def _split_line(given: list[str]) -> tuple[list[str], list[str] | None]:
+    """For a line's verb, the arguments argparse reads (the verb and tooled's own options) and the line's words.
+
+    tooled's options stand first, before the line's first word; from it on, every word is the line's, a flag
+    among them (``--yes``, ``--until``). ``--`` ends tooled's options, for a line that begins with one of them. For any
+    other verb, the arguments are argparse's whole, and the line ``None``.
+    """
+    if not given or given[0] not in LINES:
+        return given, None
+    head, at = [given[0]], 1
+    while at < len(given):
+        word = given[at]
+        name = word.partition('=')[0]
+        if word == '--':
+            at += 1
+            break
+        if word in {'-h', '--help'} or (name in _LINE_OPTIONS and '=' in word):
+            head.append(word)
+            at += 1
+        elif name in _LINE_OPTIONS:
+            takes = _LINE_OPTIONS[name]
+            head += given[at : at + 1 + takes]
+            at += 1 + takes
+        else:
+            break
+    return head, given[at:]
 
 
 def _log_call(entry: Entry) -> None:
@@ -556,6 +611,58 @@ def _call(args: argparse.Namespace) -> int:
     return _listened(run, count=mapped.count or 1, duration=mapped.timeout or tools.TIMEOUT)
 
 
+def _see(args: argparse.Namespace) -> int:
+    from .policy import Op
+
+    return _line(args, Op.SEE)
+
+
+def _do(args: argparse.Namespace) -> int:
+    from .policy import Op
+
+    return _line(args, Op.DO)
+
+
+def _line(args: argparse.Namespace, op: Any) -> int:  # a tree op
+    """Judge the line by the policy, then run it in the app's session, and print parsed's envelope.
+
+    Its exit code is the envelope's: 0, or its error kind's, as tooled's are (2 a line that doesn't read, 3 refused,
+    4 a value refused, 7 a wait past its bound), and 1 for a handler that fails.
+    """
+    import asyncio
+
+    from parsed.argv import line_of
+
+    from . import tree
+
+    if not args.line:
+        msg = f"tooled {args.verb} takes a line: the words of a command, after tooled's own options"
+        raise UsageError(msg)
+    try:
+        text = line_of(args.line)
+    except Exception as exc:  # parsed's ReadError: a word holding a double quote
+        raise UsageError(str(exc)) from exc
+    path, loaded, catalog, rules = load(args.policy)
+    if loaded.app is None:
+        msg = f"tooled {args.verb} runs a line of the policy's app, and the policy names no [app]"
+        raise UsageError(msg)
+    app = tree.app_of(loaded)
+    judged = tree.judged(app, rules, text, op=op)
+    entry = _entry(args)
+    if judged is not None:
+        entry.acted_on(catalog.label(judged.commands[0]), route='tree')
+        entry.arguments = list(judged.given)
+    state = tree.state_of(loaded, path)
+
+    async def run() -> Any:  # parsed's Result
+        async with tree.opened(app, state) as session:
+            return await session.run(text)
+
+    result = asyncio.run(run())
+    emit(result.to_json(), args)
+    return result.code
+
+
 def _describe(args: argparse.Namespace) -> int:
     from .catalog import Command, Contract
     from .errors import RefusedError
@@ -569,7 +676,7 @@ def _describe(args: argparse.Namespace) -> int:
         msg = f'{label} is no operation tooled describes'
         raise UsageError(msg)
     if not rules.visible(operation):
-        raise RefusedError(_not_shown(rules, operation))
+        raise RefusedError(rules.not_shown(operation))
     if isinstance(operation, Command):
         if args.variant is not None:
             msg = f"{label} is a command, whose arguments hold no union's variants: describe it whole"
@@ -782,27 +889,12 @@ def _readable(args: argparse.Namespace, catalog: Catalog, rules: Rules, verb: st
     label = catalog.label(contract)
     _entry(args).acted_on(label)
     if not rules.visible(contract):
-        raise RefusedError(_not_shown(rules, contract))
+        raise RefusedError(rules.not_shown(contract))
     if verb not in verbs(contract):
         acts = ', '.join(verbs(contract)) or 'nothing in this version of tooled'
         msg = f'{verb} does not act on {label}, a {contract.kind.value} contract; what does: {acts}'
         raise UsageError(msg)
     return contract
-
-
-def _not_shown(rules: Rules, operation: Any) -> str:  # a contract or a command
-    """Why the policy doesn't show ``operation``: a side it takes instead, a deny carried over, or its rules."""
-    label = rules.catalog.label(operation)
-    instead = rules.instead(operation)
-    if instead:
-        names = ' and '.join(rules.catalog.label(other) for other in instead)
-        side = 'tree' if any(other in rules.catalog.commands for other in instead) else 'wire'
-        return f'the policy does not show {label}: it goes by the {side} for that, as {names}'
-    carried = rules.carried(operation)
-    if carried is not None:
-        index, denied = carried
-        return f'the policy does not show {label}: deny[{index}] denies {rules.catalog.label(denied)}, its contract'
-    return f'the policy does not show {label}'
 
 
 def _pairs(items: Sequence[str], what: str) -> dict[str, str]:

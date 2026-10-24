@@ -62,18 +62,63 @@ def unopenable(*, bound: dict[str, str], injected: dict[str, str]) -> Unopenable
 
 def status(command: object, ctx: parsed.Context[State]) -> str:
     """The service's status, as the fixture app answers it: what its state was given."""
+    if ctx.state is None:
+        return 'up'
     return f'up, bound {sorted(ctx.state.bound)}, injected {sorted(ctx.state.injected)}'
 
 
+def station_show(command: object, ctx: parsed.Context[State]) -> object:
+    """A station, as the fixture's world has it: five in stock."""
+    from _support_protocol import Station
+
+    return Station(world='w1', station=command.station, stock=5)  # ty: ignore[unresolved-attribute]
+
+
+def fleet_mine(command: object, ctx: parsed.Context[State]) -> str:
+    """A fleet sent to mine."""
+    return f'{command.fleet} mining'  # ty: ignore[unresolved-attribute]
+
+
+def station_dock(command: object, ctx: parsed.Context[State]) -> parsed.Ask:
+    """Docking, asked first."""
+    station = command.station  # ty: ignore[unresolved-attribute]
+    return parsed.Ask(f'Dock at {station} for 10 credits?', lambda: f'docked at {station}')
+
+
+def run_fails(command: object, ctx: parsed.Context[State]) -> str:
+    """A service that won't run."""
+    msg = 'the run broke'
+    raise RuntimeError(msg)
+
+
 def factory() -> parsed.App:
-    """The fixture app: the game at the root, the service group under ``relay`` and ``gateway``."""
-    from _support_tree import service
+    """The fixture app: the game at the root, the service group under ``relay`` and ``gateway``, with handlers."""
+    from _support_tree import game, service
 
     app = parsed.App('demo')
     app.mount('_support_tree.game')
     app.mount('_support_tree.service', under='relay')
     app.mount('_support_tree.service', under='gateway')
     app.on(service.Status, '_support_app:status')
+    app.on(service.Run, '_support_app:run_fails')
+    app.on(game.StationShow, '_support_app:station_show')
+    app.on(game.FleetMine, '_support_app:fleet_mine')
+    app.on(game.StationDock, '_support_app:station_dock')
+    return app
+
+
+def orders(steps: list[object], ctx: parsed.Context[State]) -> str:
+    """A fleet's chain of orders, run in turn."""
+    return ' then '.join(type(step).__name__ for step in steps)
+
+
+def chained() -> parsed.App:
+    """The game at the root, and a fleet's orders as a chain."""
+    from _support_tree import orders as fleet_orders
+
+    app = factory()
+    app.mount('_support_tree.orders', under='orders')
+    app.on_chain(fleet_orders.FleetOrder, '_support_app:orders')
     return app
 
 

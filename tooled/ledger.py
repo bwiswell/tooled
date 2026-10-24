@@ -9,7 +9,8 @@ With ``TOOLED_LOG`` set to a path, every run that ends, done or with an error, a
 ```
 
 - ``at``: when the run began, UTC; ``seconds``: how long it took.
-- ``verb``: the verb, ``null`` for one tooled doesn't have; ``route``: ``wire`` for a verb on an operation.
+- ``verb``: the verb, ``null`` for one tooled doesn't have; ``route``: ``wire`` or ``tree``, for a verb on an
+  operation.
 - ``operation``, ``tool``, ``variant``: what it acted on, as far as it got: a call's tool is the name it was given,
   found or not.
 - ``arguments``: the names of what was given, a call's arguments or a verb's slots; ``flags``: the options given,
@@ -74,9 +75,9 @@ class Entry:
         entry.flags = list(dict.fromkeys(arg.partition('=')[0] for arg in given if arg.startswith('--')))
         return entry
 
-    def acted_on(self, operation: str, *, variant: str | None = None) -> None:
-        """The operation a verb acts on, on the wire; and the variant its request carries, once it's known."""
-        self.route, self.operation = 'wire', operation
+    def acted_on(self, operation: str, *, variant: str | None = None, route: str = 'wire') -> None:
+        """The operation a verb acts on, and its route; and the variant its request carries, once it's known."""
+        self.route, self.operation = route, operation
         if variant is not None:
             self.variant = variant
 

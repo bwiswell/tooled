@@ -20,8 +20,16 @@ lines as it lands, and the entry is dated when that version is released.
   it as `ctx.state`. An injected value needn't be a request's field when there's a state to take it. `check` names
   the state function, and `check --connect` opens the app's session on its state, beside the mesh, and closes it.
 
+- **`tooled see` and `tooled do`:** a line of the app's, `see` for a read and `do` for any other, after tooled's own
+  options, its words joined as parsed's command line joins them. It's judged before it runs (each step, a chain's
+  too: its verb, what the policy shows, its key), then run in the app's session, and parsed's envelope printed
+  under the cap and `--select`, with the envelope's exit code. A question comes back unanswered; `--yes` answers it
+  where the policy allows `confirm`, and is refused elsewhere. A line that doesn't read, or asks for help, is
+  parsed's to answer.
+
 ### Changed
 
+- **A command's `verbs`** in `operations` and `describe` are its op's, `see` or `do`, now that they run.
 - **parsed `v0.1.8`,** one patch wide as before: an app whose commands tooled reads must pin the same.
 - **`check --connect`** opens the app's session where there's an `[app]`, so a policy of commands alone may take
   it; only a policy with neither a mesh nor an app is a usage error.
