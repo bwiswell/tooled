@@ -431,10 +431,10 @@ def _check(args: argparse.Namespace) -> int:
 
     path, loaded, catalog, rules = load(args.policy)
     shown: dict[str, list[str]] = {}
-    visible = rules.visible_contracts()
-    for contract in visible:
-        shown.setdefault(policy.op_of(contract).value, []).append(catalog.label(contract))
-    fixed = {catalog.label(contract): slots for contract in visible if (slots := rules.fixed(contract))}
+    visible = rules.visible_operations()
+    for operation in visible:
+        shown.setdefault(policy.op_of(operation).value, []).append(catalog.label(operation))
+    fixed = {catalog.label(operation): slots for operation in visible if (slots := rules.fixed(operation))}
     inject: dict[str, Any] = {}
     for name, source in sorted(loaded.inject.items()):
         if policy.generated(source):

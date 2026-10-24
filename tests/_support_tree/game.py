@@ -45,3 +45,15 @@ class StationMap(parsed.Command):
     INSTEAD = StationShow
 
     station: str = parsed.Str(required=True, doc="the station's key")
+
+
+@parsed.parsed
+class StationDock(parsed.Command):
+    """Dock at a station, asking first, since docking costs a fee."""
+
+    PHRASE = 'dock {station}'
+    EFFECT = parsed.Effect.ACTION
+    ASKS = True
+    KINDS: ClassVar[dict[str, parsed.Kind]] = {'station': parsed.Name('station')}
+
+    station: str = parsed.Str(required=True, doc="the station's key")

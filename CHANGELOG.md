@@ -24,8 +24,17 @@ from packages read as trees.
 - **parsed as a dependency,** pinned at `v0.1.7`; `--version` names it beside seared and zeared, since an app whose
   commands tooled reads must pin the same parsed.
 
+- **The policy over commands:** the tree's ops, `see` (a command declaring `EFFECT = READ`), `do` (any other, an
+  undeclared one included) and `confirm` (answering yes to a command that asks first, beside its `see` or `do`).
+  Their keys are a command's keys, led by its mount's prefix, and `[bind]` narrows a command's slot by its name. A
+  call's key is refused when a slot's value holds `/`, `*`, `$`, `?` or `#`, naming the kind whose resolver should
+  map it.
+  `check` lists the commands a policy shows, by op, and their fixed slots.
+
 ### Changed
 
+- **A rule is one route's:** its ops are the wire's or the tree's, so its keys are read in one space; one mixing
+  them is refused, as are `variants` and `fields` on a tree rule, and a name without a glob its ops can't reach.
 - **`[protocol] packages` is optional** where `[app]` or `[protocol] trees` gives the policy commands. A policy that
   names none of the three is refused, as is one with both trees and an app, and `[app] state` (it arrives with
   running commands).
