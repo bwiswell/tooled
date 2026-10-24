@@ -31,6 +31,12 @@ from packages read as trees.
   map it.
   `check` lists the commands a policy shows, by op, and their fixed slots.
 
+- **Routes and overlaps:** a command overlaps a contract when it takes its fields from the contract's request class
+  or replies with its class, and a profile shows one side, not both: `[protocol] route` (`tree` by default, or
+  `wire`) picks where the rules would show both, and an allow rule naming one side without a glob takes it. The side
+  not taken is refused naming the other. A deny that denies a contract wholly by name carries over to its commands;
+  `check` lists the overlaps, and the denies by keys that can't carry.
+
 ### Changed
 
 - **`[mesh]` is optional** for a policy of commands alone, with no protocol packages; such a policy refuses a rule

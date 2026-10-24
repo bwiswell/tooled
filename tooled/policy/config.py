@@ -86,6 +86,13 @@ class Op(enum.StrEnum):
     CONFIRM = 'confirm'  # answering yes when a command asks before it acts
 
 
+class Route(enum.StrEnum):
+    """Which side a profile takes where a command and a contract do the same thing."""
+
+    TREE = 'tree'  # the command: the app's own language for its users
+    WIRE = 'wire'  # the contract: the system's API between nodes
+
+
 #: The ops on the tree, a command's; the rest are the wire's. A rule's ops are one route's, so its keys are read in one
 #: space: a contract's topics, or a command's keys.
 TREE_OPS = frozenset({Op.SEE, Op.DO, Op.CONFIRM})
@@ -140,6 +147,11 @@ class Protocol(s.Seared):
         many=True,
         default_factory=list,
         doc='packages (or modules) whose commands it reads, each a tree at the root, for a policy with no [app]',
+    )
+    route: Route = s.Enum(
+        enum=Route,
+        default=Route.TREE,
+        doc='where a command and a contract overlap, the side shown when both would be: `tree` or `wire`',
     )
 
 

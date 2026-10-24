@@ -166,6 +166,35 @@ class TestCheck:
             'the policy names no [mesh], so nothing it allows reaches one',
         )
 
+    def test_overlaps_and_the_denies_that_do_not_carry(self, tmp_path, capsys):
+        body = (
+            '[app]\nfactory = "_support_app:factory"\n\n'
+            '[[allow]]\nops = ["read", "query", "invoke"]\n\n[[allow]]\nops = ["see", "do"]\n\n'
+            '[[allow]]\nops = ["invoke"]\noperations = ["MoveResult"]\n\n'
+            '[[deny]]\nops = ["read"]\nkeys = ["demo/*/station/s9"]\n'
+        )
+        code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', str(write(tmp_path, body)))
+        assert code == 0
+        assert out['overlaps'] == [
+            {
+                'command': 'PlayerMove',
+                'contract': 'MoveResult',
+                'by': ['request'],
+                'route': 'wire',
+                'shown': 'MoveResult',
+            },
+            {'command': 'StationShow', 'contract': 'Station', 'by': ['reply'], 'route': 'tree', 'shown': 'StationShow'},
+        ]
+        assert out['uncarried'] == [{'deny': 0, 'contract': 'Station', 'command': 'StationShow'}]
+
+    def test_the_side_not_taken_is_refused_naming_the_other(self, tmp_path, capsys):
+        body = '[app]\nfactory = "_support_app:factory"\n\n[[allow]]\nops = ["read"]\n\n[[allow]]\nops = ["see"]\n'
+        path = str(write(tmp_path, body))
+        expected = 'the policy does not show Station: it goes by the tree for that, as StationShow'
+        for argv in (['fetch', 'Station'], ['describe', 'Station']):
+            code, _, err = run(capsys, *argv, '--policy', path)
+            assert (code, err['message']) == (3, expected)
+
     def test_trees_with_no_app(self, tmp_path, capsys):
         head = HEAD.replace('packages = ["_support_protocol"]\n', 'trees = ["_support_tree.service"]\n')
         code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', str(write(tmp_path, head=head)))

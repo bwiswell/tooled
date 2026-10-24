@@ -461,6 +461,7 @@ def _check(args: argparse.Namespace) -> int:
         'hidden': len(catalog.operations) - len(visible),
         'bind': dict(sorted(loaded.bind.items())),
         'fixed': fixed,
+        **_overlaps(rules),
         'inject': inject,
     }
     if args.connect:
@@ -469,6 +470,34 @@ def _check(args: argparse.Namespace) -> int:
         summary['connect'] = {'ok': True, 'seconds': round(time.perf_counter() - started, 3)}
     emit(summary, args)
     return 0
+
+
+def _overlaps(rules: Rules) -> dict[str, Any]:
+    """``check``'s overlaps, when there are any, and the denies that don't carry over.
+
+    Each command and contract that do the same thing, how, the side the policy takes and the one it shows; and each
+    deny on a contract that can't carry over to its command, which stays shown.
+    """
+    if not rules.links:
+        return {}
+    label = rules.catalog.label
+    overlaps = []
+    for link in rules.links:
+        shown = [label(o) for o in (link.command, link.contract) if rules.visible(o)]
+        overlaps.append(
+            {
+                'command': label(link.command),
+                'contract': label(link.contract),
+                'by': list(link.by),
+                'route': rules.winner(link).value,
+                'shown': shown[0] if shown else None,
+            }
+        )
+    uncarried = [
+        {'deny': index, 'contract': label(link.contract), 'command': label(link.command)}
+        for index, link in rules.uncarried()
+    ]
+    return {'overlaps': overlaps, 'uncarried': uncarried}
 
 
 def _operations(args: argparse.Namespace) -> int:
@@ -523,8 +552,7 @@ def _describe(args: argparse.Namespace) -> int:
     contract = catalog.contract(args.operation)
     _entry(args).acted_on(catalog.label(contract))
     if not rules.visible(contract):
-        msg = f'the policy does not show {catalog.label(contract)}'
-        raise RefusedError(msg)
+        raise RefusedError(_not_shown(rules, contract))
     if args.variant is not None:
         emit(describe_variant(contract, args.variant, rules), args)
     else:
@@ -702,13 +730,27 @@ def _readable(args: argparse.Namespace, catalog: Catalog, rules: Rules, verb: st
     label = catalog.label(contract)
     _entry(args).acted_on(label)
     if not rules.visible(contract):
-        msg = f'the policy does not show {label}'
-        raise RefusedError(msg)
+        raise RefusedError(_not_shown(rules, contract))
     if verb not in verbs(contract):
         acts = ', '.join(verbs(contract)) or 'nothing in this version of tooled'
         msg = f'{verb} does not act on {label}, a {contract.kind.value} contract; what does: {acts}'
         raise UsageError(msg)
     return contract
+
+
+def _not_shown(rules: Rules, operation: Any) -> str:  # a contract or a command
+    """Why the policy doesn't show ``operation``: a side it takes instead, a deny carried over, or its rules."""
+    label = rules.catalog.label(operation)
+    instead = rules.instead(operation)
+    if instead:
+        names = ' and '.join(rules.catalog.label(other) for other in instead)
+        side = 'tree' if any(other in rules.catalog.commands for other in instead) else 'wire'
+        return f'the policy does not show {label}: it goes by the {side} for that, as {names}'
+    carried = rules.carried(operation)
+    if carried is not None:
+        index, denied = carried
+        return f'the policy does not show {label}: deny[{index}] denies {rules.catalog.label(denied)}, its contract'
+    return f'the policy does not show {label}'
 
 
 def _pairs(items: Sequence[str], what: str) -> dict[str, str]:

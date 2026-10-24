@@ -75,6 +75,7 @@ with protocol packages needs its mesh.
 |---|---|
 | `packages` | The protocol packages (or modules) whose contracts tooled reads, submodules included. Each must import in tooled's environment, on the same zeared tooled runs on. Optional when `[app]` or `trees` gives the policy commands. |
 | `trees` | For a policy with no `[app]`: packages (or modules) whose parsed commands tooled reads, each a tree at the root, on the same parsed tooled runs on. |
+| `route` | `tree` (the default) or `wire`: where a command and a contract do the same thing, the side shown when the rules would show both (*Routes and overlaps*, below). |
 
 Each zeared `Message` class becomes a **contract**, one of the operations `tooled operations` lists, sorted by what
 it is, which decides its op:
@@ -231,6 +232,28 @@ operations = ["relay/*"]
 ops = ["see", "do", "confirm"]
 keys = ["gateway/**"]
 ```
+
+### Routes and overlaps
+
+A command and a contract overlap when they do the same thing: the command takes its fields from the contract's
+request class (it inherits it), or its `REPLY` is the contract's class. A profile shows one of them, not both, so an
+agent has one way to do each thing.
+
+- **The route decides where both would show.** When the rules show both sides on their own, `[protocol] route`
+  picks one: `tree` (the default) shows the command, `wire` the contract. Where only one side is allowed, it's shown
+  whatever the route.
+- **An allow rule naming one side takes it:** an allow rule that names the contract, or the command, without a glob
+  (`operations = ["Station"]`) shows that side of its overlaps. Allow rules naming both sides of one overlap are
+  refused at load.
+- **The side not taken is refused by name:** `the policy does not show Station: it goes by the tree for that, as
+  StationShow`.
+- **A deny carries over:** a deny rule that denies a contract wholly by name (its `operations` match it, other than
+  by `*` alone; no `variants` or `fields`; its keys cover every topic) denies the commands that overlap it too. A
+  deny by keys alone, or one narrowed by keys, can't carry, since a contract's topics and a command's keys are
+  different spaces; the command stays as the rules show it.
+
+`check` lists each overlap under `overlaps` (the command, the contract, `by` request or reply, the route taken, and
+the side shown), and under `uncarried` each deny that reaches a contract and leaves a command it overlaps shown.
 
 **Names must name something.** A contract or command name, a variant tag, a hidden field, a bound slot or an
 injected field written without a glob must exist in the protocol or the app, so a typo is refused at load. A glob

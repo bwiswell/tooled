@@ -18,6 +18,10 @@ the tree that holds it. They come from an app's mounts (``[app] factory``, a fun
 each mount's prefix leading its commands, so one package mounted twice gives each command twice, once a mount; or,
 for a policy that only describes, from packages read as trees at the root (``[protocol] trees``).
 
+**Overlaps:** a command that takes its fields from a contract's request class (it inherits it), or whose ``REPLY`` is a
+contract's class, does what that contract does: :meth:`Catalog.links` lists each such pair, for a policy to show one
+side of.
+
 **Names:** an operation is named by its class's name (``FleetState``), and always also answers to
 ``module:Class``. A command under a prefix is led by its words, slashed: ``relay/Run``, ``relay/pkg.service:Run``,
 and so are its keys (``relay/run``). When two operations share a name, the bare name is ambiguous: it's refused
@@ -137,6 +141,22 @@ class Command:
         return tuple(slot.name for slot in self.doc.slots)
 
 
+@dataclass(frozen=True, slots=True)
+class Link:
+    """A command and a contract that do the same thing.
+
+    Attributes:
+        command: The command.
+        contract: The contract it overlaps.
+        by: How it does: ``request``, when it takes its fields from the contract's request class, and ``reply``,
+            when its ``REPLY`` is the contract's class; one or both, in that order.
+    """
+
+    command: Command
+    contract: Contract
+    by: tuple[str, ...]
+
+
 class Catalog:
     """Operations, sorted and named: each once, by ``module:Class``.
 
@@ -237,6 +257,24 @@ class Catalog:
             for o in self.operations
             if fnmatch.fnmatchcase(o.name, pattern) or fnmatch.fnmatchcase(o.qualname, pattern)
         ]
+
+    @property
+    def links(self) -> tuple[Link, ...]:
+        """Each command and contract that overlap, in the catalog's order: the command's, then the contract's."""
+        found = []
+        for command in self.commands:
+            for contract in self.contracts:
+                by = tuple(
+                    why
+                    for why, holds in (
+                        ('request', contract.request is not None and contract.request in command.doc.fields_from),
+                        ('reply', command.doc.reply is contract.cls),
+                    )
+                    if holds
+                )
+                if by:
+                    found.append(Link(command, contract, by))
+        return tuple(found)
 
     @property
     def slot_names(self) -> frozenset[str]:
