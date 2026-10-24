@@ -9,10 +9,11 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
-## 0.2.5 — unreleased
+## 0.2.5 — 2026-10-23
 
 **Tools for harnesses.** The operations a policy shows, as tool definitions a harness hands a model that calls
-tools rather than a shell.
+tools rather than a shell: `tools` exports them, `call` carries out a model's call of one, and `TOOLED_LOG` keeps a
+line a run. A deny rule's `fields` hides a request field from them, and refuses it in a call.
 
 ### Added
 
