@@ -9,10 +9,12 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
-## 0.2.6 — unreleased
+## 0.2.6 — 2026-10-23
 
 **Command trees, read.** parsed's commands join the catalog beside a protocol's contracts, from an app's mounts or
-from packages read as trees.
+from packages read as trees, and the policy reaches them: the tree's ops `see`, `do` and `confirm` over command
+keys, one route a rule, a profile showing one side where a command and a contract overlap, and no `[mesh]` needed
+for commands alone. `operations` and `describe` show them; running them comes next.
 
 ### Added
 
