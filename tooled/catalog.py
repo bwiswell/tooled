@@ -361,17 +361,7 @@ def made_app(factory: str) -> App:
             isn't an app.
     """
     where = ('app', 'factory')
-    module, _, name = factory.partition(':')
-    try:
-        found: Any = importlib.import_module(module)
-        for part in name.split('.'):
-            found = getattr(found, part)
-    except Exception as exc:  # an import's error, or no such name
-        msg = f'[app] factory {factory!r} would not load: {type(exc).__name__}: {exc}'
-        raise CatalogError(msg, path=where) from exc
-    if not callable(found):
-        msg = f'[app] factory {factory!r} is no function, but {type(found).__name__}'
-        raise CatalogError(msg, path=where)
+    found = imported(factory, 'factory')
     try:
         app = found()
     except Exception as exc:  # whatever building the app raises, it's this error
@@ -381,6 +371,26 @@ def made_app(factory: str) -> App:
         msg = f"[app] factory {factory!r} returned {type(app).__name__}, not parsed's App"
         raise CatalogError(msg, path=where)
     return app
+
+
+def imported(target: str, key: str) -> Any:  # the callable it names
+    """The callable ``target``, ``pkg.module:function``, names, as ``[app] <key>`` gives it.
+
+    Raises:
+        CatalogError: Its module won't import, it names nothing there, or nothing callable.
+    """
+    module, _, name = target.partition(':')
+    try:
+        found: Any = importlib.import_module(module)
+        for part in name.split('.'):
+            found = getattr(found, part)
+    except Exception as exc:  # an import's error, or no such name
+        msg = f'[app] {key} {target!r} would not load: {type(exc).__name__}: {exc}'
+        raise CatalogError(msg, path=('app', key)) from exc
+    if not callable(found):
+        msg = f'[app] {key} {target!r} is no function, but {type(found).__name__}'
+        raise CatalogError(msg, path=('app', key))
+    return found
 
 
 def union_tags(cls: type) -> tuple[str, ...]:

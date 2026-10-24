@@ -9,6 +9,23 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
+## 0.2.7 — unreleased
+
+**Command trees, run.** The app's state, built from the policy.
+
+### Added
+
+- **`[app] state = "pkg.module:function"`:** called with the policy's `bound` and `injected` values as keyword
+  arguments, it returns the state the app's session opens on, entered with the session and left after; handlers see
+  it as `ctx.state`. An injected value needn't be a request's field when there's a state to take it. `check` names
+  the state function, and `check --connect` opens the app's session on its state, beside the mesh, and closes it.
+
+### Changed
+
+- **parsed `v0.1.8`,** one patch wide as before: an app whose commands tooled reads must pin the same.
+- **`check --connect`** opens the app's session where there's an `[app]`, so a policy of commands alone may take
+  it; only a policy with neither a mesh nor an app is a usage error.
+
 ## 0.2.6 — 2026-10-23
 
 **Command trees, read.** parsed's commands join the catalog beside a protocol's contracts, from an app's mounts or

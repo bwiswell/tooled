@@ -10,7 +10,7 @@ requires-python = ">=3.14,<4.0"
 # doesn't check a range against a git source, so the tags below are what pin them.
 # parsed may break between 0.1.x patches, so its range is one patch wide.
 dependencies = [
-    "parsed>=0.1.7,<0.1.8",
+    "parsed>=0.1.8,<0.1.9",
     "seared>=0.4.4,<0.5",
     "zeared>=0.4.4,<0.5",
 ]
@@ -43,7 +43,7 @@ dev = [
 # A protocol package tooled reads must pin the same zeared, for the same reason.
 # To test against an unpushed change, point a source at the sibling checkout:
 #   zeared = { path = "../zeared", editable = true }
-parsed = { git = "https://github.com/bwiswell/parsed", tag = "v0.1.7" }
+parsed = { git = "https://github.com/bwiswell/parsed", tag = "v0.1.8" }
 seared = { git = "https://github.com/bwiswell/seared", tag = "v0.4.4" }
 zeared = { git = "https://github.com/bwiswell/zeared", tag = "v0.4.4" }
 

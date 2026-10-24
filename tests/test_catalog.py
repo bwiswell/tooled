@@ -248,7 +248,7 @@ class TestCommands:
 
     def test_a_prefix_of_several_words(self):
         (run, _status) = Catalog.load([], factory='_support_app:nested').commands
-        assert (run.name, run.keys, run.under) == ('rio/relay/Run', ('rio/relay/run',), 'rio relay')
+        assert (run.name, run.keys, run.under) == ('mesh/relay/Run', ('mesh/relay/run',), 'mesh relay')
 
     def test_trees_read_at_the_root(self):
         found = Catalog.load([], trees=['_support_tree.service']).commands

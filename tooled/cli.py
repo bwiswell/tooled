@@ -432,7 +432,6 @@ def load(given: str | None) -> tuple[Path, Policy, Catalog, Rules]:
 
 def _check(args: argparse.Namespace) -> int:
     from . import policy
-    from .executor import open_session
 
     path, loaded, catalog, rules = load(args.policy)
     shown: dict[str, list[str]] = {}
@@ -457,6 +456,7 @@ def _check(args: argparse.Namespace) -> int:
         'mesh': {'mode': mesh.mode.value, 'router': mesh.router, 'connect': list(mesh.connect)} if mesh else None,
         'packages': list(loaded.protocol.packages),
         **({'app': loaded.app.factory} if loaded.app is not None else {}),
+        **({'state': loaded.app.state} if loaded.app is not None and loaded.app.state is not None else {}),
         **({'trees': list(loaded.protocol.trees)} if loaded.protocol.trees else {}),
         **({'commands': len(catalog.commands)} if loaded.app is not None or loaded.protocol.trees else {}),
         **({'unmarked': _unmarked(visible, catalog)} if catalog.commands else {}),
@@ -469,9 +469,7 @@ def _check(args: argparse.Namespace) -> int:
         'inject': inject,
     }
     if args.connect:
-        started = time.perf_counter()
-        open_session(_mesh(loaded)).close()
-        summary['connect'] = {'ok': True, 'seconds': round(time.perf_counter() - started, 3)}
+        _connect(path, loaded, summary)
     emit(summary, args)
     return 0
 
@@ -665,6 +663,36 @@ def _invoke(args: argparse.Namespace) -> int:
         session.close()
     _finish(result, args, sent=True)
     return 0
+
+
+def _connect(path: Path, loaded: Policy, summary: dict[str, Any]) -> None:
+    """``check --connect``: open the policy's mesh, and its app's session on the state it builds, then close them.
+
+    Raises:
+        UsageError: The policy names neither.
+    """
+    import asyncio
+
+    from .executor import open_session
+    from .tree import app_of, opened, state_of
+
+    if loaded.mesh is None and loaded.app is None:
+        msg = 'the policy names no [mesh] and no [app], so --connect has nothing to open'
+        raise UsageError(msg)
+    if loaded.mesh is not None:
+        started = time.perf_counter()
+        open_session(loaded.mesh).close()
+        summary['connect'] = {'ok': True, 'seconds': round(time.perf_counter() - started, 3)}
+    if loaded.app is not None:
+        app, state = app_of(loaded), state_of(loaded, path)
+
+        async def visit() -> None:
+            async with opened(app, state):
+                pass
+
+        started = time.perf_counter()
+        asyncio.run(visit())
+        summary['session'] = {'ok': True, 'seconds': round(time.perf_counter() - started, 3)}
 
 
 def _mesh(loaded: Policy) -> SessionConfig:
