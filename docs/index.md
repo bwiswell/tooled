@@ -11,6 +11,7 @@ anything reaches the mesh.
   allow and deny rules decide what's shown and what's allowed.
 - **[tools.md](tools.md)**: `tooled tools`: the operations a policy shows as tool definitions for a harness, its
   waits and listens among them, in OpenAI's, Anthropic's or MCP's form, in a schema dialect a constrained decoder
-  holds; and `tooled call`, which carries out a call of one as the model wrote it.
+  holds; `tooled call`, which carries out a call of one as the model wrote it; and `tooled serve`, the same tools over
+  MCP, attached to a session.
 - **[agents.md](agents.md)**: using tooled from Claude Code: permission rules by verb, a session for each agent,
   the write loop and long waits, `listen` under Monitor, and keeping output readable.

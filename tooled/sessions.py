@@ -46,14 +46,14 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
 from .errors import MeshError, TooledError, UsageError
 
 if TYPE_CHECKING:
     import argparse
     import subprocess
-    from collections.abc import Generator, Mapping
+    from collections.abc import Callable, Generator, Mapping
 
     from .ledger import Entry
 
@@ -173,6 +173,90 @@ def send(link: socket.socket, frame: Mapping[str, Any]) -> None:
     link.sendall((json.dumps(frame, ensure_ascii=False) + '\n').encode())
 
 
+@dataclass(frozen=True, slots=True)
+class Ended:
+    """How a call run in a session ended.
+
+    Attributes:
+        code: Its exit code.
+        line: The session's line for the call log; ``None`` for a run cut short (``--help``), which leaves none.
+    """
+
+    code: int
+    line: dict[str, Any] | None
+
+
+class Exchange:
+    """One call run in a session, from its client's side: sent as the block opens, its frames read by :meth:`ended`.
+
+    Args:
+        where: The session.
+        given: The call's arguments, as a command line gives them.
+        environ: Its ``TOOLED_*`` variables.
+        cwd: Its working directory.
+        tty: Whether its stdout is a terminal.
+        stdin: Its stdin, when its arguments read it; ``None`` otherwise.
+
+    Raises:
+        MeshError: No session is open there (on opening), or it ended during the call (in :meth:`ended`).
+    """
+
+    def __init__(  # noqa: PLR0913 -- one call: its arguments, and what it brings of its own
+        self, where: Where, given: list[str], *, environ: Mapping[str, str], cwd: str, tty: bool, stdin: str | None
+    ) -> None:
+        from . import __version__
+
+        self.where = where
+        self.request = {
+            'tooled': __version__,
+            'argv': given,
+            'cwd': cwd,
+            'env': dict(environ),
+            'tty': tty,
+            'stdin': stdin,
+        }
+
+    def __enter__(self) -> Self:
+        """Connect, and send the call."""
+        self.link = connected(self.where)
+        self.lines = self.link.makefile('r', encoding='utf-8', newline='\n')
+        with contextlib.suppress(OSError):  # closed on us (a refusal, an ending session): what it said is still there
+            send(self.link, self.request)
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        """Close the connection."""
+        self.lines.close()
+        self.link.close()
+
+    def stop(self, signum: int) -> None:
+        """Ask the session to stop the call, for ``signum``: a watch ends as a signal ends one; another is cut short."""
+        with contextlib.suppress(OSError):  # the session is gone: the frames say so
+            send(self.link, {'stop': signum})
+
+    def ended(self, *, out: Callable[[str], object], err: Callable[[str], object]) -> Ended:
+        """Each frame's text handed to ``out`` or ``err`` as it comes, then how the call ended.
+
+        Raises:
+            MeshError: The session ended during the call.
+        """
+        for line in self.lines:
+            frame = json.loads(line)
+            if 'out' in frame:
+                out(frame['out'])
+            elif 'err' in frame:
+                err(frame['err'])
+            elif 'end' in frame:
+                return Ended(frame['end'], None if frame.get('cut') else frame['entry'])
+        msg = f'the session {self.where.handle!r} ended during the call; {self.where.gone()}'
+        raise MeshError(msg)
+
+
+def own_variables() -> dict[str, str]:
+    """This process's ``TOOLED_*`` variables, which a call brings to a session."""
+    return {name: value for name, value in os.environ.items() if name.startswith('TOOLED_')}
+
+
 def attach(given: list[str], handle: str, entry: Entry) -> int:
     """Run ``given`` in the session ``handle`` names: its output written as it comes, its exit code returned.
 
@@ -182,41 +266,36 @@ def attach(given: list[str], handle: str, entry: Entry) -> int:
     Raises:
         SystemExit: The session cut the run short, as ``--help`` does a cold one: there's no line to log.
     """
-    from . import __version__
-
     entry.session = handle
     try:
         where = Where.of(handle)
-        link = connected(where)
+        calling = Exchange(
+            where,
+            given,
+            environ=own_variables(),
+            cwd=str(Path.cwd()),
+            tty=sys.stdout.isatty(),
+            stdin=_stdin_of(given),
+        )
+        with calling as call, _stopping(call):
+            ended = call.ended(out=_written(sys.stdout), err=_written(sys.stderr))
     except TooledError as exc:
         return failed(exc, entry)
-    request = {
-        'tooled': __version__,
-        'argv': given,
-        'cwd': str(Path.cwd()),
-        'env': {name: value for name, value in os.environ.items() if name.startswith('TOOLED_')},
-        'tty': sys.stdout.isatty(),
-        'stdin': _stdin_of(given),
-    }
-    with link, link.makefile('r', encoding='utf-8', newline='\n') as lines, _stopping(link):
-        with contextlib.suppress(OSError):  # closed on us (a refusal, an ending session): what it said is still there
-            send(link, request)
-        for line in lines:
-            frame = json.loads(line)
-            if 'out' in frame:
-                sys.stdout.write(frame['out'])
-                sys.stdout.flush()
-            elif 'err' in frame:
-                sys.stderr.write(frame['err'])
-                sys.stderr.flush()
-            elif 'end' in frame:
-                if frame.get('cut'):
-                    raise SystemExit(frame['end'])
-                entry.took(frame['entry'])
-                entry.end(frame['end'])
-                return frame['end']
-    msg = f'the session {handle!r} ended during the call; {where.gone()}'
-    return failed(MeshError(msg), entry)
+    if ended.line is None:
+        raise SystemExit(ended.code)
+    entry.took(ended.line)
+    entry.end(ended.code)
+    return ended.code
+
+
+def _written(stream: Any) -> Callable[[str], None]:  # a text stream
+    """What writes a frame's text to ``stream`` at once."""
+
+    def write(text: str) -> None:
+        stream.write(text)
+        stream.flush()
+
+    return write
 
 
 def failed(exc: TooledError, entry: Entry) -> int:
@@ -236,7 +315,7 @@ def _stdin_of(given: list[str]) -> str | None:
 
 
 @contextlib.contextmanager
-def _stopping(link: socket.socket) -> Generator[None]:
+def _stopping(call: Exchange) -> Generator[None]:
     """While the call runs: a first SIGINT or SIGTERM asks the session to stop it, a second ends this client at once.
 
     Only on the main thread; elsewhere, the program's own handling stands.
@@ -250,8 +329,7 @@ def _stopping(link: socket.socket) -> Generator[None]:
         if asked:
             raise SystemExit(128 + signum)
         asked.append(signum)
-        with contextlib.suppress(OSError):  # the session is gone: the frames say so
-            send(link, {'stop': signum})
+        call.stop(signum)
 
     held = {signum: signal.signal(signum, stop) for signum in (signal.SIGINT, signal.SIGTERM)}
     try:
@@ -288,7 +366,7 @@ def start(args: argparse.Namespace) -> int:
 
     if args.foreground:
         return _foreground(args)
-    emit(_started(args, tied=args.tied), args)
+    emit(started(args, tied=args.tied), args)
     return 0
 
 
@@ -306,18 +384,18 @@ def run(args: argparse.Namespace) -> int:
     if not command:
         msg = 'tooled session run takes a command, after --: tooled session run -- COMMAND …'
         raise UsageError(msg)
-    summary = _started(args, tied=os.getpid())
+    summary = started(args, tied=os.getpid())
     where = Where.of(summary['session'])
     try:
         child = subprocess.Popen(command, env={**os.environ, SESSION_ENV: where.handle})  # noqa: S603 -- the user's own
     except OSError as exc:
-        _stop(where, timeout=args.timeout)
+        stopped(where, timeout=args.timeout)
         msg = f'could not run {command[0]!r}: {exc.strerror or exc}'
         raise UsageError(msg) from exc
     with _forwarded(child):
         code = child.wait()
     with contextlib.suppress(MeshError):  # already ended: its idle timeout, a wedged loop
-        _stop(where, timeout=args.timeout)
+        stopped(where, timeout=args.timeout)
     return code
 
 
@@ -325,7 +403,7 @@ def stop(args: argparse.Namespace) -> int:
     """``session stop``: close a session, its state left, and say how it ended."""
     from .cli import emit
 
-    emit(_stop(Where.of(_named(args.name)), timeout=args.timeout), args)
+    emit(stopped(Where.of(_named(args.name)), timeout=args.timeout), args)
     return 0
 
 
@@ -358,12 +436,12 @@ def _named(given: str | None) -> str:
     return handle
 
 
-def _stop(where: Where, *, timeout: float) -> dict[str, Any]:
+def stopped(where: Where, *, timeout: float) -> dict[str, Any]:
     """Ask the session at ``where`` to close, and wait until it has: how it ended."""
     return asked(where, {'control': 'stop'}, until='stopped', timeout=timeout)
 
 
-def _started(args: argparse.Namespace, *, tied: int | None) -> dict[str, Any]:
+def started(args: argparse.Namespace, *, tied: int | None) -> dict[str, Any]:
     """Open a session in a process of its own, and wait until it's ready: where it is, and what it holds.
 
     The process starts in this one's environment and directory, and imports what this one can.

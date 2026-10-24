@@ -53,8 +53,11 @@ parsed.
   named in its ``$TOOLED_SESSION``, and closes it when the command ends, ``stop`` closes one, and ``status`` says how
   one is, or every one.
 
-A call of any verb but ``check`` and ``session``'s, given ``--session`` (else ``$TOOLED_SESSION``), runs in that
-session, on the mesh and the app it holds, and prints what it would cold.
+- ``serve [--session NAME] [--verbs VERBS]``: the tools the policy shows, over MCP on stdin and stdout, each call
+  carried out in the session named, else in one of its own (:mod:`tooled.mcp`).
+
+A call of any verb but ``check``, ``session``'s and ``serve``, given ``--session`` (else ``$TOOLED_SESSION``), runs
+in that session, on the mesh and the app it holds, and prints what it would cold.
 
 A verb renamed is refused naming its new name (``contracts`` is ``operations`` since 0.2.4). A slot left out
 widens to every value; a bound one is filled by the policy. ``--timeout`` bounds a fetch, a query
@@ -122,6 +125,7 @@ VERBS = (
     'see',
     'do',
     'session',
+    'serve',
 )
 
 #: The verbs that take a line: tooled's own options first, then the line's words, each as the shell gave it.
@@ -282,6 +286,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_call(verbs, [common, saving, attaching])
     _add_lines(verbs, [common, saving, attaching])
     _add_session(verbs)
+    _add_serve(verbs)
     return parser
 
 
@@ -483,6 +488,50 @@ def _add_session(verbs: Any) -> None:  # argparse's subparsers
             'name', nargs='?', metavar='NAME', help='its name, or its socket path (else $TOOLED_SESSION)'
         )
         asked.set_defaults(run=sessions.stop if action == 'stop' else sessions.status)
+
+
+def _add_serve(verbs: Any) -> None:  # argparse's subparsers
+    """``serve``'s parser."""
+    from . import mcp, sessions
+    from .tools import CALLS
+
+    serve = verbs.add_parser(
+        'serve',
+        help='serve the tools the policy shows over MCP, on stdio, attached to a session',
+        description=(
+            'Serve the tools the policy shows over MCP on stdin and stdout, for a harness that takes tools natively. '
+            "Each call runs in the session --session names (else $TOOLED_SESSION), beside the command line's; with "
+            'none named, in one of its own, opened from the policy and closed when serve ends.'
+        ),
+    )
+    serve.add_argument(
+        '--session',
+        metavar='NAME',
+        help="the session to attach to: its name, or its socket's path (else $TOOLED_SESSION)",
+    )
+    serve.add_argument(
+        '--verbs',
+        type=_picks,
+        metavar='VERBS',
+        help=f'only these tools, as tools --verbs picks them (wait:Fleet*); default all of {",".join(CALLS)}',
+    )
+    serve.add_argument(
+        '--policy',
+        metavar='PATH',
+        help='the policy, for a session of its own (else $TOOLED_POLICY, else ./tooled.toml)',
+    )
+    serve.add_argument('--name', metavar='NAME', help='the name of a session of its own; made up when not given')
+    serve.add_argument(
+        '--idle', type=_idle, metavar='DURATION', help='end a session of its own after this long with no call (never)'
+    )
+    serve.add_argument(
+        '--timeout',
+        type=_seconds,
+        default=sessions.WAIT,
+        metavar='S',
+        help='seconds to wait on the session (default 30)',
+    )
+    serve.set_defaults(run=mcp.serve)
 
 
 def version() -> str:
