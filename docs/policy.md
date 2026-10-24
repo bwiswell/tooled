@@ -64,6 +64,11 @@ The session tooled opens: zeared's own `SessionConfig`, loaded by zeared, strict
 usual pair for reaching a hub; `connect`, `listen`, `retry` and the rest are as zeared documents them. No flag
 overrides it, so a policy can't be pointed at another mesh from the command line.
 
+**A policy of commands alone needs none.** With no `[protocol] packages`, only an app's commands or trees, `[mesh]`
+may be left out: what an app's commands reach is the app's own business. Then no rule may name a wire op (`read`,
+`query`, `invoke`, `publish`, `unretain`), since nothing reaches a wire, and `check` shows `"mesh": null`. A policy
+with protocol packages needs its mesh.
+
 ## `[protocol]`
 
 | Key | Meaning |

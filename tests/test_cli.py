@@ -153,6 +153,19 @@ class TestCheck:
         assert out['fixed'] == {'StationMap': {'station': 's1'}, 'StationShow': {'station': 's1'}}
         assert out['hidden'] == 17 - 5
 
+    def test_commands_alone_with_no_mesh(self, tmp_path, capsys):
+        head = '[protocol]\n\n[app]\nfactory = "_support_app:factory"\n'
+        path = str(write(tmp_path, '[[allow]]\nops = ["see"]\n', head=head))
+        code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', path)
+        assert code == 0
+        assert (out['mesh'], out['packages'], out['commands']) == (None, [], 9)
+        code, _, err = run(capsys, 'check', '--connect', '--policy', path)
+        assert (code, err['error'], err['message']) == (
+            2,
+            'usage',
+            'the policy names no [mesh], so nothing it allows reaches one',
+        )
+
     def test_trees_with_no_app(self, tmp_path, capsys):
         head = HEAD.replace('packages = ["_support_protocol"]\n', 'trees = ["_support_tree.service"]\n')
         code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', str(write(tmp_path, head=head)))

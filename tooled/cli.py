@@ -79,6 +79,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Sequence
     from pathlib import Path
 
+    from zeared import SessionConfig
+
     from .catalog import Catalog, Contract
     from .ledger import Entry
     from .policy import Policy, Rules
@@ -449,7 +451,7 @@ def _check(args: argparse.Namespace) -> int:
     mesh = loaded.mesh
     summary: dict[str, Any] = {
         'policy': str(path),
-        'mesh': {'mode': mesh.mode.value, 'router': mesh.router, 'connect': list(mesh.connect)},
+        'mesh': {'mode': mesh.mode.value, 'router': mesh.router, 'connect': list(mesh.connect)} if mesh else None,
         'packages': list(loaded.protocol.packages),
         **({'app': loaded.app.factory} if loaded.app is not None else {}),
         **({'trees': list(loaded.protocol.trees)} if loaded.protocol.trees else {}),
@@ -463,7 +465,7 @@ def _check(args: argparse.Namespace) -> int:
     }
     if args.connect:
         started = time.perf_counter()
-        open_session(mesh).close()
+        open_session(_mesh(loaded)).close()
         summary['connect'] = {'ok': True, 'seconds': round(time.perf_counter() - started, 3)}
     emit(summary, args)
     return 0
@@ -538,7 +540,7 @@ def _fetch(args: argparse.Namespace) -> int:
     _judge(contract, catalog, args)
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
     executor.check_fetch(contract, rules, values)  # before the session: a refusal never waits on the mesh
-    session = executor.open_session(loaded.mesh)
+    session = executor.open_session(_mesh(loaded))
     try:
         result = executor.fetch(session, contract, rules, values, timeout=args.timeout)
     finally:
@@ -559,7 +561,7 @@ def _query(args: argparse.Namespace) -> int:
     injected = _injected(path, loaded, contract, rules)
     call = executor.prepare(contract, rules, values, request=request, injected=injected)  # before the session
     _entry(args).acted_on(catalog.label(contract), variant=call.variant)
-    session = executor.open_session(loaded.mesh)
+    session = executor.open_session(_mesh(loaded))
     try:
         result = executor.query(
             session,
@@ -594,7 +596,7 @@ def _invoke(args: argparse.Namespace) -> int:
         emit(executor.preview(contract, call, hidden=secrets), argparse.Namespace(**{**vars(args), 'select': None}))
         _notes(['a dry run: checked, and not sent'])
         return 0
-    session = executor.open_session(loaded.mesh)
+    session = executor.open_session(_mesh(loaded))
     try:
         result = executor.invoke(
             session,
@@ -611,6 +613,18 @@ def _invoke(args: argparse.Namespace) -> int:
         session.close()
     _finish(result, args, sent=True)
     return 0
+
+
+def _mesh(loaded: Policy) -> SessionConfig:
+    """The policy's mesh, for a verb that reaches it.
+
+    Raises:
+        UsageError: The policy names none, as one of commands alone may.
+    """
+    if loaded.mesh is None:
+        msg = 'the policy names no [mesh], so nothing it allows reaches one'
+        raise UsageError(msg)
+    return loaded.mesh
 
 
 def _injected(path: Path, loaded: Policy, contract: Contract, rules: Rules) -> dict[str, str]:
@@ -842,7 +856,7 @@ def _subscribe(
                 stop=stop,
             )
 
-    session = executor.open_session(loaded.mesh)
+    session = executor.open_session(_mesh(loaded))
     try:
         return asyncio.run(run(session))
     finally:
@@ -866,7 +880,7 @@ def _wait(args: argparse.Namespace) -> int:
                 session, contract, rules, values, until=args.until, meta=args.meta, within=args.timeout, stop=stop
             )
 
-    session = executor.open_session(loaded.mesh)
+    session = executor.open_session(_mesh(loaded))
     try:
         result = asyncio.run(run(session))
     except TimedOutError as exc:
