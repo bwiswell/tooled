@@ -43,7 +43,7 @@ exception: it reaches one key, so it takes every slot (below).
 
 - `slots`: each slot's schema, or `{"bound": value}`;
 - `request`: the request's JSON Schema: seared's load schema, closed against unknown keys, without the fields the
-  policy injects or the variants it denies. A root union shows folded, as its list of tags, with `variants` beside
+  policy injects or hides or the variants it denies. A root union shows folded, as its list of tags, with `variants` beside
   it (each tag and a line of what it does);
 - `reply`: a field list, each top-level field's name, type and doc, and its `constraints` when it declares any:
   seared's, by the names a declaration gives them (`{"ge": 0}`, `{"max_length": 80}`, `{"pattern": "^[a-z]+$"}`),

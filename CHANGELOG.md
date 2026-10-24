@@ -22,10 +22,15 @@ tools rather than a shell.
   the union's tag, in a schema dialect a constrained decoder holds: references inlined, objects closed, required
   first. A wait's `until` is typed from the value's top-level fields, so a model writes only conditions that can
   be met; a listen takes a `count`, and both a `timeout`. A field that holds a union anywhere but a request's root
-  can't be said in the dialect, so the export is refused, naming every such field, for the policy to deny.
+  can't be said in the dialect, so the export is refused, naming every such field, for the policy to hide or deny.
   `--verbs` keeps some verbs' tools, or some operations' (`fetch,query,invoke,wait:Fleet*`), and `--sizes` gives
   each tool's bytes and estimated tokens. The output is sorted and byte-stable, so a model server's prompt cache
   keeps hitting.
+- **Hidden request fields:** a deny rule's `fields`, globs over a request's optional top-level fields, its own or a
+  flat union variant's. A hidden field is left out of the tools and `describe`, and a call that gives one is
+  refused (exit 3) before the request loads; the rule denies nothing else. A required field can't be hidden: a
+  glob passes over it, and a name without a glob that names one is refused at load, as is `fields` on an allow
+  rule. With `variants`, only those variants' calls are covered.
 
 ## 0.2.4 — 2026-10-22
 

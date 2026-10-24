@@ -52,6 +52,10 @@ keys = ["demo/w1/move/ann"]
 ops = ["query"]
 operations = ["LookReply"]
 variants = ["dev-*"]
+
+[[deny]]                        # hidden: out of tools and describe, refused in a call
+ops = ["query"]
+fields = ["ask_id"]
 ```
 
 ## `[mesh]`
@@ -133,6 +137,7 @@ key = "token"
 | `operations` | `["*"]` | what it's done to: globs over the names `tooled operations` lists, or `module:Class`. It was `contracts` before 0.2.4; that key is refused, naming this one |
 | `keys` | `["**"]` | Zenoh key expressions (`*` one chunk, `**` any number, `$*` within a chunk) |
 | `variants` | none | globs over the tags of a request's root union; none covers the whole contract |
+| `fields` | none | a deny rule's only: globs over the optional fields at a request's root, which it hides; none covers the whole call |
 
 **Nothing is allowed until a rule allows it, and deny wins.** A rule covers a contract when its `ops` name the
 contract's op and one of its `operations` globs matches the contract's name. Then its keys decide, with Zenoh's own
@@ -159,10 +164,29 @@ policy shows.
 
 **Only a union at the request's root is checked.** A union nested deeper, such as one inside a list of follow-on
 steps, carries tags no rule sees. Where those tags matter, the server's own checks are what stop them, or the
-policy denies the contract.
+policy hides the field that holds them, or denies the contract.
 
-**Names must name something.** A contract name, a variant tag, a bound slot or an injected field written without a
-glob must exist in the protocol, so a typo is refused at load. A glob may match nothing.
+**Fields.** A deny rule with `fields` denies no call, only the request fields its globs match: the optional fields
+at the request's root, its own and, for a call that carries a variant, a flat union variant's. Such a field is
+hidden. A call that gives it is refused (exit 3), read from the request as given before it loads, as a tag is;
+`describe` and `tooled tools` leave it out, so a profile can keep a field out of a model's reach (a chain of
+follow-on orders, say) without denying the operation:
+
+```toml
+[[deny]]                        # orders, one at a time
+ops = ["invoke"]
+operations = ["OrderResult"]
+fields = ["then"]
+```
+
+A required field can't be left out of a call, so it can't be hidden: a glob passes over it, and a name without a
+glob that names one is refused at load. With `variants` too, the rule covers only those variants' calls. Like any
+rule, it covers what its `ops`, `operations` and `keys` reach; the tools and `describe` leave a field out only
+where its keys cover every topic, and a call at a key they reach is refused either way. `fields` on an allow rule
+is refused: a field is hidden, never allowed one by one.
+
+**Names must name something.** A contract name, a variant tag, a hidden field, a bound slot or an injected field
+written without a glob must exist in the protocol, so a typo is refused at load. A glob may match nothing.
 
 ## Not in this version
 

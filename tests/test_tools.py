@@ -390,19 +390,27 @@ class TestParameters:
 
 
 class TestRefused:
-    def test_a_union_in_a_field_is_named(self, tmp_path):
+    def test_a_union_in_a_required_field_is_named(self, tmp_path):
         with pytest.raises(PolicyFileError) as exc:
             local(tmp_path, TryReply)
         assert exc.value.message == (
-            "TryReply: field 'tries[]' is a union, which a tool's schema can't say; deny it in the policy"
+            "TryReply: field 'tries[]' is a union, which a tool's schema can't say; deny TryReply in the policy"
+        )
+
+    def test_a_union_in_an_optional_field_names_the_field_to_hide(self, tmp_path):
+        with pytest.raises(PolicyFileError) as exc:
+            local(tmp_path, RouteResult)
+        assert exc.value.message == (
+            "RouteResult: field 'then[]' is a union, which a tool's schema can't say; hide 'then' in the policy, "
+            'or deny RouteResult'
         )
 
     def test_a_field_every_variant_shares_is_named_once_with_the_others(self, tmp_path):
         with pytest.raises(PolicyFileError) as exc:
             local(tmp_path, RouteResult, TryReply)
         assert exc.value.message == (
-            "2 fields can't be said in a tool's schema; deny them in the policy: RouteResult 'then[]' (a union), "
-            "TryReply 'tries[]' (a union)"
+            "2 fields can't be said in a tool's schema; hide or deny them in the policy: RouteResult 'then[]' "
+            "(a union; hide 'then'), TryReply 'tries[]' (a union; deny TryReply)"
         )
 
     def test_denying_it_lets_the_rest_through(self, tmp_path):
@@ -423,6 +431,40 @@ class TestRefused:
     def test_two_unions_at_a_request_s_root(self, tmp_path):
         with pytest.raises(PolicyFileError, match='TwoResult: its request has 2 unions at its root'):
             local(tmp_path, TwoResult)
+
+
+class TestHidden:
+    def test_hiding_a_field_lets_its_tools_through(self, tmp_path):
+        body = EVERYTHING + '\n[[deny]]\nops = ["invoke"]\nfields = ["then"]\n'
+        found = local(tmp_path, RouteResult, body=body)
+        assert list(found) == ['invoke_route_result_go', 'invoke_route_result_stay']
+        assert list(found['invoke_route_result_go'].parameters['properties']) == ['crew', 'to']
+
+    def test_a_variant_s_field(self, tmp_path):
+        body = EVERYTHING + '\n[[deny]]\nops = ["invoke"]\nfields = ["then", "note"]\n'
+        stay = local(tmp_path, RouteResult, body=body)['invoke_route_result_stay'].parameters
+        assert stay == {
+            'type': 'object',
+            'properties': {'crew': {'type': 'string', 'description': "the crew's key"}},
+            'required': ['crew'],
+            'additionalProperties': False,
+        }
+
+    def test_with_variants_only_their_tools(self, tmp_path):
+        body = EVERYTHING + '\n[[deny]]\nops = ["invoke"]\nvariants = ["go"]\nfields = ["via"]\n'
+        found = local(tmp_path, PlanResult, body=body)
+        assert 'via' not in found['invoke_plan_result_go'].parameters['properties']
+        assert 'via' in found['invoke_plan_result_stay'].parameters['properties']
+
+    def test_kept_where_its_keys_cover_only_some_of_the_topic(self, tmp_path):
+        body = EVERYTHING + '\n[[deny]]\nops = ["invoke"]\nkeys = ["plan/c1"]\nfields = ["via"]\n'
+        found = local(tmp_path, PlanResult, body=body)
+        assert 'via' in found['invoke_plan_result_go'].parameters['properties']  # a call at plan/c1 is still refused
+
+    def test_a_query_s_own_field(self, tmp_path, catalog):
+        body = POLICY + '\n[[deny]]\nops = ["query"]\nfields = ["ask_id"]\n'
+        found = exported(tmp_path, catalog, body)
+        assert list(found['query_look_reply_ping'].parameters['properties']) == ['station', 'player']
 
 
 class TestNames:

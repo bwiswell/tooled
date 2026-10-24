@@ -134,6 +134,71 @@ class TestCheck:
             r.check(look, 'demo/w1/look/ann')
 
 
+class TestHidden:
+    ALLOW = '[[allow]]\nops = ["query", "invoke"]\n\n'
+
+    def test_a_deny_with_fields_hides_no_contract_and_no_variant(self, tmp_path, catalog):
+        r = rules(tmp_path, catalog, self.ALLOW + '[[deny]]\nops = ["query"]\nvariants = ["pong"]\nfields = ["*"]\n')
+        assert shown(r) == ['EchoReply', 'LookReply', 'MoveResult']
+        assert r.allowed_variants(catalog.get('LookReply')) == ('ping', 'pong', 'dev-peek')
+
+    def test_optional_root_fields_its_globs_match(self, tmp_path, catalog):
+        r = rules(tmp_path, catalog, self.ALLOW + '[[deny]]\nops = ["query", "invoke"]\nfields = ["*_id"]\n')
+        assert r.hidden(catalog.get('MoveResult')) == ('move_id',)
+        assert r.hidden(catalog.get('LookReply'), 'ping') == ('ask_id',)
+        assert r.hidden(catalog.get('EchoReply')) == ()
+
+    def test_a_glob_passes_over_required_fields(self, tmp_path, catalog):
+        r = rules(tmp_path, catalog, self.ALLOW + '[[deny]]\nops = ["query"]\nfields = ["*"]\n')
+        look = catalog.get('LookReply')
+        assert r.hidden(look) == ('ask_id',)  # not token, which a load requires
+        assert r.hidden(look, 'pong') == ('ask_id', 'times')
+        assert r.hidden(look, 'ping') == ('ask_id',)  # station is required
+
+    def test_with_variants_only_their_calls(self, tmp_path, catalog):
+        body = self.ALLOW + '[[deny]]\nops = ["query"]\nvariants = ["pong"]\nfields = ["ask_id", "times"]\n'
+        r = rules(tmp_path, catalog, body)
+        look = catalog.get('LookReply')
+        assert r.hidden(look, 'pong') == ('ask_id', 'times')
+        assert r.hidden(look, 'ping') == ()
+        assert r.hidden(look) == ()
+
+    def test_only_where_its_keys_cover_every_topic(self, tmp_path, catalog):
+        body = self.ALLOW + '[[deny]]\nops = ["invoke"]\nkeys = ["demo/w1/move/ann"]\nfields = ["move_id"]\n'
+        assert rules(tmp_path, catalog, body).hidden(catalog.get('MoveResult')) == ()
+
+    def test_a_call_that_gives_one_is_refused(self, tmp_path, catalog):
+        r = rules(tmp_path, catalog, self.ALLOW + '[[deny]]\nops = ["invoke"]\nfields = ["move_id"]\n')
+        move = catalog.get('MoveResult')
+        r.check(move, 'demo/w1/move/ann', fields=['to'])
+        with pytest.raises(RefusedError) as exc:
+            r.check(move, 'demo/w1/move/ann', fields=['to', 'move_id'])
+        assert exc.value.message == "'move_id' is hidden by the policy (deny[0]); leave it out of the request"
+
+    def test_every_one_it_gives_is_named(self, tmp_path, catalog):
+        r = rules(tmp_path, catalog, self.ALLOW + '[[deny]]\nops = ["query"]\nfields = ["*"]\n')
+        with pytest.raises(RefusedError) as exc:
+            r.check(catalog.get('LookReply'), 'demo/w1/look/ann', variant='pong', fields=['kind', 'times', 'ask_id'])
+        assert exc.value.message == (
+            "'times' and 'ask_id' are hidden by the policy (deny[0]); leave them out of the request"
+        )
+
+    def test_a_call_refused_only_for_its_variants(self, tmp_path, catalog):
+        r = rules(tmp_path, catalog, self.ALLOW + '[[deny]]\nops = ["query"]\nvariants = ["pong"]\nfields = ["*"]\n')
+        look = catalog.get('LookReply')
+        r.check(look, 'demo/w1/look/ann', variant='ping', fields=['ask_id'])
+        with pytest.raises(RefusedError, match="'ask_id' is hidden"):
+            r.check(look, 'demo/w1/look/ann', variant='pong', fields=['ask_id'])
+
+    def test_a_call_refused_where_its_keys_reach(self, tmp_path, catalog):
+        body = self.ALLOW + '[[deny]]\nops = ["invoke"]\nkeys = ["demo/w1/move/ann"]\nfields = ["move_id"]\n'
+        r = rules(tmp_path, catalog, body)
+        move = catalog.get('MoveResult')
+        r.check(move, 'demo/w1/move/bea', fields=['move_id'])
+        with pytest.raises(RefusedError, match="'move_id' is hidden"):
+            r.check(move, 'demo/w1/move/ann', fields=['move_id'])
+
+
 class TestBound:
     def test_bound_slots_and_shapes(self, tmp_path, catalog):
         r = rules(tmp_path, catalog, '[bind]\nworld = "w1"\nplayer = "ann"\n')
@@ -152,6 +217,31 @@ class TestReferences:
                 ('deny', 0, 'variants', 1),
                 "variant 'peek' is no tag",
             ),
+            (
+                '[[deny]]\nops = ["invoke"]\nfields = ["move_id", "note"]\n',
+                ('deny', 0, 'fields', 1),
+                "field 'note' is no field at the root of a request this rule covers",
+            ),
+            (  # a variant's field, where the rule covers no variant that has it
+                '[[deny]]\nops = ["query"]\nvariants = ["ping"]\nfields = ["times"]\n',
+                ('deny', 0, 'fields', 0),
+                "field 'times' is no field",
+            ),
+            (  # a field of a request the rule's ops don't cover
+                '[[deny]]\nops = ["query"]\nfields = ["move_id"]\n',
+                ('deny', 0, 'fields', 0),
+                "field 'move_id' is no field",
+            ),
+            (
+                '[[deny]]\nops = ["invoke"]\nfields = ["to"]\n',
+                ('deny', 0, 'fields', 0),
+                "hides 'to', which MoveResult requires, so a call can't leave it out; deny MoveResult instead",
+            ),
+            (
+                '[[deny]]\nops = ["query"]\nfields = ["station"]\n',
+                ('deny', 0, 'fields', 0),
+                "hides 'station', which LookReply variant 'ping' requires.*; deny LookReply variant 'ping' instead",
+            ),
             ('[bind]\nplanet = "p1"\n', ('bind', 'planet'), 'no contract has as a slot'),
             ('[inject.tokn]\nenv = "X"\n', ('inject', 'tokn'), 'no request declares'),
         ],
@@ -163,6 +253,10 @@ class TestReferences:
 
     def test_globs_may_match_nothing(self, tmp_path, catalog):
         rules(tmp_path, catalog, '[[deny]]\nops = ["invoke"]\noperations = ["Order*"]\nvariants = ["dev-*"]\n')
+        rules(tmp_path, catalog, '[[deny]]\nops = ["invoke"]\nfields = ["then*"]\n')
+
+    def test_a_variant_s_field_its_variants_cover(self, tmp_path, catalog):
+        rules(tmp_path, catalog, '[[deny]]\nops = ["query"]\nvariants = ["pong"]\nfields = ["times"]\n')
 
     def test_an_ambiguous_name_is_refused_naming_both(self, tmp_path):
         head = HEAD.replace('["_support_protocol"]', '["_support_protocol", "_support_protocol_two"]')
