@@ -202,6 +202,71 @@ class TestOperations:
         assert run(capsys, 'operations', '--policy', str(write(tmp_path))) == (0, [], None)
 
 
+class TestTools:
+    def test_prints_each_tool_in_the_form_asked(self, tmp_path, capsys):
+        code, out, err = run(capsys, 'tools', '--format', 'anthropic', '--policy', str(write(tmp_path, POLICY)))
+        assert code == 0
+        assert [tool['name'] for tool in out] == [
+            'fetch_station',
+            'fetch_status',
+            'listen_notice',
+            'listen_trace',
+            'query_look_reply_ping',
+            'query_look_reply_pong',
+            'wait_notice',
+            'wait_station',
+            'wait_status',
+            'wait_trace',
+        ]
+        assert set(out[0]) == {'name', 'description', 'input_schema'}
+        assert err == {'note': 'no tool for a presence feed, which no verb acts on yet: Seen'}
+
+    def test_openai_by_default(self, tmp_path, capsys):
+        _, out, _ = run(capsys, 'tools', '--policy', str(write(tmp_path, POLICY)))
+        assert out[0]['type'] == 'function'
+        assert out[0]['function']['name'] == 'fetch_station'
+
+    def test_verbs_keep_some_tools(self, tmp_path, capsys):
+        policy = str(write(tmp_path, POLICY))
+        _, out, _ = run(capsys, 'tools', '--verbs', 'fetch,wait:Station', '--format', 'mcp', '--policy', policy)
+        assert [tool['name'] for tool in out] == ['fetch_station', 'fetch_status', 'wait_station']
+
+    def test_sizes(self, tmp_path, capsys):
+        argv = [
+            'tools',
+            '--sizes',
+            '--format',
+            'mcp',
+            '--verbs',
+            'fetch,query',
+            '--policy',
+            str(write(tmp_path, POLICY)),
+        ]
+        code, out, _ = run(capsys, *argv)
+        assert code == 0
+        assert out['format'] == 'mcp'
+        assert [row['name'] for row in out['tools']] == [
+            'fetch_station',
+            'fetch_status',
+            'query_look_reply_ping',
+            'query_look_reply_pong',
+        ]
+        assert out['total']['tools'] == 4
+
+    @pytest.mark.parametrize(
+        ('flag', 'given', 'message'),
+        [
+            ('--format', 'xml', "tooled tools: argument --format: invalid choice: 'xml'"),
+            ('--verbs', 'fetch,publish', 'tooled tools: argument --verbs: each is a verb, or verb:GLOB, of fetch'),
+            ('--verbs', 'wait:Statoin', "no operation named 'Statoin'"),
+        ],
+    )
+    def test_a_bad_option_is_a_usage_error(self, tmp_path, capsys, flag, given, message):
+        code, _, err = run(capsys, 'tools', flag, given, '--policy', str(write(tmp_path, POLICY)))
+        assert (code, err['error']) == (2, 'usage')
+        assert err['message'].startswith(message)
+
+
 class TestDescribe:
     def test_one_contract(self, tmp_path, capsys):
         code, out, _ = run(capsys, 'describe', 'LookReply', '--policy', str(write(tmp_path, POLICY)))
@@ -448,6 +513,15 @@ class TestChecksBeforeTheSession:
     def test_told_as_itself_with_the_mesh_down(self, dead, capsys, argv, code, kind):
         got, out, err = run(capsys, *argv, '--policy', dead)
         assert (got, out, err['error']) == (code, None, kind)
+
+    def test_a_hidden_field_refused(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv('DEMO_TOKEN', 'tok-ann')
+        head = HEAD.replace('tcp/127.0.0.1:7447', f'tcp/127.0.0.1:{free_port()}')
+        policy = str(write(tmp_path, READS + '\n[[deny]]\nops = ["query"]\nfields = ["ask_id"]\n', head=head))
+        request = '{"kind": "ping", "station": "s1", "ask_id": "a1"}'
+        code, out, err = run(capsys, 'query', 'LookReply', 'player=ann', '--request', request, '--policy', policy)
+        assert (code, out, err['error']) == (3, None, 'refused')
+        assert err['message'] == "'ask_id' is hidden by the policy (deny[1]); leave it out of the request"
 
     def test_a_fetch_refused(self, tmp_path, capsys):
         head = HEAD.replace('tcp/127.0.0.1:7447', f'tcp/127.0.0.1:{free_port()}')
@@ -826,6 +900,224 @@ class TestWait:
         assert (proc.returncode, out) == (7, b''), err
         error = json.loads(err.splitlines()[-1])
         assert (error['message'], error['last']) == ('stopped before any Notice value met text=never: 0 seen', None)
+
+
+class TestCall:
+    """A tool call, carried out as its verb is: its output the verb's, and its errors too."""
+
+    def call(self, capsys, policy, tool, given=None):
+        argv = ['call', tool, '--policy', policy] + (['--args', json.dumps(given)] if given is not None else [])
+        return run(capsys, *argv)
+
+    def test_a_fetch(self, reads, capsys):
+        code, out, err = self.call(capsys, reads, 'fetch_station', {'station': 's2'})
+        assert (code, out, err) == (0, [{'world': 'w1', 'station': 's2', 'stock': 5}], None)
+
+    def test_a_query_with_its_variant_s_tag(self, reads, capsys):
+        code, out, _ = self.call(capsys, reads, 'query_look_reply_ping', {'player': 'ann', 'station': 's1'})
+        assert code == 0
+        assert out[0]['seen'] == "ping {'station': 's1'} at [('player', 'ann'), ('world', 'w1')] {}"
+
+    def test_a_write(self, writes, world, capsys):
+        code, out, _ = self.call(capsys, writes, 'invoke_move_result', {'player': 'ann', 'to': 'dock'})
+        assert (code, out) == (0, [{'world': 'w1', 'player': 'ann', 'ok': True}])
+        assert len(world.asked) == 1
+
+    def test_a_wait(self, reads, capsys):
+        code, out, _ = self.call(capsys, reads, 'wait_station', {'until': {'stock': 5}})
+        assert (code, out) == (0, {'world': 'w1', 'station': 's2', 'stock': 5})
+
+    def test_a_wait_past_its_timeout(self, reads, capsys):
+        code, out, err = self.call(capsys, reads, 'wait_station', {'until': {'stock': 99}, 'timeout': 0.3})
+        assert (code, out, err['error']) == (7, None, 'timeout')
+        assert err['message'] == 'no Station value met stock=99 within 0.3s: 2 seen'
+
+    def test_a_listen_gives_its_values_as_one_list(self, reads, world, capsys):
+        import threading
+
+        import _support_protocol as demo
+
+        done = threading.Event()
+
+        def publish():
+            while not done.wait(0.05):
+                demo.Notice(world='w1', player='ann', text='hello').send(session=world.session)
+
+        publisher = threading.Thread(target=publish)
+        publisher.start()
+        try:
+            code, out, err = self.call(capsys, reads, 'listen_notice', {'player': 'ann', 'count': 2, 'timeout': 20})
+        finally:
+            done.set()
+            publisher.join()
+        assert (code, err) == (0, None)
+        assert out == [{'world': 'w1', 'player': 'ann', 'text': 'hello'}] * 2
+
+    def test_a_listen_short_of_its_count(self, reads, capsys):
+        code, out, err = self.call(capsys, reads, 'listen_notice', {'timeout': 0.2})
+        assert (code, out) == (0, [])
+        assert err == {'note': '0 of the 1 values asked for came within 0.2s'}
+
+    @pytest.mark.parametrize(
+        ('tool', 'given', 'expected'),
+        [
+            ('fetch_stations', {}, (2, 'usage', None)),
+            ('fetch_station', {'stock': 3}, (4, 'validation', ['stock'])),
+            ('wait_station', {'until': {'stock': 'five'}}, (4, 'validation', ['until', 'stock'])),
+            ('query_look_reply_ping', {'player': 'ann'}, (4, 'validation', ['station'])),  # the tool requires it
+            ('query_look_reply_pong', {'times': 'two'}, (4, 'validation', ['times'])),  # seared's, from the request
+            ('query_look_reply_ping', {'station': 's1', 'token': 't'}, (3, 'refused', ['token'])),  # injected
+            ('fetch_station', {'world': 'w2'}, (3, 'refused', ['world'])),  # bound
+        ],
+    )
+    def test_errors_are_the_verb_s_and_the_tool_s(self, reads, capsys, tool, given, expected):
+        code, out, err = self.call(capsys, reads, tool, given)
+        assert (code, err['error'], err.get('path')) == expected
+        assert out is None
+
+    def test_a_hidden_field(self, tmp_path, world, monkeypatch, capsys):
+        monkeypatch.setenv('DEMO_TOKEN', 'tok-ann')
+        body = POLICY + '\n[[deny]]\nops = ["query"]\nfields = ["ask_id"]\n'
+        policy = str(write(tmp_path, body, head=HEAD.replace('tcp/127.0.0.1:7447', world.endpoint)))
+        given = {'player': 'ann', 'station': 's1', 'ask_id': 'a1'}
+        code, _, err = self.call(capsys, policy, 'query_look_reply_ping', given)
+        assert (code, err['message']) == (3, "'ask_id' is hidden by the policy (deny[1]); leave it out of the request")
+
+    @pytest.mark.parametrize(('text', 'message'), [('{', '--args is not JSON'), ('[]', '--args is a JSON object')])
+    def test_arguments_that_are_no_object(self, reads, capsys, text, message):
+        code, _, err = run(capsys, 'call', 'fetch_station', '--args', text, '--policy', reads)
+        assert (code, err['error']) == (2, 'usage')
+        assert err['message'].startswith(message)
+
+    def test_a_result_over_the_cap(self, reads, capsys):
+        code, _, err = run(capsys, 'call', 'fetch_station', '--max-bytes', '10', '--policy', reads)
+        assert (code, err['error']) == (6, 'too_large')
+
+    def test_the_mesh_down(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv('DEMO_TOKEN', 'tok-ann')
+        policy = str(write(tmp_path, POLICY, head=HEAD.replace('tcp/127.0.0.1:7447', f'tcp/127.0.0.1:{free_port()}')))
+        code, _, err = self.call(capsys, policy, 'fetch_station', {'station': 's1'})
+        assert (code, err['error']) == (5, 'mesh')
+
+    def test_no_arguments_are_none(self, reads, capsys):
+        code, out, _ = run(capsys, 'call', 'fetch_station', '--policy', reads)
+        assert (code, len(out)) == (0, 2)
+
+
+class TestCallLog:
+    """With TOOLED_LOG set, each run appends one line: what it did, by name, and how it ended; never a value."""
+
+    @pytest.fixture
+    def log(self, tmp_path, monkeypatch):
+        path = tmp_path / 'calls.jsonl'
+        monkeypatch.setenv('TOOLED_LOG', str(path))
+        return path
+
+    @staticmethod
+    def lines(log):
+        return [json.loads(line) for line in log.read_text().splitlines()]
+
+    @staticmethod
+    def part(line, *keys):
+        return {key: line[key] for key in keys}
+
+    def test_a_fetch(self, reads, log, capsys):
+        assert main(['fetch', 'Station', 'station=s2', '--policy', reads]) == 0
+        out = capsys.readouterr().out
+        (line,) = self.lines(log)
+        assert {key: value for key, value in line.items() if key not in {'at', 'seconds'}} == {
+            'verb': 'fetch',
+            'route': 'wire',
+            'operation': 'Station',
+            'tool': None,
+            'variant': None,
+            'arguments': ['station'],
+            'flags': ['--policy'],
+            'exit': 0,
+            'error': None,
+            'path': None,
+            'bytes': len(out.encode()),
+        }
+        assert 's2' not in log.read_text()  # a slot's value is never kept
+
+    def test_a_call(self, reads, log, capsys):
+        given = json.dumps({'player': 'ann', 'station': 's1'})
+        assert main(['call', 'query_look_reply_ping', '--args', given, '--policy', reads]) == 0
+        (line,) = self.lines(log)
+        assert self.part(line, 'verb', 'operation', 'tool', 'variant', 'arguments', 'flags', 'exit') == {
+            'verb': 'call',
+            'operation': 'LookReply',
+            'tool': 'query_look_reply_ping',
+            'variant': 'ping',
+            'arguments': ['player', 'station'],
+            'flags': ['--args', '--policy'],
+            'exit': 0,
+        }
+        assert 'ann' not in log.read_text()
+
+    def test_a_query_s_variant_is_read_from_its_request(self, reads, log, capsys):
+        main(['query', 'LookReply', 'player=ann', '--request', '{"kind": "pong"}', '--policy', reads])
+        assert self.lines(log)[0]['variant'] == 'pong'
+
+    def test_a_refused_call_with_its_kind_and_path(self, reads, log, capsys):
+        assert main(['call', 'wait_station', '--args', '{"until": {"stok": 5}}', '--policy', reads]) == 4
+        (line,) = self.lines(log)
+        assert self.part(line, 'operation', 'tool', 'exit', 'error', 'path', 'bytes') == {
+            'operation': 'Station',
+            'tool': 'wait_station',
+            'exit': 4,
+            'error': 'validation',
+            'path': ['until', 'stok'],
+            'bytes': 0,
+        }
+
+    def test_a_tool_none_has_is_named_as_asked(self, reads, log, capsys):
+        assert main(['call', 'fetch_stations', '--policy', reads]) == 2
+        line = self.lines(log)[0]
+        assert self.part(line, 'tool', 'operation', 'error') == {
+            'tool': 'fetch_stations',
+            'operation': None,
+            'error': 'usage',
+        }
+
+    def test_a_wait_past_its_timeout_keeps_no_last_value(self, reads, log, capsys):
+        main(['wait', 'Station', '--until', 'stock=99', '--timeout', '0.2', '--policy', reads])
+        (line,) = self.lines(log)
+        assert self.part(line, 'exit', 'error') == {'exit': 7, 'error': 'timeout'}
+        assert line['seconds'] >= 0.2
+        assert 'last' not in line
+
+    def test_a_listen_counts_every_line(self, reads, log, capsys):
+        assert main(['listen', 'Station', '--count', '2', '--policy', reads]) == 0
+        assert self.lines(log)[0]['bytes'] == len(capsys.readouterr().out.encode())
+
+    def test_a_verb_tooled_does_not_have(self, log, capsys):
+        assert main(['fetchh', 'Station']) == 2
+        assert self.part(self.lines(log)[0], 'verb', 'exit', 'error') == {'verb': None, 'exit': 2, 'error': 'usage'}
+
+    def test_runs_share_the_file(self, reads, log, capsys):
+        main(['operations', '--policy', reads])
+        main(['describe', 'Station', '--policy', reads])
+        assert [(line['verb'], line['operation']) for line in self.lines(log)] == [
+            ('operations', None),
+            ('describe', 'Station'),
+        ]
+
+    def test_a_log_it_can_not_write_leaves_the_run_alone(self, reads, tmp_path, monkeypatch, capsys):
+        target = tmp_path / 'missing' / 'calls.jsonl'
+        monkeypatch.setenv('TOOLED_LOG', str(target))
+        assert main(['fetch', 'Station', '--policy', reads]) == 0
+        assert lines(capsys.readouterr().err) == [
+            {'note': f'could not write the call log to {target}: No such file or directory'}
+        ]
+
+    def test_its_verbs_are_the_parser_s(self):
+        import argparse
+
+        from tooled.cli import VERBS, build_parser
+
+        (verbs,) = [action for action in build_parser()._actions if isinstance(action, argparse._SubParsersAction)]
+        assert list(verbs.choices) == list(VERBS)
 
 
 class TestOutput:

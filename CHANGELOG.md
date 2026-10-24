@@ -9,6 +9,46 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
+## 0.2.5 — 2026-10-23
+
+**Tools for harnesses.** The operations a policy shows, as tool definitions a harness hands a model that calls
+tools rather than a shell: `tools` exports them, `call` carries out a model's call of one, and `TOOLED_LOG` keeps a
+line a run. A deny rule's `fields` hides a request field from them, and refuses it in a call.
+
+### Added
+
+- **`tooled tools`:** one tool for each fetch, query, write, wait or listen the policy shows, and one for each
+  variant of a request's root union it allows, in OpenAI's, Anthropic's or MCP's form (`--format`, `openai` by
+  default). A tool's parameters are the unbound slots and the request's fields, without what the policy injects or
+  the union's tag, in a schema dialect a constrained decoder holds: references inlined, objects closed, required
+  first. A wait's `until` is typed from the value's top-level fields, so a model writes only conditions that can
+  be met; a listen takes a `count`, and both a `timeout`. A field that holds a union anywhere but a request's root
+  can't be said in the dialect, so the export is refused, naming every such field, for the policy to hide or deny.
+  `--verbs` keeps some verbs' tools, or some operations' (`fetch,query,invoke,wait:Fleet*`), and `--sizes` gives
+  each tool's bytes and estimated tokens. The output is sorted and byte-stable, so a model server's prompt cache
+  keeps hitting.
+- **`tooled call TOOL --args JSON`:** carries out one tool call as the model wrote it, for a harness to hand back
+  what it prints. The arguments map back onto the verb the tool's name begins with (slots, the request with the
+  variant's tag, a wait's conditions, a listen's count and timeout), and then it's that verb's call: checked by the
+  policy and seared, printed as the verb prints, with its exit code. A listen's values come as one JSON list. What
+  the tool says is checked first, each refusal a `validation` error (exit 4) naming the parameter, worded for the
+  model: a required one missing, one it doesn't take, a slot or a condition of the wrong type, a value its field
+  doesn't list. Any tool the policy shows can be called, not only those an export's `--verbs` kept.
+- **The call log, `TOOLED_LOG`:** set to a path, every run appends one JSON line as it ends: when, the verb, the
+  operation, tool and variant, the names of the arguments, slots and options given, the exit code, the error's kind
+  and path, the bytes on stdout and the seconds taken. It keeps no value and no error message. Every key is on every
+  line, and runs side by side share a file. A log tooled can't write is a note; the run's exit code stands.
+- **Hidden request fields:** a deny rule's `fields`, globs over a request's optional top-level fields, its own or a
+  flat union variant's. A hidden field is left out of the tools and `describe`, and a call that gives one is
+  refused (exit 3) before the request loads; the rule denies nothing else. A required field can't be hidden: a
+  glob passes over it, and a name without a glob that names one is refused at load, as is `fields` on an allow
+  rule. With `variants`, only those variants' calls are covered.
+
+### Changed
+
+- **A refused field's `path`:** the policy's refusal of a request field it injects or hides, or of a bound slot
+  given another value, names that field in the error's `path`, as a validation error does.
+
 ## 0.2.4 — 2026-10-22
 
 **Operations, not contracts.** What tooled lists, names and looks up is an operation, so a later version can list a

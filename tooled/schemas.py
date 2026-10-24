@@ -3,9 +3,9 @@
 Every schema is seared's own (``seared.doc.json_schema`` and ``field_schema``), shaped by the policy:
 
 - **A request's** is its load schema, closed (``unknown='raise'``), so valid input loads and an unknown key is
-  refused. The fields the policy injects are taken out, since a value given for one is refused, and so are the
-  variants it denies: their branches, their tags, and the definitions only they used. It's the wire form, as the
-  protocol defines it.
+  refused. The fields the policy injects or hides are taken out, since a value given for one is refused, and so
+  are the variants it denies: their branches, their tags, and the definitions only they used. It's the wire form,
+  as the protocol defines it.
 - **A reply's** is its dump schema: what ``dump`` writes, and so what a command prints.
 - **A slot's** is its payload field's schema, when the slot is also a field; a string otherwise. A bound slot
   shows its value instead, since it can't be given.
@@ -132,11 +132,13 @@ def describe_variant(contract: Contract, tag: str, rules: Rules) -> dict[str, An
         msg = f'the policy denies variant {tag!r} of {rules.catalog.label(contract)}'
         raise RefusedError(msg)
     cls = classes[tag]
+    schema = json_schema(cls, mode='load', unknown='raise')
+    drop_fields(schema, list(rules.hidden(contract, tag)))
     return {
         'name': rules.catalog.label(contract),
         'variant': tag,
         'summary': summary_line(cls),
-        'schema': json_schema(cls, mode='load', unknown='raise'),
+        'schema': prune_defs(schema),
     }
 
 
@@ -181,16 +183,19 @@ def injected(contract: Contract, rules: Rules) -> list[str]:
     return [name for name in names if name in rules.policy.inject]
 
 
-def request_schema(contract: Contract, rules: Rules) -> dict[str, Any] | None:
-    """``contract``'s request load schema, closed, without the injected fields or the denied variants."""
+def request_schema(contract: Contract, rules: Rules, tag: str | None = None) -> dict[str, Any] | None:
+    """``contract``'s request load schema, closed, without the injected or hidden fields or the denied variants.
+
+    The hidden fields are those of its own the policy hides from every call, or from a call carrying ``tag``.
+    """
     if contract.request is None:
         return None
     schema = json_schema(contract.request, mode='load', unknown='raise')
-    drop_fields(schema, injected(contract, rules))
+    drop_fields(schema, [*injected(contract, rules), *rules.hidden(contract, tag)])
     denied = set(contract.variants) - set(rules.allowed_variants(contract))
     if denied:
         schema = drop_variants(schema, denied)
-    return schema
+    return prune_defs(schema)
 
 
 def variant_classes(contract: Contract) -> list[tuple[str, type]]:
@@ -233,7 +238,7 @@ def tag_keys(cls: type) -> list[str]:
     for envelope in json_schema(cls, mode='load').get('allOf', ()):
         branches = envelope.get('allOf')
         for branch in branches if isinstance(branches, list) else ():
-            key, _tag = _branch_tag(branch)
+            key, _tag = branch_tag(branch)
             if key is not None:
                 keys.append(key)
                 break
@@ -280,7 +285,7 @@ def drop_variants(schema: dict[str, Any], denied: set[str]) -> dict[str, Any]:
             continue
         kept, keys = [], set()
         for branch in branches:
-            tag_key, tag = _branch_tag(branch)
+            tag_key, tag = branch_tag(branch)
             if tag_key is not None:
                 keys.add(tag_key)
             if tag not in denied:
@@ -293,7 +298,7 @@ def drop_variants(schema: dict[str, Any], denied: set[str]) -> dict[str, Any]:
     return prune_defs(out)
 
 
-def _branch_tag(branch: Any) -> tuple[str | None, str | None]:  # a JSON Schema node
+def branch_tag(branch: Any) -> tuple[str | None, str | None]:  # a JSON Schema node
     """The tag key and tag an ``if``/``then`` branch selects on: ``if: {properties: {key: {const: tag}}}``."""
     condition = branch.get('if', {}) if isinstance(branch, dict) else {}
     for key, rule in condition.get('properties', {}).items():

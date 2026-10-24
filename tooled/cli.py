@@ -29,6 +29,15 @@ and zeared tooled runs on, since a protocol package tooled reads must pin the sa
   checks it and the policy, then prints the selector and the request, injected secrets as ``"<injected>"``,
   without sending anything.
 
+- ``tools [--format openai|anthropic|mcp] [--verbs VERBS] [--sizes]``: the operations the policy shows as tool
+  definitions, for a harness to hand a model (:mod:`tooled.tools`): one for each fetch, query, write, wait or listen,
+  and one for each allowed variant of a request's union; ``--verbs`` keeps those of some verbs, or of some verbs'
+  operations (``fetch,wait:Fleet*``). ``--sizes`` gives
+  each one's bytes and estimated tokens instead. A presence feed has none, and a note says which.
+- ``call TOOL [--args JSON]``: carry out one call of a tool ``tools`` exported, as a model wrote it
+  (:mod:`tooled.calls`): its arguments mapped back to the verb its name begins with, then checked and carried out as
+  that verb is, and printed as it prints. A listen's values come as one JSON list. An argument the tool doesn't
+  take, or a value it can't, is refused naming it, worded for the model the harness hands it back to.
 - ``wait CONTRACT [slot=value …] --until PATH=VALUE [--until …]``: subscribe as ``listen`` does, until a value
   meets every condition, and print it: a retained contract already in that state answers at once. A path is dotted
   (``numbers.fuel``); a value reads as JSON if it can (``40``, ``true``, ``"30%"``), else as a string (``idle``).
@@ -44,6 +53,10 @@ the size of each part; ``--out FILE`` writes it whole. A failure goes to stderr 
 kind, "message": …, "path": […]}``, and the exit code says which kind (see :mod:`tooled.errors`). A note on
 stderr (``{"note": …}``) says what a read left out, and a library's log line goes there as JSON too (``{"log":
 level, …}``).
+
+**The call log.** With ``TOOLED_LOG`` set to a path, each run appends one JSON line to it when it ends: the verb,
+what it acted on, the names of what was given, the exit code and error kind, the bytes on stdout and the seconds
+taken, and no value (:mod:`tooled.ledger`).
 """
 
 from __future__ import annotations
@@ -61,15 +74,22 @@ from .errors import TooledError, UsageError
 
 if TYPE_CHECKING:
     import asyncio
-    from collections.abc import Generator, Sequence
+    from collections.abc import Callable, Generator, Sequence
     from pathlib import Path
 
     from .catalog import Catalog, Contract
+    from .ledger import Entry
     from .policy import Policy, Rules
 
 
 #: How many of a level's names a refused path's hint lists, when none is close.
 _HINT_NAMES = 12
+
+#: A fetch's, a query's and a write's bound, in seconds, when none is given.
+_ASKED = 5.0
+
+#: The verbs, as the parser has them.
+VERBS = ('check', 'operations', 'describe', 'fetch', 'query', 'listen', 'invoke', 'wait', 'tools', 'call')
 
 #: Verbs renamed, refused naming the new one rather than as unknown verbs.
 RENAMED = {
@@ -87,13 +107,16 @@ exit codes:
   0  done (an empty result included)
   2  usage, the policy file, or the protocol
   3  refused by the policy
-  4  a request that does not load: the field at fault is in "path"
+  4  a request, or a tool call's arguments, that do not load: the field at
+     fault is in "path"
   5  the mesh: the session would not open, a read or a write failed, or a
      write got no reply: "generated" holds its generated values
   6  a result over the size cap
   7  wait: no value met the conditions in time; "last" holds the last one seen
 
-The policy is --policy PATH, else $TOOLED_POLICY, else ./tooled.toml.
+The policy is --policy PATH, else $TOOLED_POLICY, else ./tooled.toml. With
+$TOOLED_LOG set to a path, each run appends one JSON line to it: what ran,
+by name, how it ended, its bytes and seconds, and no value.
 """
 
 
@@ -165,7 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
     reads = _Parser(add_help=False)
     reads.add_argument('contract', help='a contract: its class name, or module:Class')
     reads.add_argument('slots', nargs='*', metavar='slot=value', help='a slot to narrow by; left out, it widens')
-    reads.add_argument('--timeout', type=_seconds, default=5.0, metavar='S', help='seconds to wait (default 5)')
+    reads.add_argument('--timeout', type=_seconds, default=_ASKED, metavar='S', help='seconds to wait (default 5)')
     fetch = verbs.add_parser(
         'fetch',
         parents=[common, saving, reads],
@@ -199,6 +222,8 @@ def build_parser() -> argparse.ArgumentParser:
     listen.set_defaults(run=_listen)
     _add_invoke(verbs, [common, saving])
     _add_wait(verbs, [common, saving])
+    _add_tools(verbs, [common, saving])
+    _add_call(verbs, [common, saving])
     return parser
 
 
@@ -217,7 +242,7 @@ def _add_invoke(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # 
     invoke.add_argument(
         'slots', nargs='*', metavar='slot=value', help='a slot: a write reaches one key, so each is given or bound'
     )
-    invoke.add_argument('--timeout', type=_seconds, default=5.0, metavar='S', help='seconds to wait (default 5)')
+    invoke.add_argument('--timeout', type=_seconds, default=_ASKED, metavar='S', help='seconds to wait (default 5)')
     invoke.add_argument('--request', metavar='JSON', help='the request, in its wire form: JSON, - for stdin, @path')
     invoke.add_argument(
         '--dry-run',
@@ -260,6 +285,53 @@ def _add_wait(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # ar
     wait.set_defaults(run=_wait)
 
 
+def _add_tools(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # argparse's subparsers
+    """``tools``'s parser."""
+    from .tools import CALLS, FORMATS
+
+    tools = verbs.add_parser(
+        'tools',
+        parents=parents,
+        help='export the operations the policy shows as tool definitions, for a harness',
+        description=(
+            'The operations the policy shows, as tool definitions a harness hands a model: one for each fetch, query, '
+            "write, wait or listen, and one for each allowed variant of a request's union, in a schema dialect a "
+            'constrained decoder holds. Sorted, and byte-stable.'
+        ),
+    )
+    tools.add_argument('--format', choices=FORMATS, default='openai', help='the form to write them in (default openai)')
+    tools.add_argument(
+        '--verbs',
+        type=_picks,
+        default=CALLS,
+        metavar='VERBS',
+        help=(
+            'only these tools, comma-separated: a verb for all of its, or verb:GLOB for those whose operation the '
+            f'glob matches (wait:Fleet*); default all of {",".join(CALLS)}'
+        ),
+    )
+    tools.add_argument('--sizes', action='store_true', help="each tool's bytes and estimated tokens, not the tools")
+    tools.set_defaults(run=_tools)
+
+
+def _add_call(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # argparse's subparsers
+    """``call``'s parser."""
+    call = verbs.add_parser(
+        'call',
+        parents=parents,
+        help='carry out one tool call, as a model wrote it',
+        description=(
+            'Carry out one call of a tool `tooled tools` exported: its arguments mapped back to the verb its name '
+            'begins with, then checked and carried out as that verb is. Errors are worded for the model.'
+        ),
+    )
+    call.add_argument('tool', help='the tool, by the name `tooled tools` gives it')
+    call.add_argument(
+        '--args', metavar='JSON', help="the call's arguments: a JSON object, - for stdin, @path (default {})"
+    )
+    call.set_defaults(run=_call)
+
+
 def version() -> str:
     """``tooled X (seared Y, zeared Z)``: tooled's version, and the seared and zeared it runs on."""
     import seared
@@ -279,16 +351,43 @@ def main(argv: Sequence[str] | None = None) -> int:
     Returns:
         The exit code.
     """
+    from .ledger import Entry
+
+    given = list(sys.argv[1:] if argv is None else argv)
+    entry = Entry.begin(given, VERBS)
     try:
-        given = sys.argv[1:] if argv is None else argv
         if given and given[0] in RENAMED:
             raise UsageError(RENAMED[given[0]])
         args = build_parser().parse_args(given)
+        args.entry = entry
+        entry.arguments = [slot.partition('=')[0] for slot in getattr(args, 'slots', None) or []]
         _log_as_json()
-        return args.run(args)
+        code = args.run(args)
     except TooledError as exc:
         sys.stderr.write(json.dumps(exc.to_json()) + '\n')
+        entry.end(exc.exit_code, exc)
+        _log_call(entry)
         return exc.exit_code
+    entry.end(code)
+    _log_call(entry)
+    return code
+
+
+def _log_call(entry: Entry) -> None:
+    """Append the run's line to the call log, if there is one; a failure to is a note, not the run's."""
+    from .ledger import append
+
+    note = append(entry)
+    if note:
+        _notes([note])
+
+
+def _entry(args: argparse.Namespace) -> Entry:
+    """The run's call-log entry; a throwaway when a runner is called without :func:`main`."""
+    from .ledger import Entry
+
+    entry = getattr(args, 'entry', None)
+    return entry if entry is not None else Entry()
 
 
 def emit(result: Any, args: argparse.Namespace) -> None:  # any JSON-ready value
@@ -307,6 +406,7 @@ def emit(result: Any, args: argparse.Namespace) -> None:  # any JSON-ready value
     else:
         check_size(text, result, cap=max_bytes(args.max_bytes))
     sys.stdout.write(text + '\n')
+    _entry(args).wrote(text + '\n')
 
 
 def load(given: str | None) -> tuple[Path, Policy, Catalog, Rules]:
@@ -369,12 +469,49 @@ def _operations(args: argparse.Namespace) -> int:
     return 0
 
 
+def _tools(args: argparse.Namespace) -> int:
+    from . import tools
+
+    *_, catalog, rules = load(args.policy)
+    found = tools.tools(rules, args.verbs)
+    emit(tools.sizes(found, args.format) if args.sizes else [tools.spec(tool, args.format) for tool in found], args)
+    untooled = [catalog.label(contract) for contract in tools.untooled(rules)]
+    if untooled:
+        _notes([f'no tool for a presence feed, which no verb acts on yet: {", ".join(untooled)}'])
+    return 0
+
+
+def _call(args: argparse.Namespace) -> int:
+    from . import calls, tools
+
+    entry = _entry(args)
+    entry.tool = args.tool
+    *_, rules = load(args.policy)
+    tool = tools.find(rules, args.tool)
+    entry.acted_on(rules.catalog.label(tool.contract), variant=tool.variant)
+    given = _request(args.args, what='--args') if args.args is not None else {}
+    entry.arguments = list(given)
+    mapped = calls.arguments(tool, given, rules)
+    slots = [f'{name}={value}' for name, value in mapped.slots.items()]
+    run = argparse.Namespace(**vars(args), contract=tool.contract.qualname, slots=slots, timeout=_ASKED, meta=False)
+    if tool.verb == 'fetch':
+        return _fetch(run)
+    if tool.verb in {'query', 'invoke'}:
+        run.request, run.param, run.dry_run, run.no_retry = json.dumps(mapped.request), [], False, False
+        return _query(run) if tool.verb == 'query' else _invoke(run)
+    if tool.verb == 'wait':
+        run.until, run.timeout = list(mapped.until), mapped.timeout
+        return _wait(run)
+    return _listened(run, count=mapped.count or 1, duration=mapped.timeout or tools.TIMEOUT)
+
+
 def _describe(args: argparse.Namespace) -> int:
     from .errors import RefusedError
     from .schemas import describe, describe_variant
 
     *_, catalog, rules = load(args.policy)
     contract = catalog.contract(args.operation)
+    _entry(args).acted_on(catalog.label(contract))
     if not rules.visible(contract):
         msg = f'the policy does not show {catalog.label(contract)}'
         raise RefusedError(msg)
@@ -389,7 +526,7 @@ def _fetch(args: argparse.Namespace) -> int:
     from . import executor
 
     _, loaded, catalog, rules = load(args.policy)
-    contract = _readable(catalog, rules, args.contract, 'fetch')
+    contract = _readable(args, catalog, rules, 'fetch')
     _judge(contract, catalog, args)
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
     executor.check_fetch(contract, rules, values)  # before the session: a refusal never waits on the mesh
@@ -406,13 +543,14 @@ def _query(args: argparse.Namespace) -> int:
     from . import executor
 
     path, loaded, catalog, rules = load(args.policy)
-    contract = _readable(catalog, rules, args.contract, 'query')
+    contract = _readable(args, catalog, rules, 'query')
     _judge(contract, catalog, args)
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
     params = _pairs(args.param, 'param')
     request = _request(args.request) if args.request is not None else None
     injected = _injected(path, loaded, contract, rules)
-    executor.prepare(contract, rules, values, request=request, injected=injected)  # before the session, as fetch's
+    call = executor.prepare(contract, rules, values, request=request, injected=injected)  # before the session
+    _entry(args).acted_on(catalog.label(contract), variant=call.variant)
     session = executor.open_session(loaded.mesh)
     try:
         result = executor.query(
@@ -435,13 +573,14 @@ def _invoke(args: argparse.Namespace) -> int:
     from . import executor, policy
 
     path, loaded, catalog, rules = load(args.policy)
-    contract = _readable(catalog, rules, args.contract, 'invoke')
+    contract = _readable(args, catalog, rules, 'invoke')
     _judge(contract, catalog, args)  # the reply's paths, a dry run's too: it checks the command that will be sent
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
     request = _request(args.request) if args.request is not None else None
     injected = _injected(path, loaded, contract, rules)
     generated = [name for name in injected if policy.generated(loaded.inject[name])]
     call = executor.prepare(contract, rules, values, request=request, injected=injected)  # before any session
+    _entry(args).acted_on(catalog.label(contract), variant=call.variant)
     if args.dry_run:
         secrets = [name for name in injected if name not in generated]
         emit(executor.preview(contract, call, hidden=secrets), argparse.Namespace(**{**vars(args), 'select': None}))
@@ -532,13 +671,14 @@ def _refuse(flag: str, parts: Sequence[str], label: str, found: Any) -> NoReturn
     raise UsageError(msg, path=[part for part in parts[: found.at + 1] if part != ITEMS])
 
 
-def _readable(catalog: Catalog, rules: Rules, name: str, verb: str) -> Contract:
-    """The contract ``name`` names, if the policy shows it and ``verb`` acts on it."""
+def _readable(args: argparse.Namespace, catalog: Catalog, rules: Rules, verb: str) -> Contract:
+    """The contract ``args.contract`` names, if the policy shows it and ``verb`` acts on it; the call log notes it."""
     from .errors import RefusedError, UsageError
     from .schemas import verbs
 
-    contract = catalog.contract(name)
+    contract = catalog.contract(args.contract)
     label = catalog.label(contract)
+    _entry(args).acted_on(label)
     if not rules.visible(contract):
         msg = f'the policy does not show {label}'
         raise RefusedError(msg)
@@ -566,20 +706,20 @@ def _pairs(items: Sequence[str], what: str) -> dict[str, str]:
     return out
 
 
-def _request(text: str) -> dict[str, Any]:
-    """``--request``: JSON, ``-`` for stdin, or ``@path`` for a file; one JSON object."""
+def _request(text: str, *, what: str = 'the request') -> dict[str, Any]:
+    """``--request`` (or ``call``'s ``--args``): JSON, ``-`` for stdin, or ``@path`` for a file; one JSON object."""
     from pathlib import Path
 
     from .errors import UsageError
 
-    source = 'the request'
+    source = what
     if text == '-':
-        text, source = sys.stdin.read(), 'the request on stdin'
+        text, source = sys.stdin.read(), f'{what} on stdin'
     elif text.startswith('@'):
         try:
             text, source = Path(text[1:]).expanduser().read_text(encoding='utf-8'), text[1:]
         except OSError as exc:
-            msg = f'could not read the request from {text[1:]}: {exc.strerror or exc}'
+            msg = f'could not read {what} from {text[1:]}: {exc.strerror or exc}'
             raise UsageError(msg) from exc
     try:
         data = json.loads(text)
@@ -650,16 +790,35 @@ def _lenient(value: Any, args: argparse.Namespace, *, meta: bool = False) -> tup
 
 
 def _listen(args: argparse.Namespace) -> int:
+    line = _Lines(args)
+    result = _subscribe(args, each=line, count=args.count, duration=args.duration)
+    _notes([*result.notes, *line.notes()])
+    return 0
+
+
+def _listened(args: argparse.Namespace, *, count: int, duration: float) -> int:
+    """A listen tool's call: the values, as one JSON list, once ``count`` have come or ``duration`` is up."""
+    got: list[Any] = []
+    result = _subscribe(args, each=got.append, count=count, duration=duration)
+    result.items = got
+    if len(got) < count:
+        result.notes.insert(0, f'{len(got)} of the {count} values asked for came within {duration:g}s')
+    _finish(result, args)
+    return 0
+
+
+def _subscribe(
+    args: argparse.Namespace, *, each: Callable[[Any], None], count: int | None, duration: float | None
+) -> Any:  # an executor.Result
+    """Listen as ``args`` asks, handing each value to ``each``, until ``count`` values, ``duration``, or a signal."""
     import asyncio
 
     from . import executor
 
     _, loaded, catalog, rules = load(args.policy)
-    contract = _readable(catalog, rules, args.contract, 'listen')
+    contract = _readable(args, catalog, rules, 'listen')
     _judge(contract, catalog, args)
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
-
-    line = _Lines(args)
 
     async def run(session: Any) -> executor.Result:  # a zenoh.Session
         with _stopped_by_signals() as stop:
@@ -668,20 +827,18 @@ def _listen(args: argparse.Namespace) -> int:
                 contract,
                 rules,
                 values,
-                each=line,
+                each=each,
                 meta=args.meta,
-                count=args.count,
-                duration=args.duration,
+                count=count,
+                duration=duration,
                 stop=stop,
             )
 
     session = executor.open_session(loaded.mesh)
     try:
-        result = asyncio.run(run(session))
+        return asyncio.run(run(session))
     finally:
         session.close()
-    _notes([*result.notes, *line.notes()])
-    return 0
 
 
 def _wait(args: argparse.Namespace) -> int:
@@ -691,7 +848,7 @@ def _wait(args: argparse.Namespace) -> int:
     from .errors import TimedOutError
 
     _, loaded, catalog, rules = load(args.policy)
-    contract = _readable(catalog, rules, args.contract, 'wait')
+    contract = _readable(args, catalog, rules, 'wait')
     _judge(contract, catalog, args, until=args.until)
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
 
@@ -784,9 +941,8 @@ class _Lines:
     def __init__(self, args: argparse.Namespace) -> None:
         from .output import max_bytes
 
-        self.paths, self.meta = args.select or [], args.meta
+        self.args, self.paths, self.meta = args, args.select or [], args.meta
         self.cap = max_bytes(args.max_bytes)
-        self.held = getattr(args, 'unsure', None) or [True] * len(self.paths)  # a path a schema couldn't judge
         self.matched = [False] * len(self.paths)
         self.over = 0
 
@@ -802,6 +958,7 @@ class _Lines:
             return
         sys.stdout.write(text + '\n')
         sys.stdout.flush()
+        _entry(self.args).wrote(text + '\n')
 
     def notes(self) -> list[str]:
         """What the writer left out, and the paths that matched nothing."""
@@ -812,10 +969,11 @@ class _Lines:
             if self.over
             else []
         )
+        held = getattr(self.args, 'unsure', None) or [True] * len(self.paths)  # judged once the call began
         out += [
             f'--select {path_text(path)!r} matched nothing in the stream'
-            for path, found, held in zip(self.paths, self.matched, self.held, strict=True)
-            if held and not found
+            for path, found, hold in zip(self.paths, self.matched, held, strict=True)
+            if hold and not found
         ]
         return out
 
@@ -839,6 +997,17 @@ def _bytes(text: str) -> int:
         msg = f'a cap is a whole number of bytes, zero or more, not {text}'
         raise argparse.ArgumentTypeError(msg)
     return value
+
+
+def _picks(text: str) -> tuple[str, ...]:
+    from .tools import CALLS
+
+    picks = tuple(pick.strip() for pick in text.split(','))
+    unknown = [pick for pick in picks if pick.partition(':')[0] not in CALLS]
+    if unknown:
+        msg = f'each is a verb, or verb:GLOB, of {", ".join(CALLS)}; not {", ".join(map(repr, unknown))}'
+        raise argparse.ArgumentTypeError(msg)
+    return picks
 
 
 def _count(text: str) -> int:

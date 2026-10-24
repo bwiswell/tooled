@@ -19,6 +19,8 @@ Every verb takes `--policy` after the verb (else `$TOOLED_POLICY`, else `./toole
 | `listen CONTRACT [slot=value …]` | a retained contract or a stream | one JSON line per value as it arrives |
 | `invoke CONTRACT [slot=value …] [--request JSON] [--dry-run]` | a queryable that writes: `EFFECT = WRITE` or `ACTION`, or none declared | its replies, in the order they arrived; with `--dry-run`, what it would send |
 | `wait CONTRACT [slot=value …] --until PATH=VALUE [--until …]` | a retained contract or a stream | the first value that meets every condition |
+| `call TOOL [--args JSON]` | any tool the policy shows | what the verb its name begins with prints, a listen's values as one JSON list ([tools.md](tools.md), *Calling a tool*) |
+| `tools [--format openai\|anthropic\|mcp] [--verbs VERBS] [--sizes]` | the policy | the operations it shows as tool definitions for a harness: one for each fetch, query, write, wait or listen, and one for each allowed variant of a request's union ([tools.md](tools.md)); `--verbs fetch,wait:Fleet*` keeps some verbs' tools, or some operations'; with `--sizes`, each one's bytes and estimated tokens |
 
 An operation is anything tooled lists and acts on; each is a contract in this version. An operation, a contract
 included, is its class's name, or `module:Class`. Presence feeds have no verb in this version; `operations` lists
@@ -42,7 +44,7 @@ exception: it reaches one key, so it takes every slot (below).
 
 - `slots`: each slot's schema, or `{"bound": value}`;
 - `request`: the request's JSON Schema: seared's load schema, closed against unknown keys, without the fields the
-  policy injects or the variants it denies. A root union shows folded, as its list of tags, with `variants` beside
+  policy injects or hides or the variants it denies. A root union shows folded, as its list of tags, with `variants` beside
   it (each tag and a line of what it does);
 - `reply`: a field list, each top-level field's name, type and doc, and its `constraints` when it declares any:
   seared's, by the names a declaration gives them (`{"ge": 0}`, `{"max_length": 80}`, `{"pattern": "^[a-z]+$"}`),
@@ -164,6 +166,35 @@ The cap is `--max-bytes N`, else `$TOOLED_MAX_BYTES`, else 28,000 bytes; `0` rem
 
 In `listen`, a line over the cap is left out and noted at the end.
 
+## The call log
+
+With `TOOLED_LOG` set to a path, every run appends one JSON line to it as it ends, done or with an error, so a
+harness keeps a ledger of what its agent ran without wrapping tooled:
+
+```json
+{"at": "2026-10-23T22:19:04.512Z", "verb": "call", "route": "wire", "operation": "OrderResult",
+ "tool": "invoke_order_result_jump", "variant": "jump", "arguments": ["fleet", "to"], "flags": ["--args", "--policy"],
+ "exit": 0, "error": null, "path": null, "bytes": 61, "seconds": 0.84}
+```
+
+| Key | What |
+|---|---|
+| `at`, `seconds` | when the run began (UTC), and how long it took |
+| `verb`, `route` | the verb (`null` for one tooled doesn't have), and `wire` for a verb on an operation |
+| `operation`, `tool`, `variant` | what it acted on, as far as it got; a call's `tool` is the name it was given, found or not |
+| `arguments`, `flags` | the names of what was given (a call's arguments, a verb's slots), and the options given |
+| `exit`, `error`, `path` | the exit code, the error's kind, and where in the input it lies |
+| `bytes` | what went to stdout: the result a harness hands back |
+
+- **No values:** no slot's, request's, argument's or reply's, no error's message (which can quote one), and not a
+  timed-out wait's `last`. Names, kinds and sizes are enough to compare one agent's runs with another's.
+- **Every key on every line,** `null` where it doesn't apply.
+- **One append a line,** so runs side by side share a file. A harness that keeps a record a turn gives each its own
+  (`TOOLED_LOG=turns/<stamp>/calls.jsonl`).
+- **What it can't see:** a run cut short (a crash, a kill, `--help`) leaves no line, and nor does what failed
+  before tooled ran: a shell that couldn't parse the command, or a permission the harness refused. Those are in the
+  harness's own record. A log tooled can't write is a note on stderr; the run's result and exit code stand.
+
 ## Exit codes
 
 | Code | Kind | Meaning |
@@ -171,7 +202,7 @@ In `listen`, a line over the cap is left out and noted at the end.
 | 0 | | done, an empty result included |
 | 2 | `usage`, `policy`, `catalog` | the command, its policy file or its protocol can't be used as given |
 | 3 | `refused` | the policy refuses it |
-| 4 | `validation` | the request doesn't load as its class; `path` names the field |
+| 4 | `validation` | the request doesn't load as its class, or a tool call's arguments don't fit its tool; `path` names the field |
 | 5 | `mesh` | the session wouldn't open, a read or a write failed, or a write got no reply (`generated` holds its generated values) |
 | 6 | `too_large` | the result is over the size cap |
 | 7 | `timeout` | `wait`: no value met the conditions in time; `last` holds the last one seen |

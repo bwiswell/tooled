@@ -256,6 +256,26 @@ def wire_names(cls: type) -> tuple[str, ...]:
     )
 
 
+def top_fields(cls: type) -> dict[str | None, dict[str, bool]]:
+    """The fields at the root of ``cls``'s wire form, by wire name, each with whether a load requires it.
+
+    ``cls``'s own are under ``None``. A flat union's variant's fields sit at the root too, beside the others, so
+    each variant's are under its tag; a nested one's sit under its payload key, which is one of ``cls``'s own. A
+    union's tag is no field. None when ``cls`` isn't a seared class.
+    """
+    if not is_seared_class(cls):
+        return {}
+    out: dict[str | None, dict[str, bool]] = {None: {}}
+    for field in introspect(cls).fields:
+        if not (field.kind is FieldKind.UNION and field.envelope == 'flat'):
+            out[None][field.wire_key or field.attr] = field.required
+            continue
+        for variant in field.variants or ():
+            fields = introspect(variant.cls).fields if is_seared_class(variant.cls) else ()
+            out.setdefault(variant.tag, {}).update({f.wire_key or f.attr: f.required for f in fields})
+    return out
+
+
 def render(template: str, values: Mapping[str, str]) -> str:
     """A template as a key expression: each slot filled from ``values``, or widened when it has no value.
 

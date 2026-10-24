@@ -30,8 +30,8 @@ tooled runs in the same environment as the protocol packages it reads, and they 
 refuses two sources for one package). Install it as a uv tool, with the protocol beside it:
 
 ```sh
-uv tool install "git+https://github.com/bwiswell/tooled@v0.2.4" --with <protocol-package>
-tooled --version            # tooled 0.2.4 (seared 0.4.4, zeared 0.4.4)
+uv tool install "git+https://github.com/bwiswell/tooled@v0.2.5" --with <protocol-package>
+tooled --version            # tooled 0.2.5 (seared 0.4.4, zeared 0.4.4)
 ```
 
 `--with` takes whatever names the protocol: a path to its checkout, a git URL, or a package name. From a checkout of
@@ -103,6 +103,8 @@ A write reaches one key, so every slot is given or bound. One that gets no reply
 
 - **[docs/cli.md](docs/cli.md)**: the verbs and their options, the output, the size cap, and the exit codes.
 - **[docs/policy.md](docs/policy.md)**: the policy file, and how its rules decide what's shown and allowed.
+- **[docs/tools.md](docs/tools.md)**: the operations a policy shows as tool definitions for a harness, and carrying
+  out a model's call of one.
 - **[docs/agents.md](docs/agents.md)**: using tooled from Claude Code.
 
 ## Development
@@ -134,9 +136,11 @@ nothing outside the repo is needed.
 
 ## Status
 
-0.2.4 reads and writes a mesh: `check`, `operations`, `describe`, `fetch`, `query`, `listen`, `invoke` (with
+0.2.5 reads and writes a mesh: `check`, `operations`, `describe`, `fetch`, `query`, `listen`, `invoke` (with
 `--dry-run`, generated ids, and one retry after a lost reply) and `wait`, under a strict policy file with bound
 slots, injected fields (from paths that may hold variables) and generated ones, and allow and deny rules over
-ops, operations, keys and union variants. `--select` and `--until` paths are checked against each contract's
-schema before the call, and every error, a malformed argument's included, is one JSON line on stderr. Not yet:
-publishing and unretaining, a long-lived `tooled serve` with an MCP face, and per-protocol extensions.
+ops, operations, keys, union variants and hidden request fields. For a harness, `tools` exports what a policy
+shows as tool definitions, `call` carries out a model's call of one, and `TOOLED_LOG` keeps a line a run.
+`--select` and `--until` paths are checked against each contract's schema before the call, and every error, a
+malformed argument's included, is one JSON line on stderr. Not yet: a command tree's commands beside the
+contracts, publishing and unretaining, a long-lived `tooled serve` with an MCP face, and per-protocol extensions.
