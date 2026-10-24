@@ -53,8 +53,8 @@ parsed.
   named in its ``$TOOLED_SESSION``, and closes it when the command ends, ``stop`` closes one, and ``status`` says how
   one is, or every one.
 
-A call of ``operations``, ``describe``, ``tools``, ``call``, ``see`` or ``do`` given ``--session`` (else
-``$TOOLED_SESSION``) runs in that session, and prints what it would cold.
+A call of any verb but ``check`` and ``session``'s, given ``--session`` (else ``$TOOLED_SESSION``), runs in that
+session, on the mesh and the app it holds, and prints what it would cold.
 
 A verb renamed is refused naming its new name (``contracts`` is ``operations`` since 0.2.4). A slot left out
 widens to every value; a bound one is filled by the policy. ``--timeout`` bounds a fetch, a query
@@ -103,6 +103,9 @@ _HINT_NAMES = 12
 
 #: A fetch's, a query's and a write's bound, in seconds, when none is given.
 _ASKED = 5.0
+
+#: How often a listen or a wait in a session looks at its call's stop, in seconds.
+_STOP_POLL = 0.05
 
 #: The verbs, as the parser has them.
 VERBS = (
@@ -244,14 +247,14 @@ def build_parser() -> argparse.ArgumentParser:
     reads.add_argument('--timeout', type=_seconds, default=_ASKED, metavar='S', help='seconds to wait (default 5)')
     fetch = verbs.add_parser(
         'fetch',
-        parents=[common, saving, reads],
+        parents=[common, saving, reads, attaching],
         help="read a retained contract's values",
         description="A retained contract's values: those the slots select, or every one.",
     )
     fetch.set_defaults(run=_fetch)
     query = verbs.add_parser(
         'query',
-        parents=[common, saving, reads],
+        parents=[common, saving, reads, attaching],
         help='ask a read queryable',
         description='Ask a queryable that declares EFFECT = READ, and print its replies.',
     )
@@ -260,7 +263,7 @@ def build_parser() -> argparse.ArgumentParser:
     query.set_defaults(run=_query)
     listen = verbs.add_parser(
         'listen',
-        parents=[common],
+        parents=[common, attaching],
         help='stream a retained contract or a stream, one JSON line per value',
         description=(
             'Each value of a retained contract or a stream as it arrives, one JSON line each (--pretty has no '
@@ -273,8 +276,8 @@ def build_parser() -> argparse.ArgumentParser:
     listen.add_argument('--for', dest='duration', type=_duration, metavar='DURATION', help='stop after 30, 30s, 5m, 1h')
     listen.add_argument('--meta', action='store_true', help="add each value's key, origin and time")
     listen.set_defaults(run=_listen)
-    _add_invoke(verbs, [common, saving])
-    _add_wait(verbs, [common, saving])
+    _add_invoke(verbs, [common, saving, attaching])
+    _add_wait(verbs, [common, saving, attaching])
     _add_tools(verbs, [common, saving, attaching])
     _add_call(verbs, [common, saving, attaching])
     _add_lines(verbs, [common, saving, attaching])
@@ -936,11 +939,8 @@ def _fetch(args: argparse.Namespace) -> int:
     _judge(contract, catalog, args)
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
     executor.check_fetch(contract, rules, values)  # before the session: a refusal never waits on the mesh
-    session = executor.open_session(_mesh(loaded))
-    try:
+    with _meshed(loaded) as session:
         result = executor.fetch(session, contract, rules, values, timeout=args.timeout)
-    finally:
-        session.close()
     _finish(result, args)
     return 0
 
@@ -957,8 +957,7 @@ def _query(args: argparse.Namespace) -> int:
     injected = _injected(path, loaded, contract, rules)
     call = executor.prepare(contract, rules, values, request=request, injected=injected)  # before the session
     _entry(args).acted_on(catalog.label(contract), variant=call.variant)
-    session = executor.open_session(_mesh(loaded))
-    try:
+    with _meshed(loaded) as session:
         result = executor.query(
             session,
             contract,
@@ -969,8 +968,6 @@ def _query(args: argparse.Namespace) -> int:
             params=params,
             timeout=args.timeout,
         )
-    finally:
-        session.close()
     _finish(result, args)
     return 0
 
@@ -992,8 +989,7 @@ def _invoke(args: argparse.Namespace) -> int:
         emit(executor.preview(contract, call, hidden=secrets), argparse.Namespace(**{**vars(args), 'select': None}))
         _notes(['a dry run: checked, and not sent'])
         return 0
-    session = executor.open_session(_mesh(loaded))
-    try:
+    with _meshed(loaded) as session:
         result = executor.invoke(
             session,
             contract,
@@ -1005,8 +1001,6 @@ def _invoke(args: argparse.Namespace) -> int:
             retry=not args.no_retry,
             timeout=args.timeout,
         )
-    finally:
-        session.close()
     _finish(result, args, sent=True)
     return 0
 
@@ -1039,6 +1033,27 @@ def _connect(path: Path, loaded: Policy, summary: dict[str, Any]) -> None:
         started = time.perf_counter()
         asyncio.run(visit())
         summary['session'] = {'ok': True, 'seconds': round(time.perf_counter() - started, 3)}
+
+
+@contextlib.contextmanager
+def _meshed(loaded: Policy) -> Generator[Any]:  # a zenoh.Session, or a ManagedSession
+    """The policy's mesh, opened for the call and closed after it; in a session, the one it holds, left open.
+
+    Raises:
+        UsageError: The policy names no ``[mesh]``.
+        MeshError: It wouldn't open.
+    """
+    from . import attached, executor
+
+    held = attached.held()
+    if held is not None and held.mesh is not None:
+        yield held.mesh
+        return
+    session = executor.open_session(_mesh(loaded))
+    try:
+        yield session
+    finally:
+        session.close()
 
 
 def _mesh(loaded: Policy) -> SessionConfig:
@@ -1287,11 +1302,8 @@ def _subscribe(
                 stop=stop,
             )
 
-    session = executor.open_session(_mesh(loaded))
-    try:
+    with _meshed(loaded) as session:
         return asyncio.run(run(session))
-    finally:
-        session.close()
 
 
 def _wait(args: argparse.Namespace) -> int:
@@ -1311,14 +1323,12 @@ def _wait(args: argparse.Namespace) -> int:
                 session, contract, rules, values, until=args.until, meta=args.meta, within=args.timeout, stop=stop
             )
 
-    session = executor.open_session(_mesh(loaded))
     try:
-        result = asyncio.run(run(session))
+        with _meshed(loaded) as session:
+            result = asyncio.run(run(session))
     except TimedOutError as exc:
         exc.message, exc.last = _last_shown(exc.message, exc.last, args)
         raise
-    finally:
-        session.close()
     value, missed = _lenient(result.items[0], args, meta=args.meta)
     emit(value, argparse.Namespace(**{**vars(args), 'select': None}))
     _notes([*result.notes, *missed])
@@ -1353,17 +1363,22 @@ def _picked(value: Any, paths: Any, *, meta: bool) -> tuple[Any, list[bool]]:  #
 
 @contextlib.contextmanager
 def _stopped_by_signals() -> Generator[asyncio.Event]:
-    """An event SIGINT or SIGTERM sets, while the block runs on the running loop.
+    """An event SIGINT or SIGTERM sets, while the block runs on the running loop; in a session, the call's stop.
 
     A loop takes signal handlers only on the main thread; elsewhere (tooled run inside another program) the
-    program's own handling stands, and the verb's own bound ends it.
+    program's own handling stands, and the verb's own bound ends it. A call in a session is stopped by its client,
+    which sets the call's stop on the first signal it gets, or goes.
     """
     import asyncio
     import signal
     import threading
 
+    from . import attached
+
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
+    call = attached.current()
+    relayed = loop.create_task(_relayed(call.stop, stop)) if call is not None else None
     signals = (signal.SIGINT, signal.SIGTERM) if threading.current_thread() is threading.main_thread() else ()
     for signum in signals:
         loop.add_signal_handler(signum, stop.set)
@@ -1372,6 +1387,17 @@ def _stopped_by_signals() -> Generator[asyncio.Event]:
     finally:
         for signum in signals:
             loop.remove_signal_handler(signum)
+        if relayed is not None:
+            relayed.cancel()
+
+
+async def _relayed(given: Any, stop: asyncio.Event) -> None:  # given: a threading.Event
+    """Set ``stop`` once ``given``, set from another thread, is."""
+    import asyncio
+
+    while not given.is_set():  # noqa: ASYNC110 -- a thread's event; waiting on it in another would hold the loop's end
+        await asyncio.sleep(_STOP_POLL)
+    stop.set()
 
 
 def _condition(text: str) -> Any:  # an executor.Condition

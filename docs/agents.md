@@ -103,6 +103,9 @@ line reaches the session as it comes; stop the monitor, and tooled ends cleanly 
 `--for` bound it when it runs to completion instead, and `--meta` adds each value's key and whether it was a
 replay of retained state or live.
 
+Started by an agent in its session (`TOOLED_SESSION` in its environment), a `listen` runs there on the mesh the
+session holds, beside the agent's other calls, and stopping the monitor ends it as a signal does.
+
 On the tree, `tooled see <read> --watch` does the same for a read's reply: its envelope now, then one each time
 the reply changes, a line of JSON each, until its `--count`, its `--timeout`, its `--until`, or the monitor's
 stop. It's state, read again every second, not events: for those, `listen` the stream that carries them.

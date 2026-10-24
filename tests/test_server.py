@@ -254,7 +254,7 @@ class TestCallsSideBySide:
     def test_a_call_answered_while_a_watch_runs(self, desk, capsys):
         with serving(desk) as server:
             link, lines = raw(server, {'argv': ['see', 'clock', 'show', '--watch']})
-            with link:
+            with link, lines:
                 first = json.loads(lines.readline())
                 assert json.loads(first['out'])['reply']['tick'] >= 1
                 code, _, _ = ran(capsys, *attached(['see', 'clock', 'show']))
@@ -279,7 +279,7 @@ class TestCallsSideBySide:
         try:
             with serving(desk) as server:
                 link, lines = raw(server, {'argv': ['see', 'bell', 'ring']})
-                with link:
+                with link, lines:
                     time.sleep(0.2)
                     send(link, {'stop': 15})
                     assert frames(lines)[-1] == {'end': 143, 'cut': True}
@@ -289,7 +289,7 @@ class TestCallsSideBySide:
     def test_another_version_of_tooled_is_refused(self, policy):
         with serving(policy) as server:
             link, lines = raw(server, {'argv': ['operations'], 'tooled': '0.0.1'})
-            with link:
+            with link, lines:
                 got = frames(lines)
         error = json.loads(got[0]['err'])
         assert (error['error'], got[-1]['end']) == ('usage', 2)
@@ -363,7 +363,7 @@ class TestEndings:
     def test_a_call_in_flight_is_not_idle(self, desk):
         with serving(desk, idle=0.2) as server:
             link, lines = raw(server, {'argv': ['see', 'clock', 'show', '--watch']})
-            with link:
+            with link, lines:
                 lines.readline()
                 time.sleep(0.6)
                 assert server.reason is None
@@ -409,7 +409,7 @@ class TestEndings:
         with serving(desk) as server:
             link, lines = raw(server, {'argv': ['see', 'clock', 'show', '--watch']})
             lines.readline()
-        with link:
+        with link, lines:
             assert frames(lines)[-1]['end'] == 0
         assert server.record['reason'] == 'stopped'
 
@@ -418,3 +418,154 @@ class TestEndings:
             assert oct(server.where.socket.stat().st_mode & 0o777) == '0o600'
             with socket.socket(socket.AF_UNIX) as link:
                 link.connect(str(server.where.socket))
+
+
+#: A policy over the served fixture world: reads, looks and moves at w1, the player's token injected, a move's id made.
+WIRE = """
+[bind]
+world = "w1"
+
+[inject.token]
+env = "DEMO_TOKEN"
+
+[inject.move_id]
+generate = "uuid"
+
+[[allow]]
+ops = ["read", "query", "invoke"]
+keys = ["demo/w1/**"]
+
+[[deny]]
+ops = ["query"]
+variants = ["dev-*"]
+"""
+
+
+@pytest.fixture
+def wire(tmp_path, runtime, world, monkeypatch):
+    from _support_policy import HEAD as MESH
+
+    monkeypatch.setenv('DEMO_TOKEN', 'tok-ann')
+    return str(write(tmp_path, WIRE, head=MESH.replace('tcp/127.0.0.1:7447', world.endpoint)))
+
+
+#: The wire's verbs, whose output is the same cold or attached: read, asked, written, waited on and listened to.
+SAME_WIRE = [
+    ['fetch', 'Station'],
+    ['fetch', 'Station', 'station=s2', '--select', 'stock'],
+    ['fetch', 'MoveResult'],
+    ['query', 'LookReply', 'player=ann', '--request', '{"kind": "ping", "station": "s1"}', '--param', 'depth=2'],
+    ['query', 'LookReply', 'player=ann', '--request', '{"kind": "dev-peek"}'],
+    ['invoke', 'MoveResult', 'player=ann', '--request', '{"to": "s2"}'],
+    ['invoke', 'MoveResult', 'player=ann', '--request', '{"to": "nowhere"}'],
+    ['invoke', 'MoveResult', 'player=ann', '--request', '{"to": "broken"}'],
+    ['wait', 'Station', 'station=s2', '--until', 'stock=5'],
+    ['wait', 'Station', 'station=s2', '--until', 'stock=99', '--timeout', '0.3'],
+    ['listen', 'Station', 'station=s2', '--count', '1'],
+    ['call', 'fetch_station', '--args', '{"station": "s1"}'],
+    ['call', 'invoke_move_result', '--args', '{"player": "ann", "to": "s2"}'],
+    ['call', 'wait_station', '--args', '{"station": "s2", "until": {"stock": 5}}'],
+    ['call', 'listen_notice', '--args', '{"player": "ann", "timeout": 0.2}'],
+]
+
+
+class TestTheWire:
+    """The session holds the mesh: the wire's verbs attach, and print what they would cold."""
+
+    @pytest.mark.parametrize('argv', SAME_WIRE, ids=' '.join)
+    def test_as_cold(self, wire, capsys, argv):
+        cold = ran(capsys, *argv, '--policy', wire)
+        with serving(wire):
+            warm = ran(capsys, *attached(argv))
+        assert warm == cold
+
+    def test_the_mesh_opened_once(self, wire, capsys, monkeypatch):
+        import tooled.executor
+
+        with serving(wire) as server:
+            opened = []
+            real = tooled.executor.open_session
+            monkeypatch.setattr(tooled.executor, 'open_session', lambda config: opened.append(config) or real(config))
+            for _ in range(3):
+                assert ran(capsys, *attached(['fetch', 'Station', 'station=s1']))[0] == 0
+            assert (opened, server.status()['mesh'], server.status()['app']) == ([], True, False)
+            mesh = server.held.mesh
+        assert mesh.is_closed()
+
+    def test_a_token_read_at_the_start_and_an_id_made_each_write(self, wire, world, capsys, monkeypatch):
+        with serving(wire):
+            monkeypatch.setenv('DEMO_TOKEN', 'tok-bo')
+            for _ in range(2):
+                assert (
+                    ran(capsys, *attached(['invoke', 'MoveResult', 'player=ann', '--request', '{"to": "s2"}']))[0] == 0
+                )
+        first, second = world.asked[-2:]
+        assert (first.token, second.token) == ('tok-ann', 'tok-ann')
+        assert first.move_id != second.move_id
+
+    def test_a_listen_beside_other_calls_and_stopped_by_its_client(self, wire, world, capsys):
+        import _support_protocol as demo
+
+        with serving(wire) as server:
+            link, lines = raw(server, {'argv': ['listen', 'Notice', 'player=ann']})
+            heard = threading.Event()
+
+            def say() -> None:  # until the listen hears one: it may not be subscribed yet
+                while not heard.wait(0.1):
+                    demo.Notice(world='w1', player='ann', text='hello').send(session=world.session)
+
+            with link, lines:
+                assert ran(capsys, *attached(['fetch', 'Station', 'station=s1']))[0] == 0
+                saying = threading.Thread(target=say, daemon=True)
+                saying.start()
+                got = json.loads(lines.readline())
+                heard.set()
+                saying.join(5)
+                assert json.loads(got['out'])['text'] == 'hello'
+                send(link, {'stop': 2})
+                end = frames(lines)[-1]
+        assert (end['end'], end['entry']['verb']) == (0, 'listen')
+
+    def test_a_wait_stopped_by_its_client(self, wire):
+        with serving(wire) as server:
+            link, lines = raw(server, {'argv': ['wait', 'Station', 'station=s2', '--until', 'stock=99']})
+            with link, lines:
+                time.sleep(0.3)
+                asked = time.monotonic()
+                send(link, {'stop': 15})
+                got = frames(lines)
+                took = time.monotonic() - asked
+        assert (got[-1]['end'], json.loads(got[0]['err'])['error']) == (7, 'timeout')
+        assert took < 5  # ended by the stop, not its 30s
+
+    def test_a_mesh_that_will_not_open(self, tmp_path, runtime, monkeypatch):
+        from _support_policy import HEAD as MESH
+        from _support_session import free_port
+
+        from tooled.errors import MeshError
+
+        monkeypatch.setenv('DEMO_TOKEN', 'tok-ann')
+        policy = write(tmp_path, WIRE, head=MESH.replace('tcp/127.0.0.1:7447', f'tcp/127.0.0.1:{free_port()}'))
+        server = Server(Where.of('t'), policy.resolve(), idle=None, tied=None)
+        with pytest.raises(MeshError, match='the session would not open'):
+            server.open()
+        assert not server.where.socket.exists()
+
+    def test_a_mesh_and_an_app_both_held(self, wire, capsys):
+        both = Path(wire).read_text().replace('[protocol]\n', '[protocol]\n', 1) + (
+            '\n[app]\nfactory = "_support_app:factory"\n\n[[allow]]\nops = ["see"]\n'
+        )
+        Path(wire).write_text(both)
+        with serving(wire) as server:
+            assert (server.status()['mesh'], server.status()['app']) == (True, True)
+            assert ran(capsys, *attached(['fetch', 'Status']))[0] == 0  # Station's command shows instead of it
+            assert ran(capsys, *attached(['see', 'station', 's1', 'show']))[0] == 0
+
+    def test_a_managed_mesh_held(self, wire, capsys):
+        Path(wire).write_text(
+            Path(wire).read_text().replace('mode = "client"\n', 'mode = "client"\nauto_reconnect = true\n')
+        )
+        cold = ran(capsys, 'fetch', 'Station', '--policy', wire)
+        with serving(wire) as server:
+            assert type(server.held.mesh).__name__ == 'ManagedSession'
+            assert ran(capsys, *attached(['fetch', 'Station'])) == cold
