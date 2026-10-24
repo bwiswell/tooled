@@ -9,6 +9,28 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
+## 0.2.9 — 2026-10-24
+
+**Tools over MCP.** `tooled serve` hands a harness the policy's tools over MCP, each call carried out in a session it
+shares with the agent's command line; and tooled moves to parsed's first real version, `v0.2.0`.
+
+### Added
+
+- **`tooled serve`:** MCP on stdin and stdout, written on the standard library, attached to the session `--session`
+  names (else `$TOOLED_SESSION`), or to one of its own, opened from the policy and closed when it ends.
+  `tools/list` gives the tools the policy shows, or those `--verbs` picks, in the export's order; `tools/call`
+  carries one out as `tooled call` does in the session, any exit but 0 a result with `isError`, its text tooled's
+  error line, so the model can correct the call; a name the policy shows no tool of is a protocol error. Calls run
+  side by side, `notifications/cancelled` stops one, and each appends its line to `$TOOLED_LOG`. It speaks MCP's
+  legacy era (an `initialize` handshake, protocol 2025-11-25 and before) and its modern one (2026-07-28: a version
+  in each request's `_meta`, `server/discover`).
+
+### Changed
+
+- **parsed `v0.2.0`,** from `v0.1.8`; its range is now the minor (`>=0.2.0,<0.3`), since parsed breaks only in a
+  minor from 0.2.0. An app whose commands tooled reads must pin the same. Nothing of tooled's own output changes;
+  parsed's envelopes, refusals and usages read as parsed 0.2.0 words them.
+
 ## 0.2.8 — 2026-10-24
 
 **Sessions.** A session holds a policy's world open, its mesh and its app among it, in a process of its own, for the

@@ -2,8 +2,9 @@
 
 `tooled tools` prints the operations a policy shows as tool definitions: what a harness hands a model, so the model
 can ask for a call by name with typed arguments; `tooled call` carries out each call it asks for. It's for a model
-that calls tools rather than a shell, a local one on llama.cpp or Ollama say. An agent with a shell, Claude Code
-among them, uses the verbs themselves ([agents.md](agents.md)).
+that calls tools rather than a shell, a local one on llama.cpp or Ollama say. A harness that takes tools over MCP,
+Claude Code among them, runs `tooled serve` ([Serving over MCP](#serving-over-mcp)). An agent with a shell can also
+use the verbs themselves ([agents.md](agents.md)).
 
 ```sh
 tooled tools --format openai --policy agents/player.toml --out tools.json
@@ -203,6 +204,37 @@ tooled call query_look_reply_ping --args '{"player": "ann", "station": "s1"}' --
 - **Any tool the policy shows,** not only those `--verbs` kept: picking shapes what a harness offers, and the
   policy is the guard. A name the policy shows no tool of is a usage error (exit 2) naming the closest. Only the
   tool called need be one the dialect can say, so a profile that exports with picks calls the same way.
+
+## Serving over MCP
+
+`tooled serve` gives the same tools over MCP, on stdin and stdout, to a harness that takes tools natively. It's a
+client of a session ([cli.md](cli.md), *Sessions*): its calls run there, beside the agent's command-line calls, on
+the same state and the same mesh.
+
+```sh
+tooled serve --session seat-a                      # attached: the agent's CLI calls and its tools share seat-a
+tooled serve --session seat-a --verbs see,do,wait  # its picks, as tools --verbs takes them
+tooled serve --policy agents/player.toml           # no session named: one of its own, closed when serve ends
+```
+
+- **Which session:** `--session NAME`, else `$TOOLED_SESSION`; it must be open, and a policy named beside it must
+  be its own. With none named, `serve` opens a session of its own from the policy (`--policy`, `--name`, `--idle`,
+  as `session start` takes them), tied to its process.
+- **`tools/list`:** every tool the policy shows, or those `--verbs` picks, in one page, in the export's order: the
+  session's `tooled tools --format mcp`, uncapped. A tool the policy shows but the picks leave out can still be called.
+- **`tools/call`:** carried out as `tooled call NAME --args JSON` is in the session, its output the result's text.
+  Exit 0 is a result; any other exit is a result with `isError: true`, its text tooled's error line and any notes, so
+  the model reads why (a refusal, a value refused, a wait past its bound) and corrects the call. A name the policy
+  shows no tool of is a protocol error (`-32602`), as MCP has it.
+- **Side by side:** calls run concurrently, each its own call in the session, and `notifications/cancelled` stops
+  one (a wait ends as a signal ends it), which then has no response. Each call appends its line to `TOOLED_LOG`,
+  naming the session.
+- **Both eras of MCP:** a client that opens with `initialize` (protocol 2025-11-25 and before) is answered in the
+  version it asked for, or the newest of those; a client that sends its version in each request's `_meta`
+  (2026-07-28) is answered as that revision asks, `server/discover` among it, and a version `serve` doesn't speak is
+  refused with `-32022` and the versions it does.
+- **Shutdown:** the end of stdin, or SIGTERM, stops the calls still running, and closes the session `serve` opened
+  for itself. stdout carries MCP's messages alone; a note goes to stderr.
 
 ## Formats
 
