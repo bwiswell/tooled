@@ -25,7 +25,7 @@ naming the session (:mod:`tooled.ledger`).
 **The protocol** is tooled's own, client to server: JSON lines over the socket. A call sends ``{"tooled": version,
 "argv", "cwd", "env", "tty", "stdin"}``, then ``{"stop": signum}`` if it's asked to stop; the session sends
 ``{"out": text}`` and ``{"err": text}`` as the call writes, then ``{"end": code, "entry": line}``, or ``{"end": code,
-"cut": true}`` for a run cut short (``--help``), which leaves no line. ``{"control": "status"}`` and ``{"control":
+"cut": true}`` for a run cut short (a crash, a stop), which leaves no line. ``{"control": "status"}`` and ``{"control":
 "stop"}`` ask the session itself.
 
 This module imports nothing but the standard library, until a verb of its own runs.
@@ -179,7 +179,7 @@ class Ended:
 
     Attributes:
         code: Its exit code.
-        line: The session's line for the call log; ``None`` for a run cut short (``--help``), which leaves none.
+        line: The session's line for the call log; ``None`` for a run cut short (a crash, a stop), which leaves none.
     """
 
     code: int
@@ -264,7 +264,7 @@ def attach(given: list[str], handle: str, entry: Entry) -> int:
     tooled writes any, and ends ``entry``.
 
     Raises:
-        SystemExit: The session cut the run short, as ``--help`` does a cold one: there's no line to log.
+        SystemExit: The session cut the run short (a crash, a stop, a peer refused): there's no line to log.
     """
     entry.session = handle
     try:
@@ -380,7 +380,7 @@ def run(args: argparse.Namespace) -> int:
     """
     import subprocess
 
-    command = args.command[1:] if args.command[:1] == ['--'] else args.command
+    command = args.command
     if not command:
         msg = 'tooled session run takes a command, after --: tooled session run -- COMMAND …'
         raise UsageError(msg)

@@ -8,6 +8,10 @@ Every verb takes `--policy` after the verb (else `$TOOLED_POLICY`, else `./toole
 [policy.md](policy.md)). `tooled --version` names tooled and the seared, zeared and parsed it runs on. A call given
 `--session` (else `$TOOLED_SESSION`) runs in a session that holds the policy open ([Sessions](#sessions)).
 
+The command line is read by parsed: each verb is a command, its flags after it in any order, between its slots too
+(`fetch Station station=s1 --timeout 2 world=w1`), a flag's value after it or after `=` (`--args='{"a": 1}'`).
+`tooled --help` lists the verbs, and `tooled VERB --help` (or `-h`) says what one takes, in parsed's words.
+
 ## Verbs
 
 | Verb | Acts on | Prints |
@@ -79,9 +83,10 @@ A command's verb is its op's: `see` for a read, `do` for any other.
 
 The tree's verbs run a line of the policy's app (`[app]`, in [policy.md](policy.md)): `see` a read, `do` anything
 else, each verb its op. tooled's own options stand first (`--policy`, `--select`, `--max-bytes`, `--out`,
-`--pretty`, `--timeout`; `--` ends them); from the line's first word on, every word is the line's, a flag among
-them. The words are joined as parsed's own command line joins them: a word with a space quoted, a single argument
-the whole line.
+`--pretty`, `--session`, `--timeout`; `--` ends them); from the line's first word on, every word is the line's, a
+flag among them (`--yes`, `--until`, `--help`). parsed's own flags given before it (`do --yes dock vesta`) are put
+back on it. The words are joined as parsed's own command line joins them: a word with a space quoted, a double quote
+in one kept, and a single argument after tooled's options the whole line (`tooled do 'fleet f1 mine'`).
 
 ```sh
 tooled see fleets show frigate
@@ -207,7 +212,7 @@ tooled session run --policy seat.toml -- claude -p "…"       # a session for o
 | Verb | What |
 |---|---|
 | `session start [--name N] [--idle D] [--for PID] [--foreground] [--timeout S]` | Opens a session, and prints, once it's ready, where it is and what it holds: `session`, `socket`, `pid`, `policy`, `mesh`, `app`, `idle`, `for`, `log`, and the `seconds` it took to open. One that doesn't open exits as a cold call would (5 for a mesh or an app's state that won't open, 2 for a policy that won't load), saying why. A name already open is refused; with none, one is made up. `--foreground` holds it in this process instead, for a supervisor (a systemd user unit, a container, a harness that keeps its own processes): it prints the same, then serves until it ends |
-| `session run [--name N] [--idle D] -- COMMAND …` | Opens a session, runs the command with `$TOOLED_SESSION` naming it, and closes the session when the command ends, exiting with the command's code. The session is tied to `session run`'s own process, so it ends with it however it ends |
+| `session run [--name N] [--idle D] -- COMMAND …` | Opens a session, runs the command with `$TOOLED_SESSION` naming it, and closes the session when the command ends, exiting with the command's code. The command's words are its arguments, as given; `--` stands before them where the first begins with a dash. The session is tied to `session run`'s own process, so it ends with it however it ends |
 | `session stop [NAME]` | Closes a session (`NAME`, else `$TOOLED_SESSION`), and prints how it ended |
 | `session status [NAME]` | One session's status: `calls`, `in_flight`, `last_call` and `started` beside where it is; or, naming none, every session under the runtime directory, each one that has ended listed once, then cleared |
 
@@ -271,9 +276,10 @@ session's.
 
 - **Results** go to stdout as JSON, indented on a terminal or with `--pretty` (`listen`'s lines are always compact).
 - **Errors** go to stderr as one JSON object: `{"error": kind, "message": …, "path": […]}`. That includes a
-  malformed argument, an unknown flag or a missing one, as `usage` naming the verb
-  (`tooled fetch: argument --select: …`), never argparse's usage text. `--help` and `--version` print to stdout and
-  exit 0.
+  malformed argument, an unknown flag or a missing one, as `usage`: parsed's refusal, with the verb's usage after it
+  (``fetch: which contract? `fetch <contract> [<slots> …] …` ``); a value tooled reads its own way says what it
+  should be (`--timeout: a timeout is a number of seconds above zero, not 0`). `--help` and `--version` print to
+  stdout and exit 0.
 - **Notes** go to stderr as `{"note": …}` lines: an error reply, a reply that would not decode, no reply, a retry,
   samples left out of a stream, a dry run. A library's warning goes there as `{"log": level, "logger": …,
   "message": …}`.
@@ -334,7 +340,7 @@ harness keeps a ledger of what its agent ran without wrapping tooled:
   with what the session did and the call's own time.
 - **One append a line,** so runs side by side share a file. A harness that keeps a record a turn gives each its own
   (`TOOLED_LOG=turns/<stamp>/calls.jsonl`).
-- **What it can't see:** a run cut short (a crash, a kill, `--help`) leaves no line, and nor does what failed
+- **What it can't see:** a run cut short (a crash, a kill) leaves no line, and nor does what failed
   before tooled ran: a shell that couldn't parse the command, or a permission the harness refused. Those are in the
   harness's own record. A log tooled can't write is a note on stderr; the run's result and exit code stand.
 

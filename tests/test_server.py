@@ -80,13 +80,12 @@ class TestTheSameOutput:
         assert bare == cold
 
     def test_tooled_s_own_help(self, policy, capsys):
-        with pytest.raises(SystemExit) as cold:
-            main(['see', '--help'])
+        cold = main(['see', '--help'])
         cold_out = capsys.readouterr().out
-        with serving(policy), pytest.raises(SystemExit) as warm:
-            main(attached(['see', '--help']))
-        assert (warm.value.code, capsys.readouterr().out) == (cold.value.code, cold_out)
-        assert '--session NAME' in cold_out
+        with serving(policy):
+            warm = main(attached(['see', '--help']))
+        assert (warm, capsys.readouterr().out) == (cold, cold_out)
+        assert (cold, '--session <session>' in cold_out) == (0, True)
 
     def test_a_wait_met(self, policy, capsys):
         argv = ['see', '--policy', policy, 'station', 's1', 'show', '--until', 'stock=5', '--timeout', '2s']
