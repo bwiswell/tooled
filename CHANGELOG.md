@@ -9,6 +9,54 @@ behave differently.
 The top entry, while it reads *unreleased*, collects what has merged for the next version; each change adds its own
 lines as it lands, and the entry is dated when that version is released.
 
+## 0.2.6 — 2026-10-23
+
+**Command trees, read.** parsed's commands join the catalog beside a protocol's contracts, from an app's mounts or
+from packages read as trees, and the policy reaches them: the tree's ops `see`, `do` and `confirm` over command
+keys, one route a rule, a profile showing one side where a command and a contract overlap, and no `[mesh]` needed
+for commands alone. `operations` and `describe` show them; running them comes next.
+
+### Added
+
+- **Commands in the catalog:** with `[app] factory = "pkg.module:function"`, the function's parsed `App` gives its
+  mounts' commands, each led by its mount's prefix: `relay/Run`, `relay/pkg.service:Run`, keyed `relay/run`. A
+  package mounted twice gives each command twice, one a mount. `[protocol] trees` reads packages as trees at the
+  root, for a policy with no app. A command's effect is its `EFFECT` on zeared's scale. `check` names the app or the
+  trees, and counts the commands.
+- **parsed as a dependency,** pinned at `v0.1.7`; `--version` names it beside seared and zeared, since an app whose
+  commands tooled reads must pin the same parsed.
+
+- **The policy over commands:** the tree's ops, `see` (a command declaring `EFFECT = READ`), `do` (any other, an
+  undeclared one included) and `confirm` (answering yes to a command that asks first, beside its `see` or `do`).
+  Their keys are a command's keys, led by its mount's prefix, and `[bind]` narrows a command's slot by its name. A
+  call's key is refused when a slot's value holds `/`, `*`, `$`, `?` or `#`, naming the kind whose resolver should
+  map it.
+  `check` lists the commands a policy shows, by op, and their fixed slots.
+
+- **Routes and overlaps:** a command overlaps a contract when it takes its fields from the contract's request class
+  or replies with its class, and a profile shows one side, not both: `[protocol] route` (`tree` by default, or
+  `wire`) picks where the rules would show both, and an allow rule naming one side without a glob takes it. The side
+  not taken is refused naming the other. A deny that denies a contract wholly by name carries over to its commands;
+  `check` lists the overlaps, and the denies by keys that can't carry.
+
+- **Commands listed and described:** `operations` lists commands beside contracts, every row with its `route`
+  (`wire` or `tree`) and `effect`, a command's with its phrase, and an interactive one's with the command to say
+  instead. `describe` takes a command: its op, phrases and keys, slots, flags, asking first, the contracts it
+  overlaps, its arguments' schema (parsed's, bound slots out) and its reply; a contract's document gains `route`,
+  and the commands that overlap it. `check` names, under `unmarked`, the shown commands that declare neither
+  `EFFECT` nor `INTERACTIVE`.
+
+### Changed
+
+- **`[mesh]` is optional** for a policy of commands alone, with no protocol packages; such a policy refuses a rule
+  with a wire op, and `check` shows `"mesh": null` (`--connect` is a usage error). A policy with protocol packages
+  still needs its mesh.
+- **A rule is one route's:** its ops are the wire's or the tree's, so its keys are read in one space; one mixing
+  them is refused, as are `variants` and `fields` on a tree rule, and a name without a glob its ops can't reach.
+- **`[protocol] packages` is optional** where `[app]` or `[protocol] trees` gives the policy commands. A policy that
+  names none of the three is refused, as is one with both trees and an app, and `[app] state` (it arrives with
+  running commands).
+
 ## 0.2.5 — 2026-10-23
 
 **Tools for harnesses.** The operations a policy shows, as tool definitions a harness hands a model that calls

@@ -1,15 +1,29 @@
-"""The policy's rules, checked against a catalog: which contracts it shows, and whether it allows a call.
+"""The policy's rules, checked against a catalog: which operations it shows, and whether it allows a call.
 
-Each contract takes one op (:func:`op_of`). A rule matches a contract when its ``ops`` name that op and one of its
-``operations`` globs matches the contract's name. Then its keys decide, with Zenoh's own matching
-(``zeared.keyexpr``):
+Each operation takes one op (:func:`op_of`): a contract a wire op, a command a tree op. A rule matches an operation
+when its ``ops`` name that op and one of its ``operations`` globs matches the operation's name. Then its keys decide,
+with Zenoh's own matching (``zeared.keyexpr``), against a contract's topics or a command's keys (its phrases', led by
+its mount's prefix: ``relay/run``, ``fleet/{fleet}/mine``):
 
-- **What's shown.** A contract is shown when an allow rule's keys intersect one of its topics (as the policy's
-  ``[bind]`` renders it) and no deny rule covers all of them.
-- **What's allowed.** A call renders one selector: the topic with the given and bound slots filled, and the rest
-  widened. It's allowed when an allow rule's keys include the whole selector and no deny rule's keys intersect
-  it. Replies carry no keys to filter by afterwards, so a selector that could reach a denied key is refused
-  outright: narrowing the slots is the way through.
+- **What's shown.** An operation is shown when an allow rule's keys intersect one of its topics or keys (as the
+  policy's ``[bind]`` renders it) and no deny rule covers all of them.
+- **What's allowed.** A call renders one key: a contract's selector, the topic with the given and bound slots filled
+  and the rest widened; a command's instance key, from parsed (:meth:`Rules.key`). It's allowed when an allow rule's
+  keys include the whole key and no deny rule's keys intersect it. Replies carry no keys to filter by afterwards, so
+  a selector that could reach a denied key is refused outright: narrowing the slots is the way through.
+- **Asking first.** A command that asks before it acts is answered yes only where ``confirm`` is allowed too, at
+  the same key (``check(…, confirm=True)``).
+
+**Routes** (:meth:`Rules.winner`): where a command and a contract do the same thing (``Catalog.links``), a profile
+shows one, not both. When both would be shown, ``[protocol] route`` picks the side (``tree`` by default), unless an
+allow rule names one side without a glob: then that side. Allow rules naming both sides of one overlap are refused.
+**A deny carries over:** one that denies a contract wholly by name (its ``operations`` match it, not by ``*``
+alone; no ``variants`` or ``fields``; its keys cover every topic) denies the commands that overlap it too. A deny by
+keys can't carry, since the key spaces differ: :meth:`Rules.uncarried` lists where a linked command stays shown.
+
+**A command's key is safe or refused** (:meth:`Rules.key`): a slot's value holding ``/``, ``*``, ``$``, ``?`` or ``#``
+would make it a pattern, or more chunks than its phrase has, so it's refused, naming the kind whose resolver should
+map the value to a key. A slot ``[bind]`` fills must hold the bound value.
 
 **Deny wins.** **Variants:** a rule with ``variants`` covers only the request-union tags its globs match. A deny
 rule with variants refuses those tags, not the contract; an allow rule with variants allows only those tags.
@@ -24,32 +38,51 @@ With ``variants`` too, only those variants' calls are covered.
 from __future__ import annotations
 
 import fnmatch
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from parsed.doc import command_key
+from parsed.kinds import Named
 from zeared import Effect, keyexpr
 
-from ..catalog import SLOT, Contract, Kind, render, top_fields
+from ..catalog import SLOT, Command, Contract, Kind, render, top_fields
 from ..errors import PolicyFileError, RefusedError, UsageError
-from .config import Op
+from .config import TREE_OPS, Op, Route
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Sequence
+    from collections.abc import Collection, Mapping, Sequence
 
-    from ..catalog import Catalog
+    from parsed import Command as CommandClass
+    from parsed.names import Resolver
+
+    from ..catalog import Catalog, Link
     from .config import Policy, Rule
+
+#: What a rule guards: a contract on the wire, or a command on the tree.
+type Guarded = Contract | Command
 
 _GLOB = frozenset('*?[')
 
+#: What a command's key can't hold: a key's separator, and what a key expression reads as a wildcard or more.
+_UNSAFE = frozenset('/*$?#')
 
-def op_of(contract: Contract) -> Op:
-    """The op ``contract`` takes: what a rule's ``ops`` name to cover it.
 
-    ``read`` for a retained class, a stream or a presence feed; ``query`` for a queryable that declares
-    ``EFFECT = READ``; ``invoke`` for any other queryable, an undeclared one included, so the default fails safe.
+def op_of(operation: Guarded) -> Op:
+    """The op ``operation`` takes: what a rule's ``ops`` name to cover it.
+
+    On the wire: ``read`` for a retained class, a stream or a presence feed; ``query`` for a queryable that declares
+    ``EFFECT = READ``; ``invoke`` for any other queryable. On the tree: ``see`` for a command that declares
+    ``EFFECT = READ``; ``do`` for any other. An undeclared effect is never a read, so the default fails safe.
     """
-    if contract.kind is not Kind.QUERYABLE:
+    if isinstance(operation, Command):
+        return Op.SEE if operation.effect is Effect.READ else Op.DO
+    if operation.kind is not Kind.QUERYABLE:
         return Op.READ
-    return Op.QUERY if contract.effect is Effect.READ else Op.INVOKE
+    return Op.QUERY if operation.effect is Effect.READ else Op.INVOKE
+
+
+def templates(operation: Guarded) -> tuple[str, ...]:
+    """What a rule's keys are matched against: a contract's topic templates, or a command's key templates."""
+    return operation.keys if isinstance(operation, Command) else operation.templates
 
 
 class Rules:
@@ -67,21 +100,34 @@ class Rules:
     def __init__(self, policy: Policy, catalog: Catalog) -> None:
         self.policy = policy
         self.catalog = catalog
+        self.links = catalog.links
+        self._partners: dict[str, list[tuple[Guarded, Link]]] = {}
+        for link in self.links:
+            self._partners.setdefault(link.command.qualname, []).append((link.contract, link))
+            self._partners.setdefault(link.contract.qualname, []).append((link.command, link))
         self._check_references()
+        self._check_overrides()
 
     # ---- what's shown --------------------------------------------------------------------------
 
-    def bound(self, contract: Contract) -> dict[str, str]:
-        """The bound slots ``contract``'s topics have."""
-        return {slot: value for slot, value in self.policy.bind.items() if slot in contract.slot_names}
+    def bound(self, operation: Guarded) -> dict[str, str]:
+        """The bound slots ``operation``'s topics or keys have."""
+        return {slot: value for slot, value in self.policy.bind.items() if slot in operation.slot_names}
 
-    def shapes(self, contract: Contract) -> tuple[str, ...]:
-        """Every topic of ``contract`` as a key expression, its bound slots filled and the rest widened."""
-        bound = self.bound(contract)
-        return tuple(render(template, bound) for template in contract.templates)
+    def shapes(self, operation: Guarded) -> tuple[str, ...]:
+        """Every topic or key of ``operation`` as a key expression, its bound slots filled and the rest widened."""
+        bound = self.bound(operation)
+        return tuple(render(template, bound) for template in templates(operation))
 
-    def visible(self, contract: Contract) -> bool:
-        """Whether the policy shows ``contract`` at all."""
+    def visible(self, contract: Guarded) -> bool:
+        """Whether the policy shows ``contract`` (or a command) at all.
+
+        Its rules show it, no deny carries over to it, and it overlaps no operation the profile takes instead.
+        """
+        return self._allowed(contract) and self.carried(contract) is None and not self.instead(contract)
+
+    def _allowed(self, contract: Guarded) -> bool:
+        """Whether the rules show ``contract``, on their own: an allow rule's keys reach it, and no deny's cover it."""
         op, shapes = op_of(contract), self.shapes(contract)
         allowed = any(
             _covers(rule, op, contract)
@@ -98,9 +144,89 @@ class Rules:
         )
         return allowed and not hidden
 
+    # ---- routes ----------------------------------------------------------------------------------
+
+    def winner(self, link: Link) -> Route:
+        """The side the profile takes for ``link``: the one an allow rule names, else ``[protocol] route``'s."""
+        command = any(_names(rule, link.command) for rule in self.policy.allow)
+        contract = any(_names(rule, link.contract) for rule in self.policy.allow)
+        if command != contract:
+            return Route.TREE if command else Route.WIRE
+        return self.policy.protocol.route
+
+    def instead(self, operation: Guarded) -> list[Guarded]:
+        """The operations ``operation`` overlaps that the profile shows in its place.
+
+        Each is one its rules show, which no deny carries over to, on the side :meth:`winner` takes.
+        """
+        out = []
+        for partner, link in self._partners.get(operation.qualname, ()):
+            side = Route.TREE if isinstance(partner, Command) else Route.WIRE
+            if self.winner(link) is side and self._allowed(partner) and self.carried(partner) is None:
+                out.append(partner)
+        return out
+
+    def carried(self, operation: Guarded) -> tuple[int, Contract] | None:
+        """The deny that carries over to ``operation``, a command: its index, and the contract it denies."""
+        if not isinstance(operation, Command):
+            return None
+        for partner, _link in self._partners.get(operation.qualname, ()):
+            if isinstance(partner, Contract):
+                for index, rule in enumerate(self.policy.deny):
+                    if self._carries(rule, partner):
+                        return index, partner
+        return None
+
+    def uncarried(self) -> list[tuple[int, Link]]:
+        """Each deny that reaches a contract but can't carry over to a command it overlaps, which stays shown.
+
+        A deny by keys alone, or one narrowed by keys, ``variants`` or ``fields``, reaches a contract in its own key
+        space; the command's keys are another, so it stays as the rules show it. ``check`` lists each.
+        """
+        out = []
+        for index, rule in enumerate(self.policy.deny):
+            for link in self.links:
+                contract = link.contract
+                reaches = _covers(rule, op_of(contract), contract) and any(
+                    keyexpr.intersects(key, shape) for key in rule.keys for shape in self.shapes(contract)
+                )
+                if reaches and not self._carries(rule, contract) and self.visible(link.command):
+                    out.append((index, link))
+        return out
+
+    def _carries(self, rule: Rule, contract: Contract) -> bool:
+        """Whether deny ``rule`` denies ``contract`` wholly, by name, so it carries over.
+
+        It names it, not by ``*`` alone; it has no ``variants`` or ``fields``; and its keys cover every topic.
+        """
+        return (
+            _covers(rule, op_of(contract), contract)
+            and _by_name(rule, contract)
+            and rule.variants is None
+            and rule.fields is None
+            and all(any(keyexpr.includes(key, shape) for key in rule.keys) for shape in self.shapes(contract))
+        )
+
+    def _check_overrides(self) -> None:
+        """Allow rules may name one side of an overlap, to take it, but not both."""
+        for link in self.links:
+            command = _naming(self.policy.allow, link.command)
+            contract = _naming(self.policy.allow, link.contract)
+            if command is not None and contract is not None:
+                names = f'{self.catalog.label(link.command)} and {self.catalog.label(link.contract)}'
+                msg = (
+                    f'allow rules name both {names}, which do the same thing, and a profile shows one: name one, '
+                    'or neither and let [protocol] route pick'
+                )
+                raise PolicyFileError(msg, path=('allow', *max(command, contract)))
+
     def visible_contracts(self) -> list[Contract]:
         """Every contract the policy shows, in the catalog's order."""
         return [contract for contract in self.catalog.contracts if self.visible(contract)]
+
+    def visible_operations(self) -> list[Guarded]:
+        """Every operation the policy shows, contracts and commands, in the catalog's order."""
+        return [o for o in self.catalog.operations if isinstance(o, Contract | Command) and self.visible(o)]
 
     def allowed_variants(self, contract: Contract) -> tuple[str, ...]:
         """The tags of ``contract``'s request unions the policy shows: allowed somewhere, denied not everywhere."""
@@ -145,27 +271,48 @@ class Rules:
     # ---- what's allowed ------------------------------------------------------------------------
 
     def check(
-        self, contract: Contract, selector: str, *, variant: str | None = None, fields: Collection[str] = ()
+        self,
+        contract: Guarded,
+        selector: str,
+        *,
+        variant: str | None = None,
+        fields: Collection[str] = (),
+        confirm: bool = False,
     ) -> None:
-        """Whether the policy allows a call on ``contract`` that renders ``selector``.
+        """Whether the policy allows a call on ``contract`` (or a command) that renders ``selector``.
 
         Args:
-            contract: The contract called.
-            selector: The key expression the call reaches.
+            contract: The contract, or the command, called.
+            selector: The key expression the call reaches: a contract's selector, or a command's key.
             variant: The tag of the request's union the call carries, if it carries one.
             fields: The fields at the root of the request the call gives, as given.
+            confirm: Whether the call answers yes to a command that asks first, which ``confirm`` must allow too.
 
         Raises:
             RefusedError: A deny rule's keys intersect the selector (for its variant, if it names variants), or
                 hide a field the call gives; or no allow rule's keys include it. Then, when a slot left open is one
                 an allow rule's keys fix, the message names it, since filling it is what the call needs, and the
-                value too, when the allow rules that reach the selector all fix it to one.
+                value too, when the allow rules that reach the selector all fix it to one. With ``confirm``, the
+                same for ``confirm``.
         """
-        op, label = op_of(contract), self.catalog.label(contract)
+        self._check_op(op_of(contract), contract, selector, variant=variant, fields=fields)
+        if confirm:
+            self._check_op(Op.CONFIRM, contract, selector)
+
+    def _check_op(
+        self, op: Op, contract: Guarded, selector: str, *, variant: str | None = None, fields: Collection[str] = ()
+    ) -> None:
+        """:meth:`check`, for one op."""
+        label = self.catalog.label(contract)
+        carried = self.carried(contract)
+        if carried is not None:
+            index, denied = carried
+            msg = f'{op} on {label} is denied by deny[{index}], which denies {self.catalog.label(denied)}, its contract'
+            raise RefusedError(msg)
         for index, rule in enumerate(self.policy.deny):
             if not _covers(rule, op, contract) or not any(keyexpr.intersects(key, selector) for key in rule.keys):
                 continue
-            if rule.fields is not None:
+            if rule.fields is not None and isinstance(contract, Contract):
                 _refuse_hidden(rule, index, contract, variant, fields)
             elif rule.variants is None:
                 msg = f'{op} on {label} at {selector} is denied by deny[{index}]; narrow the slots if it reaches more'
@@ -182,7 +329,41 @@ class Rules:
             msg = f'no allow rule covers {op} on {label} at {selector}{_fill_hint(contract, selector, allows)}'
             raise RefusedError(msg)
 
-    def fixed(self, contract: Contract) -> dict[str, str]:
+    def key(self, command: Command, instance: CommandClass, names: Mapping[str, Resolver] | None = None) -> str:
+        """The key a call of ``command`` reaches: parsed's for the instance, led by its mount's prefix, slots judged.
+
+        Args:
+            command: The command called.
+            instance: Its instance, as its line read.
+            names: The resolvers the line was read with, so the key holds the values' keys.
+
+        Raises:
+            RefusedError: A slot's value holds ``/``, ``*``, ``$``, ``?`` or ``#``, which a key can't: the message
+                names the kind whose resolver should map it to a key. Or a slot ``[bind]`` fills holds another
+                value. ``path`` names the slot.
+        """
+        label, bound = self.catalog.label(command), self.bound(command)
+        for slot in command.doc.slots:
+            if slot.many or slot.rest:
+                continue  # a slot of several words is no part of a key
+            value: Any = getattr(instance, slot.field, None)
+            text = '' if value is None else str(value)
+            unsafe = sorted(set(text) & _UNSAFE)
+            if unsafe:
+                kind = slot.kind
+                fix = (
+                    f'map it to a key in the resolver of {kind.category!r}'
+                    if isinstance(kind, Named)
+                    else 'read the slot as a name, whose resolver maps it to a key'
+                )
+                msg = f"{label}: slot {slot.name!r} holds {text!r}, and a key can't hold {unsafe[0]!r}: {fix}"
+                raise RefusedError(msg, path=(slot.name,))
+            if slot.name in bound and text != bound[slot.name]:
+                msg = f'the policy binds {slot.name!r} to {bound[slot.name]!r}'
+                raise RefusedError(msg, path=(slot.name,))
+        return '/'.join(part for part in (*command.under.split(), command_key(instance, names)) if part)
+
+    def fixed(self, contract: Guarded) -> dict[str, str]:
         """The slots ``contract``'s topics leave open that the allow rules let only one value fill, with that value.
 
         Read on each topic as ``[bind]`` renders it, against the keys of the allow rules that cover the contract
@@ -209,7 +390,7 @@ class Rules:
         slots = self.catalog.slot_names
         for slot in self.policy.bind:
             if slot not in slots:
-                msg = f'binds {slot!r}, which no contract has as a slot'
+                msg = f'binds {slot!r}, which no contract or command has as a slot'
                 raise PolicyFileError(msg, path=('bind', slot))
         fields = self.catalog.request_fields
         for name in self.policy.inject:
@@ -219,6 +400,7 @@ class Rules:
 
     def _check_rule(self, rule: Rule, where: tuple[str | int, ...]) -> None:
         matched: dict[str, Contract] = {}
+        tree = bool(set(rule.ops) & TREE_OPS)
         for at, pattern in enumerate(rule.operations):
             found = self.catalog.matching(pattern)
             if not (_GLOB & set(pattern)):
@@ -226,6 +408,11 @@ class Rules:
                     found = [self.catalog.get(pattern)]
                 except UsageError as exc:
                     raise PolicyFileError(exc.message, path=(*where, 'operations', at)) from exc
+                if isinstance(found[0], Command) is not tree:
+                    named, route = self.catalog.label(found[0]), 'tree' if tree else 'wire'
+                    what = 'a command' if isinstance(found[0], Command) else 'a contract'
+                    msg = f"{named} is {what}, which the {route}'s ops never reach"
+                    raise PolicyFileError(msg, path=(*where, 'operations', at))
             matched |= {o.qualname: o for o in found if isinstance(o, Contract)}
         if rule.variants is not None:
             tags = {tag for contract in matched.values() for tag in contract.variants}
@@ -261,7 +448,7 @@ class Rules:
                     raise PolicyFileError(msg, path=(*where, 'fields', at))
 
 
-def _fill_hint(contract: Contract, selector: str, allows: Sequence[Rule]) -> str:
+def _fill_hint(contract: Guarded, selector: str, allows: Sequence[Rule]) -> str:
     """What to say about the slots ``selector`` leaves open that an allow rule's keys fix, if any.
 
     A slot the call left open renders as ``*`` (``*/**`` for a trailing ``{name**}``). One is named when an allow
@@ -307,7 +494,7 @@ def _only_value(keys: Sequence[Sequence[str]], at: int, *, multi: bool) -> str |
     return values.pop() if len(values) == 1 and None not in values else None
 
 
-def _open_slots(contract: Contract, selector: str) -> list[tuple[str, int, bool]]:
+def _open_slots(contract: Guarded, selector: str) -> list[tuple[str, int, bool]]:
     """Each slot ``selector`` leaves open: its name, its chunk's index, and whether it takes the rest of the key.
 
     It's read against the template ``selector`` was rendered from. A template fits when its literal chunks are the
@@ -315,7 +502,7 @@ def _open_slots(contract: Contract, selector: str) -> list[tuple[str, int, bool]
     over, and nothing is named for it.
     """
     chunks = selector.split('/')
-    for template in contract.templates:
+    for template in templates(contract):
         parts = template.split('/')
         slots = [SLOT.fullmatch(part) for part in parts]
         multi = slots[-1] is not None and slots[-1].group(2) is not None
@@ -371,10 +558,32 @@ def _wild(chunk: str) -> bool:
     return chunk in {'*', '**'} or '$*' in chunk
 
 
-def _covers(rule: Rule, op: Op, contract: Contract) -> bool:
+def _covers(rule: Rule, op: Op, contract: Guarded) -> bool:
     """Whether ``rule``'s ``ops`` name ``op`` and one of its ``operations`` globs matches ``contract``."""
     return op in rule.ops and any(
         fnmatch.fnmatchcase(contract.name, glob) or fnmatch.fnmatchcase(contract.qualname, glob)
+        for glob in rule.operations
+    )
+
+
+def _names(rule: Rule, operation: Guarded) -> bool:
+    """Whether ``rule`` names ``operation`` without a glob, by its name or its ``module:Class``."""
+    return any(pattern in {operation.name, operation.qualname} for pattern in rule.operations)
+
+
+def _naming(rules: Sequence[Rule], operation: Guarded) -> tuple[int, str, int] | None:
+    """Where the first of ``rules`` names ``operation`` without a glob: its index, and its pattern's; or ``None``."""
+    for index, rule in enumerate(rules):
+        for at, pattern in enumerate(rule.operations):
+            if pattern in {operation.name, operation.qualname}:
+                return index, 'operations', at
+    return None
+
+
+def _by_name(rule: Rule, operation: Guarded) -> bool:
+    """Whether a glob of ``rule``'s operations, other than ``*`` alone, matches ``operation``."""
+    return any(
+        glob != '*' and (fnmatch.fnmatchcase(operation.name, glob) or fnmatch.fnmatchcase(operation.qualname, glob))
         for glob in rule.operations
     )
 
@@ -384,6 +593,8 @@ def _tag(rule: Rule, tag: str) -> bool:
     return rule.variants is not None and any(fnmatch.fnmatchcase(tag, glob) for glob in rule.variants)
 
 
-def _any_tag(rule: Rule, contract: Contract) -> bool:
+def _any_tag(rule: Rule, contract: Guarded) -> bool:
     """Whether ``rule`` covers some call on ``contract``: it names no variants, or one of ``contract``'s."""
-    return rule.variants is None or any(_tag(rule, tag) for tag in contract.variants)
+    return rule.variants is None or (
+        isinstance(contract, Contract) and any(_tag(rule, tag) for tag in contract.variants)
+    )

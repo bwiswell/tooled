@@ -1,9 +1,23 @@
 from dataclasses import dataclass
 
+import parsed
 import pytest
+import zeared
+from _support_protocol import MoveRequest, Station
 from zeared import Effect
 
-from tooled.catalog import Catalog, Kind, read, render, top_fields, union_tags, wire_names
+from tooled.catalog import (
+    Catalog,
+    Command,
+    Kind,
+    commands_of,
+    made_app,
+    read,
+    render,
+    top_fields,
+    union_tags,
+    wire_names,
+)
 from tooled.errors import CatalogError, UsageError
 
 
@@ -176,3 +190,119 @@ class TestHelpers:
             'pong': {'times': False},
             'dev-peek': {'depth': False},
         }
+
+
+@pytest.fixture(scope='module')
+def app_catalog():
+    return Catalog.load(['_support_protocol'], factory='_support_app:factory')
+
+
+class TestCommands:
+    def test_an_app_s_mounts_each_lead_their_commands(self, app_catalog):
+        found = {command.name: command for command in app_catalog.commands}
+        assert list(found) == [
+            'FleetMine',
+            'PlayerMove',
+            'StationDock',
+            'StationMap',
+            'StationShow',
+            'gateway/Run',
+            'gateway/Status',
+            'relay/Run',
+            'relay/Status',
+        ]
+        run = found['relay/Run']
+        assert (run.qualname, run.under, run.keys) == ('relay/_support_tree.service:Run', 'relay', ('relay/run',))
+        assert found['gateway/Run'].cls is run.cls  # one package mounted twice: one class, two operations
+
+    def test_a_command_s_keys_and_slots(self, app_catalog):
+        mine = app_catalog.get('FleetMine')
+        assert isinstance(mine, Command)
+        assert (mine.keys, mine.slot_names, mine.under) == (('fleet/{fleet}/mine', 'mine/with/{fleet}'), ('fleet',), '')
+
+    def test_its_effect_in_zeared_s_terms(self, app_catalog):
+        effects = {command.name: command.effect for command in app_catalog.commands}
+        assert effects['StationShow'] is Effect.READ
+        assert effects['PlayerMove'] is Effect.WRITE
+        assert effects['relay/Run'] is Effect.ACTION
+        assert effects['FleetMine'] is None  # undeclared: never inferred
+
+    def test_what_parsed_says_of_it_is_kept(self, app_catalog):
+        assert app_catalog.get('PlayerMove').doc.fields_from == (MoveRequest,)
+        assert app_catalog.get('StationShow').doc.reply is Station
+        shown = app_catalog.get('StationMap').doc
+        assert (shown.interactive, shown.instead) == (True, app_catalog.get('StationShow').cls)
+
+    def test_beside_the_contracts_and_named_alike(self, app_catalog):
+        assert (len(app_catalog.contracts), len(app_catalog.commands)) == (8, 9)
+        assert (
+            app_catalog.label(app_catalog.get('Status')) == 'Status'
+        )  # the contract: a command's is led by its prefix
+        assert app_catalog.get('relay/_support_tree.service:Status').name == 'relay/Status'
+        assert [o.name for o in app_catalog.matching('*/Run')] == ['gateway/Run', 'relay/Run']
+        assert [o.name for o in app_catalog.matching('relay/*')] == ['relay/Run', 'relay/Status']
+
+    def test_a_contract_lookup_tells_a_command_apart(self, app_catalog):
+        with pytest.raises(UsageError, match='relay/Run is not a contract'):
+            app_catalog.contract('relay/Run')
+
+    def test_a_prefix_of_several_words(self):
+        (run, _status) = Catalog.load([], factory='_support_app:nested').commands
+        assert (run.name, run.keys, run.under) == ('rio/relay/Run', ('rio/relay/run',), 'rio relay')
+
+    def test_trees_read_at_the_root(self):
+        found = Catalog.load([], trees=['_support_tree.service']).commands
+        assert [(command.name, command.keys) for command in found] == [('Run', ('run',)), ('Status', ('status',))]
+
+    def test_commands_of_a_tree(self):
+        tree = parsed.Tree.collect('_support_tree.service', under='ops')
+        assert [command.qualname for command in commands_of(tree)] == [
+            'ops/_support_tree.service:Run',
+            'ops/_support_tree.service:Status',
+        ]
+
+
+class TestCommandSources:
+    @pytest.mark.parametrize(
+        ('factory', 'message'),
+        [
+            ('_support_nowhere:factory', "would not load: ModuleNotFoundError: No module named '_support_nowhere'"),
+            ('_support_app:missing', "would not load: AttributeError: module '_support_app' has no attribute"),
+            ('_support_app:NOT_CALLABLE', 'is no function, but str'),
+            ('_support_app:failing', 'failed: RuntimeError: no app today'),
+            ('_support_app:not_an_app', "returned int, not parsed's App"),
+        ],
+    )
+    def test_a_factory_that_gives_no_app(self, factory, message):
+        with pytest.raises(CatalogError, match=message) as exc:
+            made_app(factory)
+        assert exc.value.path == ('app', 'factory')
+        assert exc.value.message.startswith(f'[app] factory {factory!r} ')
+
+    @pytest.mark.parametrize(
+        ('tree', 'message'),
+        [
+            ('_support_nowhere', "command tree '_support_nowhere' would not load: ModuleNotFoundError"),
+            ('_support_tree_clash', "command tree '_support_tree_clash' would not load: DeclarationError"),
+        ],
+    )
+    def test_a_tree_that_does_not_load(self, tree, message):
+        with pytest.raises(CatalogError, match=message) as exc:
+            Catalog.load([], trees=['_support_tree.game', tree])
+        assert exc.value.path == ('protocol', 'trees', 1)
+
+
+def test_parsed_s_effects_are_zeared_s_value_for_value():
+    """A command and a contract are judged on one scale: parsed keeps its own copy of zeared's vocabulary."""
+    assert [member.value for member in parsed.Effect] == [member.value for member in zeared.Effect]
+
+
+class TestLinks:
+    def test_a_command_on_a_contract_s_request_or_reply(self, app_catalog):
+        assert [(link.command.name, link.contract.name, link.by) for link in app_catalog.links] == [
+            ('PlayerMove', 'MoveResult', ('request',)),
+            ('StationShow', 'Station', ('reply',)),
+        ]
+
+    def test_none_without_the_protocol(self):
+        assert Catalog.load([], factory='_support_app:factory').links == ()

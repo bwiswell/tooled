@@ -1,19 +1,24 @@
 """The ``tooled`` command (``python -m tooled``).
 
 Stdlib ``argparse`` only. Every verb takes ``--policy`` (else ``$TOOLED_POLICY``, else ``./tooled.toml``) after
-the verb, so a permission rule can match a verb by its prefix (``tooled fetch``). ``--version`` names the seared
-and zeared tooled runs on, since a protocol package tooled reads must pin the same zeared.
+the verb, so a permission rule can match a verb by its prefix (``tooled fetch``). ``--version`` names the seared,
+zeared and parsed tooled runs on, since a protocol package tooled reads must pin the same zeared, and an app the same
+parsed.
 
 **Verbs:**
-- ``check``: load the policy and its protocol, resolve what it injects, and summarize what it shows: each source's
-  length, and the path it read, variables expanded; and, as ``fixed``, each open slot the allow rules let only one
-  value fill, which the policy would rather bind. With ``--connect``, also open the session; with
+- ``check``: load the policy, its protocol and its app's commands, resolve what it injects, and summarize what it
+  shows: how many commands it read, when it reads any; each source's length, and the path it read, variables
+  expanded; and, as ``fixed``, each open slot the allow rules let only one value fill, which the policy would rather
+  bind; and the shown commands that declare neither an effect nor that they're interactive. With ``--connect``, also
+  open the session; with
   ``--no-resolve``, read no inject source and expand no variable, so a policy can be checked against its protocol
   without its secrets (in CI, say).
-- ``operations``: every operation the policy shows, one line of each: its kind, the verbs that act on it, its topic
-  with the bound slots filled, the slots left to give, and its summary.
-- ``describe OPERATION``: one operation, layered: its slots, its request's schema (a root union folded to its tags),
-  and its reply as a field list. ``--reply`` gives the reply's whole schema; ``--variant TAG`` one variant's.
+- ``operations``: every operation the policy shows, contracts and commands, one line of each: its route, its kind
+  or its phrase, the verbs that act on it, its effect, its topic with the bound slots filled, the slots left to give,
+  and its summary; an interactive command marked, with the one to say instead.
+- ``describe OPERATION``: one operation, layered. A contract's slots, its request's schema (a root union folded to its
+  tags), and its reply as a field list; ``--variant TAG`` gives one variant's. A command's phrases, keys, slots,
+  flags, asking first, overlaps, arguments' schema and reply. ``--reply`` gives the reply's whole schema.
 - ``fetch CONTRACT [slot=value …]``: a retained contract's values, those the slots select or every one.
 - ``query CONTRACT [slot=value …] [--request JSON]``: ask a read queryable. ``--request`` takes JSON, ``-`` for
   stdin, or ``@path`` for a file, in the protocol's wire form, without the fields the policy injects.
@@ -76,6 +81,8 @@ if TYPE_CHECKING:
     import asyncio
     from collections.abc import Callable, Generator, Sequence
     from pathlib import Path
+
+    from zeared import SessionConfig
 
     from .catalog import Catalog, Contract
     from .ledger import Entry
@@ -333,13 +340,15 @@ def _add_call(verbs: Any, parents: list[argparse.ArgumentParser]) -> None:  # ar
 
 
 def version() -> str:
-    """``tooled X (seared Y, zeared Z)``: tooled's version, and the seared and zeared it runs on."""
+    """``tooled X (seared Y, zeared Z, parsed W)``: tooled's version, and the seared, zeared and parsed it runs on."""
+    import parsed
     import seared
     import zeared
 
     from . import __version__  # lazy: the package imports this module before it sets its version
 
-    return f'tooled {__version__} (seared {seared.__version__}, zeared {zeared.__version__})'
+    on = f'seared {seared.__version__}, zeared {zeared.__version__}, parsed {parsed.__version__}'
+    return f'tooled {__version__} ({on})'
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -416,7 +425,8 @@ def load(given: str | None) -> tuple[Path, Policy, Catalog, Rules]:
 
     path = policy.find(given)
     loaded = policy.load(path)
-    catalog = Catalog.load(loaded.protocol.packages)
+    factory = loaded.app.factory if loaded.app is not None else None
+    catalog = Catalog.load(loaded.protocol.packages, trees=loaded.protocol.trees, factory=factory)
     return path, loaded, catalog, policy.Rules(loaded, catalog)
 
 
@@ -426,10 +436,10 @@ def _check(args: argparse.Namespace) -> int:
 
     path, loaded, catalog, rules = load(args.policy)
     shown: dict[str, list[str]] = {}
-    visible = rules.visible_contracts()
-    for contract in visible:
-        shown.setdefault(policy.op_of(contract).value, []).append(catalog.label(contract))
-    fixed = {catalog.label(contract): slots for contract in visible if (slots := rules.fixed(contract))}
+    visible = rules.visible_operations()
+    for operation in visible:
+        shown.setdefault(policy.op_of(operation).value, []).append(catalog.label(operation))
+    fixed = {catalog.label(operation): slots for operation in visible if (slots := rules.fixed(operation))}
     inject: dict[str, Any] = {}
     for name, source in sorted(loaded.inject.items()):
         if policy.generated(source):
@@ -444,21 +454,64 @@ def _check(args: argparse.Namespace) -> int:
     mesh = loaded.mesh
     summary: dict[str, Any] = {
         'policy': str(path),
-        'mesh': {'mode': mesh.mode.value, 'router': mesh.router, 'connect': list(mesh.connect)},
+        'mesh': {'mode': mesh.mode.value, 'router': mesh.router, 'connect': list(mesh.connect)} if mesh else None,
         'packages': list(loaded.protocol.packages),
+        **({'app': loaded.app.factory} if loaded.app is not None else {}),
+        **({'trees': list(loaded.protocol.trees)} if loaded.protocol.trees else {}),
+        **({'commands': len(catalog.commands)} if loaded.app is not None or loaded.protocol.trees else {}),
+        **({'unmarked': _unmarked(visible, catalog)} if catalog.commands else {}),
         'operations': len(catalog.operations),
         'visible': {op.value: shown[op.value] for op in policy.Op if op.value in shown},
         'hidden': len(catalog.operations) - len(visible),
         'bind': dict(sorted(loaded.bind.items())),
         'fixed': fixed,
+        **_overlaps(rules),
         'inject': inject,
     }
     if args.connect:
         started = time.perf_counter()
-        open_session(mesh).close()
+        open_session(_mesh(loaded)).close()
         summary['connect'] = {'ok': True, 'seconds': round(time.perf_counter() - started, 3)}
     emit(summary, args)
     return 0
+
+
+def _unmarked(visible: Sequence[Any], catalog: Catalog) -> list[str]:  # contracts and commands
+    """The shown commands that declare neither ``EFFECT`` nor ``INTERACTIVE``: the ones a profile may want to deny.
+
+    An undeclared command counts as a write, and an unmarked one might wait on a person who isn't there.
+    """
+    from .catalog import Command
+
+    return [catalog.label(o) for o in visible if isinstance(o, Command) and o.effect is None and not o.doc.interactive]
+
+
+def _overlaps(rules: Rules) -> dict[str, Any]:
+    """``check``'s overlaps, when there are any, and the denies that don't carry over.
+
+    Each command and contract that do the same thing, how, the side the policy takes and the one it shows; and each
+    deny on a contract that can't carry over to its command, which stays shown.
+    """
+    if not rules.links:
+        return {}
+    label = rules.catalog.label
+    overlaps = []
+    for link in rules.links:
+        shown = [label(o) for o in (link.command, link.contract) if rules.visible(o)]
+        overlaps.append(
+            {
+                'command': label(link.command),
+                'contract': label(link.contract),
+                'by': list(link.by),
+                'route': rules.winner(link).value,
+                'shown': shown[0] if shown else None,
+            }
+        )
+    uncarried = [
+        {'deny': index, 'contract': label(link.contract), 'command': label(link.command)}
+        for index, link in rules.uncarried()
+    ]
+    return {'overlaps': overlaps, 'uncarried': uncarried}
 
 
 def _operations(args: argparse.Namespace) -> int:
@@ -506,19 +559,28 @@ def _call(args: argparse.Namespace) -> int:
 
 
 def _describe(args: argparse.Namespace) -> int:
+    from .catalog import Command, Contract
     from .errors import RefusedError
-    from .schemas import describe, describe_variant
+    from .schemas import describe, describe_command, describe_variant
 
     *_, catalog, rules = load(args.policy)
-    contract = catalog.contract(args.operation)
-    _entry(args).acted_on(catalog.label(contract))
-    if not rules.visible(contract):
-        msg = f'the policy does not show {catalog.label(contract)}'
-        raise RefusedError(msg)
-    if args.variant is not None:
-        emit(describe_variant(contract, args.variant, rules), args)
+    operation = catalog.get(args.operation)
+    label = catalog.label(operation)
+    _entry(args).acted_on(label)
+    if not isinstance(operation, Contract | Command):
+        msg = f'{label} is no operation tooled describes'
+        raise UsageError(msg)
+    if not rules.visible(operation):
+        raise RefusedError(_not_shown(rules, operation))
+    if isinstance(operation, Command):
+        if args.variant is not None:
+            msg = f"{label} is a command, whose arguments hold no union's variants: describe it whole"
+            raise UsageError(msg)
+        emit(describe_command(operation, rules, reply=args.reply), args)
+    elif args.variant is not None:
+        emit(describe_variant(operation, args.variant, rules), args)
     else:
-        emit(describe(contract, rules, reply=args.reply), args)
+        emit(describe(operation, rules, reply=args.reply), args)
     return 0
 
 
@@ -530,7 +592,7 @@ def _fetch(args: argparse.Namespace) -> int:
     _judge(contract, catalog, args)
     values = executor.slot_values(contract, rules, _pairs(args.slots, 'slot'))
     executor.check_fetch(contract, rules, values)  # before the session: a refusal never waits on the mesh
-    session = executor.open_session(loaded.mesh)
+    session = executor.open_session(_mesh(loaded))
     try:
         result = executor.fetch(session, contract, rules, values, timeout=args.timeout)
     finally:
@@ -551,7 +613,7 @@ def _query(args: argparse.Namespace) -> int:
     injected = _injected(path, loaded, contract, rules)
     call = executor.prepare(contract, rules, values, request=request, injected=injected)  # before the session
     _entry(args).acted_on(catalog.label(contract), variant=call.variant)
-    session = executor.open_session(loaded.mesh)
+    session = executor.open_session(_mesh(loaded))
     try:
         result = executor.query(
             session,
@@ -586,7 +648,7 @@ def _invoke(args: argparse.Namespace) -> int:
         emit(executor.preview(contract, call, hidden=secrets), argparse.Namespace(**{**vars(args), 'select': None}))
         _notes(['a dry run: checked, and not sent'])
         return 0
-    session = executor.open_session(loaded.mesh)
+    session = executor.open_session(_mesh(loaded))
     try:
         result = executor.invoke(
             session,
@@ -603,6 +665,18 @@ def _invoke(args: argparse.Namespace) -> int:
         session.close()
     _finish(result, args, sent=True)
     return 0
+
+
+def _mesh(loaded: Policy) -> SessionConfig:
+    """The policy's mesh, for a verb that reaches it.
+
+    Raises:
+        UsageError: The policy names none, as one of commands alone may.
+    """
+    if loaded.mesh is None:
+        msg = 'the policy names no [mesh], so nothing it allows reaches one'
+        raise UsageError(msg)
+    return loaded.mesh
 
 
 def _injected(path: Path, loaded: Policy, contract: Contract, rules: Rules) -> dict[str, str]:
@@ -680,13 +754,27 @@ def _readable(args: argparse.Namespace, catalog: Catalog, rules: Rules, verb: st
     label = catalog.label(contract)
     _entry(args).acted_on(label)
     if not rules.visible(contract):
-        msg = f'the policy does not show {label}'
-        raise RefusedError(msg)
+        raise RefusedError(_not_shown(rules, contract))
     if verb not in verbs(contract):
         acts = ', '.join(verbs(contract)) or 'nothing in this version of tooled'
         msg = f'{verb} does not act on {label}, a {contract.kind.value} contract; what does: {acts}'
         raise UsageError(msg)
     return contract
+
+
+def _not_shown(rules: Rules, operation: Any) -> str:  # a contract or a command
+    """Why the policy doesn't show ``operation``: a side it takes instead, a deny carried over, or its rules."""
+    label = rules.catalog.label(operation)
+    instead = rules.instead(operation)
+    if instead:
+        names = ' and '.join(rules.catalog.label(other) for other in instead)
+        side = 'tree' if any(other in rules.catalog.commands for other in instead) else 'wire'
+        return f'the policy does not show {label}: it goes by the {side} for that, as {names}'
+    carried = rules.carried(operation)
+    if carried is not None:
+        index, denied = carried
+        return f'the policy does not show {label}: deny[{index}] denies {rules.catalog.label(denied)}, its contract'
+    return f'the policy does not show {label}'
 
 
 def _pairs(items: Sequence[str], what: str) -> dict[str, str]:
@@ -834,7 +922,7 @@ def _subscribe(
                 stop=stop,
             )
 
-    session = executor.open_session(loaded.mesh)
+    session = executor.open_session(_mesh(loaded))
     try:
         return asyncio.run(run(session))
     finally:
@@ -858,7 +946,7 @@ def _wait(args: argparse.Namespace) -> int:
                 session, contract, rules, values, until=args.until, meta=args.meta, within=args.timeout, stop=stop
             )
 
-    session = executor.open_session(loaded.mesh)
+    session = executor.open_session(_mesh(loaded))
     try:
         result = asyncio.run(run(session))
     except TimedOutError as exc:

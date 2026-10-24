@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 
+import parsed
 import pytest
 import seared
 import zeared
@@ -43,8 +44,9 @@ def run(capsys, *argv):
 
 
 class TestVersion:
-    def test_names_tooled_seared_and_zeared(self):
-        assert version() == f'tooled {tooled.__version__} (seared {seared.__version__}, zeared {zeared.__version__})'
+    def test_names_tooled_seared_zeared_and_parsed(self):
+        on = f'seared {seared.__version__}, zeared {zeared.__version__}, parsed {parsed.__version__}'
+        assert version() == f'tooled {tooled.__version__} ({on})'
 
     def test_prints_and_exits_zero(self, capsys):
         with pytest.raises(SystemExit) as exc:
@@ -122,6 +124,93 @@ class TestCheck:
             'fixed': {},
             'inject': {'token': {'source': 'env DEMO_TOKEN', 'length': 16}},
         }
+
+    def test_an_app_s_commands_are_counted_and_none_shown_yet(self, tmp_path, capsys):
+        path = write(tmp_path, '[app]\nfactory = "_support_app:factory"\n')
+        code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', str(path))
+        assert code == 0
+        assert {key: out[key] for key in ('packages', 'app', 'commands', 'operations', 'hidden')} == {
+            'packages': ['_support_protocol'],
+            'app': '_support_app:factory',
+            'commands': 9,
+            'operations': 17,
+            'hidden': 17,  # no rule allows a tree op
+        }
+        assert 'trees' not in out
+
+    def test_tree_rules_show_commands_by_op(self, tmp_path, capsys):
+        body = (
+            '[app]\nfactory = "_support_app:factory"\n\n'
+            '[[allow]]\nops = ["see"]\nkeys = ["station/s1/**", "*/status"]\n\n'
+            '[[allow]]\nops = ["do"]\noperations = ["relay/*"]\n'
+        )
+        code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', str(write(tmp_path, body)))
+        assert code == 0
+        assert out['visible'] == {
+            'see': ['StationMap', 'StationShow', 'gateway/Status', 'relay/Status'],
+            'do': ['relay/Run'],
+        }
+        assert out['fixed'] == {'StationMap': {'station': 's1'}, 'StationShow': {'station': 's1'}}
+        assert out['hidden'] == 17 - 5
+
+    def test_commands_alone_with_no_mesh(self, tmp_path, capsys):
+        head = '[protocol]\n\n[app]\nfactory = "_support_app:factory"\n'
+        path = str(write(tmp_path, '[[allow]]\nops = ["see"]\n', head=head))
+        code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', path)
+        assert code == 0
+        assert (out['mesh'], out['packages'], out['commands']) == (None, [], 9)
+        code, _, err = run(capsys, 'check', '--connect', '--policy', path)
+        assert (code, err['error'], err['message']) == (
+            2,
+            'usage',
+            'the policy names no [mesh], so nothing it allows reaches one',
+        )
+
+    def test_overlaps_and_the_denies_that_do_not_carry(self, tmp_path, capsys):
+        body = (
+            '[app]\nfactory = "_support_app:factory"\n\n'
+            '[[allow]]\nops = ["read", "query", "invoke"]\n\n[[allow]]\nops = ["see", "do"]\n\n'
+            '[[allow]]\nops = ["invoke"]\noperations = ["MoveResult"]\n\n'
+            '[[deny]]\nops = ["read"]\nkeys = ["demo/*/station/s9"]\n'
+        )
+        code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', str(write(tmp_path, body)))
+        assert code == 0
+        assert out['overlaps'] == [
+            {
+                'command': 'PlayerMove',
+                'contract': 'MoveResult',
+                'by': ['request'],
+                'route': 'wire',
+                'shown': 'MoveResult',
+            },
+            {'command': 'StationShow', 'contract': 'Station', 'by': ['reply'], 'route': 'tree', 'shown': 'StationShow'},
+        ]
+        assert out['uncarried'] == [{'deny': 0, 'contract': 'Station', 'command': 'StationShow'}]
+
+    def test_the_side_not_taken_is_refused_naming_the_other(self, tmp_path, capsys):
+        body = '[app]\nfactory = "_support_app:factory"\n\n[[allow]]\nops = ["read"]\n\n[[allow]]\nops = ["see"]\n'
+        path = str(write(tmp_path, body))
+        expected = 'the policy does not show Station: it goes by the tree for that, as StationShow'
+        for argv in (['fetch', 'Station'], ['describe', 'Station']):
+            code, _, err = run(capsys, *argv, '--policy', path)
+            assert (code, err['message']) == (3, expected)
+
+    def test_trees_with_no_app(self, tmp_path, capsys):
+        head = HEAD.replace('packages = ["_support_protocol"]\n', 'trees = ["_support_tree.service"]\n')
+        code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', str(write(tmp_path, head=head)))
+        assert code == 0
+        assert {key: out[key] for key in ('packages', 'trees', 'commands', 'operations')} == {
+            'packages': [],
+            'trees': ['_support_tree.service'],
+            'commands': 2,
+            'operations': 2,
+        }
+        assert 'app' not in out
+
+    def test_an_app_that_will_not_load(self, tmp_path, capsys):
+        path = write(tmp_path, '[app]\nfactory = "_support_app:not_an_app"\n')
+        code, _, err = run(capsys, 'check', '--no-resolve', '--policy', str(path))
+        assert (code, err['error'], err['path']) == (2, 'catalog', ['app', 'factory'])
 
     def test_notes_each_open_slot_the_allow_rules_fix(self, tmp_path, capsys):
         body = (
@@ -1002,6 +1091,56 @@ class TestCall:
     def test_no_arguments_are_none(self, reads, capsys):
         code, out, _ = run(capsys, 'call', 'fetch_station', '--policy', reads)
         assert (code, len(out)) == (0, 2)
+
+
+class TestCommandsListed:
+    """Commands list and describe beside contracts, each with its route; nothing runs one yet."""
+
+    @pytest.fixture
+    def tree(self, tmp_path):
+        body = (
+            '[app]\nfactory = "_support_app:factory"\n\n'
+            '[[allow]]\nops = ["see", "do"]\n\n[[deny]]\nops = ["do"]\nkeys = ["gateway/**"]\n'
+        )
+        return str(write(tmp_path, body))
+
+    def test_operations_lists_them(self, tree, capsys):
+        code, out, _ = run(capsys, 'operations', '--policy', tree)
+        assert code == 0
+        assert [(row['name'], row['route']) for row in out] == [
+            ('FleetMine', 'tree'),
+            ('PlayerMove', 'tree'),
+            ('StationDock', 'tree'),
+            ('StationMap', 'tree'),
+            ('StationShow', 'tree'),
+            ('gateway/Status', 'tree'),
+            ('relay/Run', 'tree'),
+            ('relay/Status', 'tree'),
+        ]
+
+    def test_describe_takes_one(self, tree, capsys):
+        code, out, _ = run(capsys, 'describe', 'relay/Run', '--policy', tree)
+        assert (code, out['route'], out['phrases'], out['keys']) == (0, 'tree', ['relay run'], ['relay/run'])
+
+    @pytest.mark.parametrize(
+        ('argv', 'message'),
+        [
+            (['StationDock', '--variant', 'x'], "StationDock is a command, whose arguments hold no union's variants"),
+            (['StationDock', '--reply'], 'StationDock declares no REPLY, so it gives no reply to describe'),
+        ],
+    )
+    def test_what_describe_can_not_say_of_one(self, tree, capsys, argv, message):
+        code, _, err = run(capsys, 'describe', *argv, '--policy', tree)
+        assert (code, err['error']) == (2, 'usage')
+        assert err['message'].startswith(message)
+
+    def test_one_the_policy_does_not_show(self, tree, capsys):
+        code, _, err = run(capsys, 'describe', 'gateway/Run', '--policy', tree)
+        assert (code, err['message']) == (3, 'the policy does not show gateway/Run')
+
+    def test_check_names_the_unmarked(self, tree, capsys):
+        code, out, _ = run(capsys, 'check', '--no-resolve', '--policy', tree)
+        assert (code, out['unmarked']) == (0, ['FleetMine'])
 
 
 class TestCallLog:

@@ -11,8 +11,8 @@ Every verb takes `--policy` after the verb (else `$TOOLED_POLICY`, else `./toole
 
 | Verb | Acts on | Prints |
 |---|---|---|
-| `check [--connect] [--no-resolve]` | the policy | how many operations its protocol has, what it shows by op, and how many it hides; under `fixed`, each shown operation's open slots that the allow rules let only one value fill, with that value (bind them, or every call must give it); each injected field's source, the length of one read, and the path it read, variables expanded (a generated one is never made); with `--connect`, whether the session opens; with `--no-resolve`, the same without reading any inject source or expanding any variable |
-| `operations` | the policy | one line of each operation it shows: kind, verbs, topic (bound slots filled), slots left to give, summary |
+| `check [--connect] [--no-resolve]` | the policy | how many operations its protocol and its app's commands come to (with an app or trees, which, and how many commands, and under `unmarked` the shown commands that declare neither `EFFECT` nor `INTERACTIVE`; where commands and contracts overlap, each overlap and the side shown, and the denies that don't carry over), what it shows by op, and how many it hides; under `fixed`, each shown operation's open slots that the allow rules let only one value fill, with that value (bind them, or every call must give it); each injected field's source, the length of one read, and the path it read, variables expanded (a generated one is never made); with `--connect`, whether the session opens; with `--no-resolve`, the same without reading any inject source or expanding any variable |
+| `operations` | the policy | one line of each operation it shows, contracts and commands: route, then a contract's kind, verbs, effect and topic (bound slots filled), or a command's verbs, effect and phrase; the slots left to give, the summary, and an interactive command's `instead` |
 | `describe OPERATION [--reply \| --variant TAG]` | any shown operation | the operation, layered (below) |
 | `fetch CONTRACT [slot=value …]` | a retained contract | its values, sorted |
 | `query CONTRACT [slot=value …] [--request JSON]` | a queryable that declares `EFFECT = READ` | its replies, in the order they arrived |
@@ -40,18 +40,35 @@ exception: it reaches one key, so it takes every slot (below).
 
 ### `describe`
 
-`describe` is layered, so even a large contract reads in a few kilobytes:
+`describe` is layered, so even a large contract reads in a few kilobytes. A contract's document, beside its
+`route` (`wire`), kind, op, verbs, effect and topics:
 
 - `slots`: each slot's schema, or `{"bound": value}`;
 - `request`: the request's JSON Schema: seared's load schema, closed against unknown keys, without the fields the
-  policy injects or hides or the variants it denies. A root union shows folded, as its list of tags, with `variants` beside
-  it (each tag and a line of what it does);
+  policy injects or hides or the variants it denies. A root union shows folded, as its list of tags, with
+  `variants` beside it (each tag and a line of what it does);
 - `reply`: a field list, each top-level field's name, type and doc, and its `constraints` when it declares any:
   seared's, by the names a declaration gives them (`{"ge": 0}`, `{"max_length": 80}`, `{"pattern": "^[a-z]+$"}`),
   which on a list or a map hold for each value. The request's schema carries the same constraints as JSON Schema
   keywords (`minimum`, `maxLength`, `pattern`);
 - `more`: the commands that go deeper: `--reply` for the reply's whole dump schema, `--variant TAG` for one
-  variant's fields.
+  variant's fields;
+- `overlaps`: the commands that do what it does, when there are any.
+
+A command's document, beside its `route` (`tree`), op (`see` or `do`) and effect:
+
+- `phrases` and `keys`: how it's said, and its keys for policy, each led by its mount's prefix;
+- `slots`: each slot's schema, or `{"bound": value}`; and `flags`, each as a line writes it, the field it sets, and
+  whether it's a switch;
+- `asks`, `interactive` and `instead`: whether it asks before it acts, whether it's only for a person at the client,
+  and the command an agent says in its place;
+- `overlaps`: the contracts it does the work of;
+- `arguments`: its arguments' JSON Schema, parsed's: closed, with what only a command says as `x-` keys (`x-phrase`,
+  `x-kind`, `x-asks`), the bound slots taken out;
+- `reply`: its `REPLY` as a field list, or `null` for none; `--reply` gives its whole dump schema. `--variant` is a
+  contract's.
+
+No verb of this version runs a command, so a command's `verbs` are none.
 
 ### `query`
 

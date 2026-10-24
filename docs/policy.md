@@ -64,11 +64,18 @@ The session tooled opens: zeared's own `SessionConfig`, loaded by zeared, strict
 usual pair for reaching a hub; `connect`, `listen`, `retry` and the rest are as zeared documents them. No flag
 overrides it, so a policy can't be pointed at another mesh from the command line.
 
+**A policy of commands alone needs none.** With no `[protocol] packages`, only an app's commands or trees, `[mesh]`
+may be left out: what an app's commands reach is the app's own business. Then no rule may name a wire op (`read`,
+`query`, `invoke`, `publish`, `unretain`), since nothing reaches a wire, and `check` shows `"mesh": null`. A policy
+with protocol packages needs its mesh.
+
 ## `[protocol]`
 
 | Key | Meaning |
 |---|---|
-| `packages` | The protocol packages (or modules) whose contracts tooled reads, submodules included. Each must import in tooled's environment, on the same zeared tooled runs on. |
+| `packages` | The protocol packages (or modules) whose contracts tooled reads, submodules included. Each must import in tooled's environment, on the same zeared tooled runs on. Optional when `[app]` or `trees` gives the policy commands. |
+| `trees` | For a policy with no `[app]`: packages (or modules) whose parsed commands tooled reads, each a tree at the root, on the same parsed tooled runs on. |
+| `route` | `tree` (the default) or `wire`: where a command and a contract do the same thing, the side shown when the rules would show both (*Routes and overlaps*, below). |
 
 Each zeared `Message` class becomes a **contract**, one of the operations `tooled operations` lists, sorted by what
 it is, which decides its op:
@@ -86,8 +93,9 @@ naming both, and `module:Class` picks one.
 
 ## `[bind]`
 
-Slot values every key renders with. A bound slot is fixed: a call that gives it another value is refused, and
-`describe` and `operations` show it filled. Each value is one concrete chunk of a key: no `/`, and no wildcard.
+Slot values every key renders with: a contract's topics, and a command's keys. A bound slot is fixed: a call that
+gives it another value is refused, and `describe` and `operations` show it filled. Each value is one concrete chunk
+of a key: no `/`, and no wildcard.
 
 Binding is a guardrail and a convenience. Where a server checks a token against a slot, binding that slot saves
 giving it each time; a policy that wants other values of a slot (another player's public state, say) leaves it
@@ -133,11 +141,11 @@ key = "token"
 
 | Key | Default | Meaning |
 |---|---|---|
-| `ops` | required | what's done: `read`, `query`, `invoke`, `publish`, `unretain`. This version acts on `read`, `query` and `invoke`; `publish` and `unretain` load, so a policy written now carries forward |
-| `operations` | `["*"]` | what it's done to: globs over the names `tooled operations` lists, or `module:Class`. It was `contracts` before 0.2.4; that key is refused, naming this one |
-| `keys` | `["**"]` | Zenoh key expressions (`*` one chunk, `**` any number, `$*` within a chunk) |
-| `variants` | none | globs over the tags of a request's root union; none covers the whole contract |
-| `fields` | none | a deny rule's only: globs over the optional fields at a request's root, which it hides; none covers the whole call |
+| `ops` | required | what's done. On the wire: `read`, `query`, `invoke`, `publish`, `unretain`; this version acts on `read`, `query` and `invoke`, and `publish` and `unretain` load, so a policy written now carries forward. On the tree: `see`, `do`, `confirm` (*On the tree*, below). A rule's ops are one route's |
+| `operations` | `["*"]` | what it's done to: globs over the names `tooled operations` lists, or `module:Class`; a mounted command's are led by its prefix (`relay/*`). It was `contracts` before 0.2.4; that key is refused, naming this one |
+| `keys` | `["**"]` | Zenoh key expressions (`*` one chunk, `**` any number, `$*` within a chunk), over a contract's topics or a command's keys |
+| `variants` | none | the wire's only: globs over the tags of a request's root union; none covers the whole contract |
+| `fields` | none | a deny rule's only, on the wire: globs over the optional fields at a request's root, which it hides; none covers the whole call |
 
 **Nothing is allowed until a rule allows it, and deny wins.** A rule covers a contract when its `ops` name the
 contract's op and one of its `operations` globs matches the contract's name. Then its keys decide, with Zenoh's own
@@ -185,10 +193,98 @@ rule, it covers what its `ops`, `operations` and `keys` reach; the tools and `de
 where its keys cover every topic, and a call at a key they reach is refused either way. `fields` on an allow rule
 is refused: a field is hidden, never allowed one by one.
 
-**Names must name something.** A contract name, a variant tag, a hidden field, a bound slot or an injected field
-written without a glob must exist in the protocol, so a typo is refused at load. A glob may match nothing.
+### On the tree
+
+A command (*`[app]`*, below) takes one of the tree's ops, as a contract takes one of the wire's:
+
+| Op | Covers |
+|---|---|
+| `see` | running a command that declares `EFFECT = READ` |
+| `do` | running any other command: `WRITE`, `ACTION`, or no `EFFECT` at all, so the default fails safe |
+| `confirm` | answering yes when a command asks before it acts; the call needs its `see` or `do` too, at the same key |
+
+**`see` runs a read.** It isn't about what a listing shows: `operations` and `describe` show what any rule allows,
+whatever its ops, as on the wire.
+
+- **Keys are a command's keys:** its phrases' (`fleet/{fleet}/mine`), each led by its mount's prefix (`relay/run`).
+  A command is shown when an allow rule's keys intersect one of them, and a call is allowed when an allow rule's
+  keys include the key the call's line comes to (`fleet/f1/mine`) and no deny rule's intersect it. A phrase's slot
+  of several words, or the rest of the line, is no part of a key, and nor is a flag: a rule over `fleet/*/sell`
+  holds whatever is sold.
+- **`[bind]` narrows a command's slot** by its name, as a topic's: `fleet = "f1"` makes `fleet/{fleet}/mine` read
+  `fleet/f1/mine`, and a line naming another fleet is refused.
+- **A key holds no separator or wildcard.** A slot's value holding `/`, `*`, `$`, `?` or `#` would make the key a
+  pattern, or longer than its phrase, so the call is refused, naming the slot, and the kind whose resolver should
+  map the value to a key (`map it to a key in the resolver of 'station'`).
+- **One route a rule:** a rule's ops are the wire's or the tree's, not both, so its keys are read in one space. A
+  name written without a glob must be one its ops reach (a contract for the wire's, a command for the tree's), and
+  `variants` and `fields`, which are about a contract's request, are refused on a tree rule.
+
+```toml
+[[allow]]                       # every read, and the relay's commands
+ops = ["see"]
+
+[[allow]]
+ops = ["do", "confirm"]
+operations = ["relay/*"]
+
+[[deny]]                        # never the gateway's
+ops = ["see", "do", "confirm"]
+keys = ["gateway/**"]
+```
+
+### Routes and overlaps
+
+A command and a contract overlap when they do the same thing: the command takes its fields from the contract's
+request class (it inherits it), or its `REPLY` is the contract's class. A profile shows one of them, not both, so an
+agent has one way to do each thing.
+
+- **The route decides where both would show.** When the rules show both sides on their own, `[protocol] route`
+  picks one: `tree` (the default) shows the command, `wire` the contract. Where only one side is allowed, it's shown
+  whatever the route.
+- **An allow rule naming one side takes it:** an allow rule that names the contract, or the command, without a glob
+  (`operations = ["Station"]`) shows that side of its overlaps. Allow rules naming both sides of one overlap are
+  refused at load.
+- **The side not taken is refused by name:** `the policy does not show Station: it goes by the tree for that, as
+  StationShow`.
+- **A deny carries over:** a deny rule that denies a contract wholly by name (its `operations` match it, other than
+  by `*` alone; no `variants` or `fields`; its keys cover every topic) denies the commands that overlap it too. A
+  deny by keys alone, or one narrowed by keys, can't carry, since a contract's topics and a command's keys are
+  different spaces; the command stays as the rules show it.
+
+`check` lists each overlap under `overlaps` (the command, the contract, `by` request or reply, the route taken, and
+the side shown), and under `uncarried` each deny that reaches a contract and leaves a command it overlaps shown.
+
+**Names must name something.** A contract or command name, a variant tag, a hidden field, a bound slot or an
+injected field written without a glob must exist in the protocol or the app, so a typo is refused at load. A glob
+may match nothing.
+
+## `[app]`
+
+An app's command trees: parsed's commands, beside the protocol's contracts.
+
+| Key | Meaning |
+|---|---|
+| `factory` | `pkg.module:function`: called with nothing, it returns the app (parsed's `App`) whose mounts hold the commands. It's called to read them, so it should be cheap: definitions that import without the app's runtime, handlers by their paths. |
+
+```toml
+[app]
+factory = "demo.client.app:make"
+```
+
+Each mount's commands become operations, led by its prefix: a group mounted at the root names its commands by class
+(`FleetMine`, `demo.client.fleet:FleetMine`), and one mounted under `relay` by its words, slashed (`relay/Run`,
+`relay/demo.service:Run`). So a package mounted twice, under two prefixes, gives each of its commands twice, one a
+mount. A command's keys are its phrases' (parsed's `CommandDoc.keys`), led the same way: `fleet/{fleet}/mine`,
+`relay/run`. Its effect is its `EFFECT`, read on zeared's scale (`read`, `write`, `action`), and none when it
+declares none.
+
+A policy gives commands by `[app]` or by `[protocol] trees`, not both, and it needs one of those or a protocol
+package. `check` names the app or the trees, and counts the commands it read. Under `unmarked` it names each shown
+command that declares neither an `EFFECT` nor `INTERACTIVE`: such a command counts as a write, and might wait on a
+person who isn't there, so a profile may rather deny it.
 
 ## Not in this version
 
 `[[keepalive]]` and `[protocol] extension` are refused with the reason: they arrive with `tooled serve` and with
-extensions.
+extensions. So is `[app] state`, which builds what commands run with: it arrives with running them.

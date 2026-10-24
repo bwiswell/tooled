@@ -4,7 +4,7 @@ A TOML file, loaded strict (``unknown='raise'`` throughout), so a misspelt key a
 silently weakening a rule:
 
 ```toml
-[mesh]                  # zeared's own SessionConfig: the one mesh this policy reaches
+[mesh]                  # zeared's own SessionConfig: the one mesh this policy reaches; none for commands alone
 mode = "client"
 router = "tcp/127.0.0.1:7447"
 
@@ -34,17 +34,24 @@ ops = ["query"]
 fields = ["ask_id"]
 ```
 
-A rule's ``ops`` say what's done (``read``, ``query``, ``invoke``…), and its ``operations`` what it's done to: globs
-over the names ``tooled operations`` lists. Nothing is allowed until a rule allows it. A deny rule with ``fields``
-denies no call, only the optional request fields it names, wherever a call gives one. Where the file is found:
-``--policy``, else ``$TOOLED_POLICY``, else ``./tooled.toml``. A relative path inside it (an inject source's file) is
-read from the file's own directory.
+Commands come from parsed's command trees: ``[app] factory = "pkg.module:function"`` names the function returning the
+app whose mounts hold them, each under its mount's prefix; or, for a policy that only describes, ``[protocol] trees``
+names packages read as trees at the root. A policy names one or the other, and at least one of them or a protocol
+package.
+
+A rule's ``ops`` say what's done (``read``, ``query``, ``invoke``… on the wire; ``see``, ``do`` and ``confirm`` on the
+tree), and its ``operations`` what it's done to: globs over the names ``tooled operations`` lists. A rule's ops are
+one route's, since its keys are matched against a contract's topics or a command's keys, never both. Nothing is
+allowed until a rule allows it. A deny rule with ``fields`` denies no call, only the optional request fields it
+names, wherever a call gives one. Where the file is found: ``--policy``, else ``$TOOLED_POLICY``, else
+``./tooled.toml``. A relative path inside it (an inject source's file) is read from the file's own directory.
 """
 
 from __future__ import annotations
 
 import enum
 import os
+import re
 import tomllib
 from pathlib import Path
 
@@ -67,13 +74,28 @@ class Generator(enum.StrEnum):
 
 
 class Op(enum.StrEnum):
-    """What a rule allows or denies: what's done, one op per kind of contract."""
+    """What a rule allows or denies: what's done, an op per kind of contract on the wire, and of command on the tree."""
 
     READ = 'read'  # fetch and listen: a retained class, a stream, a presence feed
     QUERY = 'query'  # a queryable that declares EFFECT = READ
     INVOKE = 'invoke'  # any other queryable: WRITE, ACTION, or no EFFECT at all
     PUBLISH = 'publish'  # a raw send
     UNRETAIN = 'unretain'  # clearing a retained value
+    SEE = 'see'  # running a command that declares EFFECT = READ
+    DO = 'do'  # running any other command: WRITE, ACTION, or no EFFECT at all
+    CONFIRM = 'confirm'  # answering yes when a command asks before it acts
+
+
+class Route(enum.StrEnum):
+    """Which side a profile takes where a command and a contract do the same thing."""
+
+    TREE = 'tree'  # the command: the app's own language for its users
+    WIRE = 'wire'  # the contract: the system's API between nodes
+
+
+#: The ops on the tree, a command's; the rest are the wire's. A rule's ops are one route's, so its keys are read in one
+#: space: a contract's topics, or a command's keys.
+TREE_OPS = frozenset({Op.SEE, Op.DO, Op.CONFIRM})
 
 
 @s.seared(unknown='raise')
@@ -116,17 +138,43 @@ class Rule(s.Seared):
 
 @s.seared(unknown='raise')
 class Protocol(s.Seared):
-    """The protocol the policy reads."""
+    """The protocol the policy reads: its contracts' packages, and command trees with no app."""
 
-    packages: list[str] = s.Str(many=True, required=True, doc='the packages (or modules) whose contracts it reads')
+    packages: list[str] = s.Str(
+        many=True, default_factory=list, doc='the packages (or modules) whose contracts it reads'
+    )
+    trees: list[str] = s.Str(
+        many=True,
+        default_factory=list,
+        doc='packages (or modules) whose commands it reads, each a tree at the root, for a policy with no [app]',
+    )
+    route: Route = s.Enum(
+        enum=Route,
+        default=Route.TREE,
+        doc='where a command and a contract overlap, the side shown when both would be: `tree` or `wire`',
+    )
+
+
+@s.seared(unknown='raise')
+class AppConfig(s.Seared):
+    """The app whose command trees the policy reads."""
+
+    factory: str = s.Str(
+        required=True, doc="`pkg.module:function`, called with nothing, returning parsed's App: its mounts' commands"
+    )
 
 
 @s.seared(unknown='raise')
 class Policy(s.Seared):
     """A whole policy file."""
 
-    mesh: SessionConfig = s.T(SessionConfig, required=True, doc='the one mesh this policy reaches')
+    mesh: SessionConfig | None = s.T(
+        SessionConfig,
+        default=None,
+        doc="the one mesh this policy reaches: a protocol's contracts need it, commands don't",
+    )
     protocol: Protocol = s.T(Protocol, required=True, doc='the protocol it reads')
+    app: AppConfig | None = s.T(AppConfig, default=None, doc='the app whose command trees it reads')
     bind: dict[str, str] = s.Str(keyed=True, default_factory=dict, doc='slot values every key renders with')
     inject: dict[str, Source] = s.T(
         Source, keyed=True, default_factory=dict, doc='request fields every request that declares them carries'
@@ -142,6 +190,12 @@ _LATER = {
 _LATER_PROTOCOL = {
     'extension': '`[protocol] extension` arrives with extensions, which this version of tooled does not have',
 }
+_LATER_APP = {
+    'state': '`[app] state` builds the state commands run with, which arrives with running them in tooled 0.2.7',
+}
+
+#: What ``[app] factory`` names: a module's dotted name, ``:``, and a name in it (dotted, for an attribute's).
+_FACTORY = re.compile(r'[A-Za-z_]\w*(\.[A-Za-z_]\w*)*:[A-Za-z_]\w*(\.[A-Za-z_]\w*)*')
 
 #: A rule's keys renamed, refused naming the new one rather than as an unknown key.
 _RENAMED_RULE = {
@@ -197,10 +251,11 @@ def _refuse_unread(raw: dict[str, object]) -> None:
     for table, why in _LATER.items():
         if table in raw:
             raise PolicyFileError(why, path=(table,))
-    protocol = raw.get('protocol')
-    for key, why in _LATER_PROTOCOL.items():
-        if isinstance(protocol, dict) and key in protocol:
-            raise PolicyFileError(why, path=('protocol', key))
+    for table, later in (('protocol', _LATER_PROTOCOL), ('app', _LATER_APP)):
+        found = raw.get(table)
+        for key, why in later.items():
+            if isinstance(found, dict) and key in found:
+                raise PolicyFileError(why, path=(table, key))
     for side in ('allow', 'deny'):
         rules = raw.get(side)
         for index, rule in enumerate(rules if isinstance(rules, list) else ()):
@@ -210,10 +265,9 @@ def _refuse_unread(raw: dict[str, object]) -> None:
 
 
 def _check(policy: Policy) -> None:
-    """What the classes can't say: rules with ops and real keys, bound chunks, single sources."""
-    if not policy.protocol.packages:
-        msg = '`[protocol] packages` names no package'
-        raise PolicyFileError(msg, path=('protocol', 'packages'))
+    """What the classes can't say: operations, a mesh where needed, rules with ops and real keys, chunks, sources."""
+    _check_sources(policy)
+    _check_mesh(policy)
     for side in ('allow', 'deny'):
         for index, rule in enumerate(getattr(policy, side)):
             _check_rule(rule, side, (side, index))
@@ -223,6 +277,38 @@ def _check(policy: Policy) -> None:
             raise PolicyFileError(msg, path=('bind', slot))
     for name, source in policy.inject.items():
         _check_source(source, ('inject', name))
+
+
+def _check_sources(policy: Policy) -> None:
+    """Somewhere to read operations from: protocol packages, an app's factory, or trees, but not trees and an app."""
+    protocol, app = policy.protocol, policy.app
+    if not (protocol.packages or protocol.trees or app):
+        msg = 'the policy names no operations: give `[protocol] packages`, `[app] factory` or `[protocol] trees`'
+        raise PolicyFileError(msg, path=('protocol',))
+    if app is not None and protocol.trees:
+        msg = "`[protocol] trees` is for a policy with no [app]: the app's mounts hold its commands"
+        raise PolicyFileError(msg, path=('protocol', 'trees'))
+    if app is not None and not _FACTORY.fullmatch(app.factory):
+        msg = f'`[app] factory` is pkg.module:function, not {app.factory!r}'
+        raise PolicyFileError(msg, path=('app', 'factory'))
+
+
+def _check_mesh(policy: Policy) -> None:
+    """A mesh for the wire: a protocol's contracts need one, and with none, no rule names a wire op."""
+    if policy.mesh is not None:
+        return
+    if policy.protocol.packages:
+        msg = "`[mesh]` is missing, and a protocol's contracts are reached through it: name the mesh"
+        raise PolicyFileError(msg, path=('mesh',))
+    for side in ('allow', 'deny'):
+        for index, rule in enumerate(getattr(policy, side)):
+            wire = [op.value for op in rule.ops if op not in TREE_OPS]
+            if wire:
+                msg = (
+                    f"{wire[0]!r} is a wire op, and a policy with no [mesh] reaches no wire: use the tree's ops "
+                    '(see, do, confirm), or name the mesh'
+                )
+                raise PolicyFileError(msg, path=(side, index, 'ops'))
 
 
 def _check_rule(rule: Rule, side: str, where: tuple[str, int]) -> None:
@@ -235,6 +321,18 @@ def _check_rule(rule: Rule, side: str, where: tuple[str, int]) -> None:
             keyexpr.includes(key, key)
         except KeyExprError as exc:
             raise PolicyFileError(str(exc), path=(*where, 'keys', at)) from exc
+    tree = [op for op in rule.ops if op in TREE_OPS]
+    if tree and len(tree) < len(rule.ops):
+        wire = [op.value for op in rule.ops if op not in TREE_OPS]
+        msg = (
+            f"a rule's ops are the wire's or the tree's, so its keys are read in one space; this one has {wire[0]!r} "
+            f'and {tree[0].value!r}: split it in two'
+        )
+        raise PolicyFileError(msg, path=(*where, 'ops'))
+    for key in ('variants', 'fields'):
+        if tree and getattr(rule, key) is not None:
+            msg = f"`{key}` is about a contract's request, which the tree's ops never reach; leave it out"
+            raise PolicyFileError(msg, path=(*where, key))
     if rule.fields is not None and side == 'allow':
         msg = '`fields` hides request fields, which only a deny rule does; move it to a [[deny]] rule'
         raise PolicyFileError(msg, path=(*where, 'fields'))
